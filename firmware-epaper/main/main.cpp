@@ -30,6 +30,8 @@
 #include "voice.h"
 #include "adb_local.h"
 #include "voice_screens.h"
+#include "preflight.h"
+#include "preparation_screens.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
@@ -52,6 +54,7 @@ static char ssid[33],password[65];
 static int network_slot=0,retries=0;
 static std::atomic<bool> wifi_enabled(false);
 static bool wifi_initialized=false,sntp_started=false;
+static std::atomic<int> check_server(controller::WAIT),check_chat(controller::WAIT),check_asr(controller::WAIT);
 static std::atomic<bool> wifi_connected(false);
 #if CONFIG_TINYUSB_NET_MODE_NCM
 static const int PAGE_COUNT=5;
@@ -140,7 +143,7 @@ static bool paint(epaper_driver_display &display,const uint8_t *frame,bool full)
  return display.healthy();
 }
 // Clock uses UTC+8 explicitly; never display a fabricated time before SNTP sync.
-static void draw_footer(uint8_t *frame,bool voice){
+static void draw_footer(uint8_t *frame,int mode){
  memset(frame+178*25,255,22*25);
  time_t utc=time(nullptr);
  if(utc>=1704067200){
@@ -153,7 +156,7 @@ static void draw_footer(uint8_t *frame,bool voice){
    for(int y=0;y<12;++y)frame[(178+y)*25+1+i]=clock_glyphs[glyph][y];
   }
  }else memcpy(frame+178*25,clock_unknown,300);
- memcpy(frame+190*25,voice?voice_hint:footer_hint,250); // Bottom ten rows fit the panel.
+ memcpy(frame+190*25,mode==2?check_hint:mode==1?voice_hint:footer_hint,250); // Bottom ten rows fit the panel.
 }
 bool controller_voice_online(){return online.load();}
 void controller_voice_changed(bool completed){
@@ -178,6 +181,34 @@ bool controller_voice_upload(const unsigned char *pcm,unsigned size,unsigned seq
  esp_http_client_close(client);esp_http_client_cleanup(client);
  ESP_LOGI(TAG,"Voice upload bytes=%u status=%d",sent,status);return status==200;
 }
+bool controller_preflight_probe(){
+ if(!online)return false;
+ check_server=controller::RUN;check_chat=check_asr=controller::WAIT;screen_dirty=true;
+ char url[256],auth[128];snprintf(url,sizeof(url),"%s/checks.bin",DISPLAY_ENDPOINT);
+ snprintf(auth,sizeof(auth),"Bearer %s",DISPLAY_TOKEN);
+ esp_http_client_config_t cfg={};cfg.url=url;cfg.timeout_ms=120000;cfg.common_name="erweima.zhangyue.site";
+ cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.disable_auto_redirect=true;
+ auto client=esp_http_client_init(&cfg);if(!client){check_server=controller::FAILED;return false;}
+ esp_http_client_set_header(client,"Authorization",auth);esp_http_client_set_header(client,"Host","erweima.zhangyue.site");
+ esp_http_client_set_method(client,HTTP_METHOD_POST);
+ char flags[3]={};int size=0;bool ok=esp_http_client_open(client,0)==ESP_OK;
+ if(ok && esp_http_client_fetch_headers(client)==3 && esp_http_client_get_status_code(client)==200){
+  while(size<3){int n=esp_http_client_read(client,flags+size,3-size);if(n<=0)break;size+=n;}
+ }
+ esp_http_client_close(client);esp_http_client_cleanup(client);
+ ok=size==3;for(int i=0;i<3;++i)ok=ok&&(flags[i]=='1'||flags[i]=='2');
+ check_server=ok?(flags[0]=='1'?controller::DONE:controller::FAILED):controller::FAILED;
+ check_chat=ok?(flags[1]=='1'?controller::DONE:controller::FAILED):controller::WAIT;
+ check_asr=ok?(flags[2]=='1'?controller::DONE:controller::FAILED):controller::WAIT;
+ screen_dirty=true;return ok && flags[0]=='1' && flags[1]=='1' && flags[2]=='1';
+}
+static void preparation(uint8_t *frame){
+ controller::PreflightInput input={controller_usb_ready(),controller_usb_net_peer()!=0,controller_adb_stage(),
+  controller_usb_net_has_ip(),(controller::CheckStatus)check_server.load(),(controller::CheckStatus)check_chat.load(),(controller::CheckStatus)check_asr.load()};
+ auto rows=controller::preflight(input);memcpy(frame,preparation_base,5000);
+ if(rows[7]==controller::DONE)memcpy(frame,assistant_online,sizeof(assistant_online));
+ for(int row=0;row<8;++row)memcpy(frame+(31+row*17)*25,preparation_rows[row][rows[row]],425);
+}
 static void screen_task(void*){
  custom_lcd_spi_t pins={11,10,9,8,13,12,SPI3_HOST,5000};
  epaper_driver_display display(200,200,pins);
@@ -192,7 +223,13 @@ static void screen_task(void*){
   if(current_page==2){
    memcpy(frame,hid?mode_enabled_screen:mode_disabled_screen,5000);
   }else if(current_page==PAGE_COUNT-1){
-   int voice=controller_voice_stage();memcpy(frame,voice_screens[(voice>=0&&voice<10)?voice:5],5000);
+   int voice=controller_voice_stage();
+#if CONFIG_CONTROLLER_USB_LOCAL
+   if(voice>=7)preparation(frame);
+   else memcpy(frame,voice_screens[(voice>=0&&voice<10)?voice:5],5000);
+#else
+   memcpy(frame,voice_screens[(voice>=0&&voice<10)?voice:5],5000);
+#endif
   }else if(current_page==3){
    int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);
   }else{
@@ -202,7 +239,13 @@ static void screen_task(void*){
    }
    if(!success){int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);}
   }
-  if(current_page!=2)draw_footer(frame,current_page==PAGE_COUNT-1);
+  if(current_page!=2){
+#if CONFIG_CONTROLLER_USB_LOCAL
+   draw_footer(frame,current_page==PAGE_COUNT-1?2:0);
+#else
+   draw_footer(frame,current_page==PAGE_COUNT-1?1:0);
+#endif
+  }
   if(epoch!=screen_epoch.load() || current_page!=page.load())continue;
   if(memcmp(frame,previous,5000) || previous_epoch!=epoch){
    if(!paint(display,frame,refreshes++%20==0)){
@@ -236,7 +279,13 @@ static void input_task(void*){
   bool down=gpio_get_level(GPIO_NUM_0)==0;
   int64_t now=esp_timer_get_time()/1000;
   if(down&&!held){held=true;long_sent=false;began=now;}
-  if(down&&held&&!long_sent&&page==PAGE_COUNT-1&&now-began>=250){long_sent=true;stopped=false;controller_voice_hold(true);}
+  if(down&&held&&!long_sent&&page==PAGE_COUNT-1&&now-began>=
+#if CONFIG_CONTROLLER_USB_LOCAL
+  2000
+#else
+  250
+#endif
+  ){long_sent=true;stopped=false;controller_voice_hold(true);}
   if(down&&held&&!long_sent&&page!=2&&page!=PAGE_COUNT-1&&now-began>=1200){long_sent=true;stop_now();}
   if(!down&&held){
    held=false;controller_voice_hold(false);
