@@ -24,6 +24,9 @@
 #include "mode_screens.h"
 #include "mode_consent.h"
 #include "diagnostics.h"
+#include "usb_network.h"
+#include "network_screens.h"
+#include "ui_assets.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
@@ -45,7 +48,20 @@ static void go_page(int target){
 static char ssid[33],password[65];
 static int network_slot=0,retries=0;
 static std::atomic<bool> wifi_enabled(false);
-static bool wifi_initialized=false;
+static bool wifi_initialized=false,sntp_started=false;
+static std::atomic<bool> wifi_connected(false);
+#if CONFIG_TINYUSB_NET_MODE_NCM
+static const int PAGE_COUNT=5;
+#else
+static const int PAGE_COUNT=4;
+#endif
+void controller_net_changed(){online=wifi_connected.load()||controller_usb_net_has_ip();screen_dirty=true;}
+void controller_usb_disconnected(){
+ taskENTER_CRITICAL(&consent_mux);
+ controller_usb_request_mode(false);controller_release();go_page(0);
+ taskEXIT_CRITICAL(&consent_mux);
+}
+
 
 static bool load_wifi(int slot){
  nvs_handle_t h;
@@ -67,15 +83,14 @@ static void connect_saved(){
  esp_wifi_connect();
 }
 static void wifi_event(void*,esp_event_base_t base,int32_t id,void*){
- if(!wifi_enabled){online=false;return;}
- if(base==IP_EVENT && id==IP_EVENT_STA_GOT_IP){online=true;retries=0;ESP_LOGI(TAG,"WiFi connected");if(screen_task_handle)xTaskNotifyGive(screen_task_handle);}
- else if(base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED){online=false; if(++retries>=3){retries=0;network_slot=(network_slot+1)%10;connect_saved();}else esp_wifi_connect();}
+ if(!wifi_enabled){wifi_connected=false;online=controller_usb_net_has_ip();return;}
+ if(base==IP_EVENT && id==IP_EVENT_STA_GOT_IP){wifi_connected=true;online=true;retries=0;ESP_LOGI(TAG,"WiFi connected");if(screen_task_handle)xTaskNotifyGive(screen_task_handle);}
+ else if(base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED){wifi_connected=false;online=controller_usb_net_has_ip(); if(++retries>=3){retries=0;network_slot=(network_slot+1)%10;connect_saved();}else esp_wifi_connect();}
  else if(base==WIFI_EVENT && id==WIFI_EVENT_STA_START)connect_saved();
 }
 static void wifi_start(){
  if(wifi_enabled.exchange(true))return;
- if(wifi_initialized){esp_wifi_start();esp_sntp_init();return;}
- ESP_ERROR_CHECK(esp_netif_init());ESP_ERROR_CHECK(esp_event_loop_create_default());
+ if(wifi_initialized){esp_wifi_start();return;}
  esp_netif_create_default_wifi_sta();wifi_init_config_t init=WIFI_INIT_CONFIG_DEFAULT();
  ESP_ERROR_CHECK(esp_wifi_init(&init));
  ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
@@ -83,7 +98,6 @@ static void wifi_start(){
  ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,wifi_event,nullptr));
  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));ESP_ERROR_CHECK(esp_wifi_start());
  wifi_initialized=true;
- esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);esp_sntp_setservername(0,"ntp.aliyun.com");esp_sntp_init();
 }
 static bool request(const char *path,uint8_t *out){
  char url[256],auth[128];snprintf(url,sizeof(url),"%s%s",DISPLAY_ENDPOINT,path);
@@ -106,6 +120,7 @@ static bool request(const char *path,uint8_t *out){
  }
  esp_http_client_close(client);esp_http_client_cleanup(client);
  bool ok=err==ESP_OK && status==200 && (!out || total==5000);
+ controller_usb_net_backend(ok);
  if(!ok)ESP_LOGW(TAG,"Display request failed status=%d bytes=%d error=%s",status,total,esp_err_to_name(err));
  return ok;
 }
@@ -115,6 +130,22 @@ static bool paint(epaper_driver_display &display,const uint8_t *frame,bool full)
  if(full){display.EPD_Init();display.EPD_DisplayPartBaseImage();display.EPD_Init_Partial();}
  else display.EPD_DisplayPart();
  return display.healthy();
+}
+// Clock uses UTC+8 explicitly; never display a fabricated time before SNTP sync.
+static void draw_footer(uint8_t *frame){
+ memset(frame+178*25,255,22*25);
+ time_t utc=time(nullptr);
+ if(utc>=1704067200){
+  time_t china=utc+8*3600;struct tm local={};gmtime_r(&china,&local);
+  char stamp[20];strftime(stamp,sizeof(stamp),"%Y-%m-%d %H:%M",&local);
+  for(unsigned i=0;stamp[i];++i){
+   const char *alphabet="0123456789-: ";
+   const char *found=strchr(alphabet,stamp[i]);
+   unsigned glyph=found?found-alphabet:12;
+   for(int y=0;y<12;++y)frame[(178+y)*25+1+i]=clock_glyphs[glyph][y];
+  }
+ }else memcpy(frame+178*25,clock_unknown,300);
+ memcpy(frame+190*25,footer_hint,250); // Bottom ten rows fit the panel.
 }
 static void screen_task(void*){
  custom_lcd_spi_t pins={11,10,9,8,13,12,SPI3_HOST,5000};
@@ -129,13 +160,18 @@ static void screen_task(void*){
   if(online && stop_pending.exchange(false) && !request("/stop",nullptr))stop_pending=true;
   if(current_page==2){
    memcpy(frame,hid?mode_enabled_screen:mode_disabled_screen,5000);
+  }else if(current_page==PAGE_COUNT-1){
+   memcpy(frame,help_screen,5000);
+  }else if(current_page==3){
+   int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);
   }else{
    if(online){
     char path[48];snprintf(path,sizeof(path),"/screen.bin?page=%d",current_page);
     success=request(path,frame);
    }
-   if(!success)memcpy(frame,boot_screen,5000);
+   if(!success){int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);}
   }
+  if(current_page!=2)draw_footer(frame);
   if(epoch!=screen_epoch.load() || current_page!=page.load())continue;
   if(memcmp(frame,previous,5000) || previous_epoch!=epoch){
    if(!paint(display,frame,refreshes++%20==0)){
@@ -180,7 +216,7 @@ static void input_task(void*){
      controller_usb_request_mode(!painted_hid.load());go_page(0);
     }
     taskEXIT_CRITICAL(&consent_mux);
-   }else if(!long_sent&&now-began>=50){go_page((page.load()+1)%3);}
+   }else if(!long_sent&&now-began>=50){go_page((page.load()+1)%PAGE_COUNT);}
   }
   if(page==2 && consent_visible_at>0 && now-consent_visible_at.load()>=15000)go_page(0);
   bool power_down=gpio_get_level(GPIO_NUM_18)==0;
@@ -198,12 +234,13 @@ static void console_command(char *line){
  if(strcmp(line,"STOP")==0)stop_now();
  else if(strcmp(line,"LOGS")==0)controller_logs_dump();
  else if(strcmp(line,"WIFI ON")==0){wifi_start();controller_usb_write("WiFi enabled for this boot\r\n");}
- else if(strcmp(line,"WIFI OFF")==0){wifi_enabled=false;online=false;if(wifi_initialized){esp_sntp_stop();esp_wifi_stop();}controller_usb_write("WiFi disabled\r\n");}
- else if(strcmp(line,"PAGE")==0)go_page((page.load()+1)%3);
+ else if(strcmp(line,"WIFI OFF")==0){wifi_enabled=false;wifi_connected=false;online=controller_usb_net_has_ip();if(wifi_initialized){esp_wifi_stop();}controller_usb_write("WiFi disabled\r\n");}
+ else if(strcmp(line,"PAGE")==0)go_page((page.load()+1)%PAGE_COUNT);
  else if(strcmp(line,"SAFE")==0){taskENTER_CRITICAL(&consent_mux);controller_usb_request_mode(false);go_page(0);taskEXIT_CRITICAL(&consent_mux);}
  else if(strcmp(line,"STATUS")==0){
-  char status[200];snprintf(status,sizeof(status),"STATUS wifi=%d wifi_enabled=%d usb=%d hid=%d bluetooth=0 page=%d stopped=%d screen_error=%d psram=%u\r\n",
-   online.load(),wifi_enabled.load(),controller_usb_ready(),controller_usb_hid_enabled(),page.load(),stopped.load(),screen_failed.load(),(unsigned)esp_psram_get_size());
+  uint32_t rx,tx;controller_usb_net_counters(&rx,&tx);
+  char status[256];snprintf(status,sizeof(status),"STATUS wifi=%d wifi_enabled=%d usb=%d hid=%d bluetooth=0 page=%d stopped=%d screen_error=%d psram=%u net=%d rx=%u tx=%u\r\n",
+   online.load(),wifi_enabled.load(),controller_usb_ready(),controller_usb_hid_enabled(),page.load(),stopped.load(),screen_failed.load(),(unsigned)esp_psram_get_size(),controller_usb_net_stage(),(unsigned)rx,(unsigned)tx);
   controller_usb_write(status);
  }else if(strcmp(line,"REBOOT")==0 || strcmp(line,"BOOTLOADER")==0){
   controller_usb_request_mode(false);
@@ -225,6 +262,9 @@ static void console_task(void*){
  char line[256]={};size_t used=0;bool overflow=false;
  for(;;){
   controller_usb_service();
+  if(online && !sntp_started){
+   esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);esp_sntp_setservername(0,"ntp.aliyun.com");esp_sntp_init();sntp_started=true;
+  }
   if(screen_dirty.exchange(false) && screen_task_handle)xTaskNotifyGive(screen_task_handle);
   uint8_t bytes[64];size_t n=controller_usb_read(bytes,sizeof(bytes));
   for(size_t i=0;i<n;++i){
@@ -241,6 +281,7 @@ extern "C" void app_main(){
  controller_logs_start();
  ESP_LOGI(TAG,"Boot reset_reason=%d; HID=OFF WiFi=OFF Bluetooth=OFF",esp_reset_reason());
  ESP_ERROR_CHECK(nvs_flash_init());
+ ESP_ERROR_CHECK(esp_netif_init());ESP_ERROR_CHECK(esp_event_loop_create_default());
  gpio_config_t power={};power.pin_bit_mask=(1ULL<<6)|(1ULL<<42)|(1ULL<<17);power.mode=GPIO_MODE_OUTPUT;
  ESP_ERROR_CHECK(gpio_config(&power));gpio_set_level(GPIO_NUM_6,0);gpio_set_level(GPIO_NUM_42,1);gpio_set_level(GPIO_NUM_17,1);
  gpio_config_t button={};button.pin_bit_mask=(1ULL<<0)|(1ULL<<18);button.mode=GPIO_MODE_INPUT;button.pull_up_en=GPIO_PULLUP_ENABLE;ESP_ERROR_CHECK(gpio_config(&button));
