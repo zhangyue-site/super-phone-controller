@@ -20,6 +20,19 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/esp-idf /usr/local/lib/android || true
           df -h /
 
+      - name: Generate device config
+        env:
+          DISPLAY_ENDPOINT: ${{ secrets.DISPLAY_ENDPOINT }}
+          DISPLAY_TOKEN: ${{ secrets.DISPLAY_TOKEN }}
+        run: |
+          cat > "$FIRMWARE_DIR/main/device_config.h" <<EOF
+          #pragma once
+          #define DISPLAY_ENDPOINT "${DISPLAY_ENDPOINT:-https://example.invalid/phone-controller}"
+          #define DISPLAY_TOKEN "${DISPLAY_TOKEN:-ci-placeholder-token}"
+          EOF
+          test -n "$DISPLAY_ENDPOINT" || echo "::warning::DISPLAY_ENDPOINT secret not set, using placeholder"
+          test -n "$DISPLAY_TOKEN" || echo "::warning::DISPLAY_TOKEN secret not set, using placeholder"
+
       - name: Build in official image
         run: |
           docker run --rm \
