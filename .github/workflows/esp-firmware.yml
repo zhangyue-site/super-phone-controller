@@ -78,6 +78,25 @@ jobs:
               idf.py -DIDF_TARGET=esp32s3 -DPROJECT_VER="$VERSION" -B build reconfigure build
             '
 
+      - name: Verify version is embedded
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          # esp_app_desc_t 在镜像里紧跟 24 字节镜像头(8)+段头(16)之后：
+          # magic(4) secure_version(4) reserv(8) version(32) project_name(32)
+          ACTUAL=$(python3 - "$FIRMWARE_DIR/build/$PROJECT_NAME.bin" <<'PY'
+          import sys
+          blob = open(sys.argv[1], "rb").read()
+          off = 24 + 16
+          print(blob[off + 16: off + 48].split(b"\x00")[0].decode("utf-8", "replace"))
+          PY
+          )
+          echo "embedded version: $ACTUAL (expected: $VERSION)"
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "::error::firmware version mismatch: got '$ACTUAL', expected '$VERSION'. OTA will never trigger."
+            exit 1
+          fi
+
       - name: Collect artifacts
         run: |
           set -e
