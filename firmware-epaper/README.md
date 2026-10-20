@@ -23,7 +23,7 @@
 
 2026-10-20 原板（MAC末尾D4:18）已完成屏幕时钟修正版刷写，各区域通过esptool校验，并使用watchdog_reset启动。USB STATUS返回 `wifi=0 wifi_enabled=0 usb=1 hid=0 bluetooth=0 screen_error=0`。LOGS显示屏幕完成刷新，未再过早超时。
 
-已通过串口REBOOT执行一次正常软件重启：日志reset_reason=3，重启后HID、Wi-Fi、蓝牙仍关闭，实际USB接口class仅2（CDC控制）和10（CDC数据），无class3（HID），PID为0x4001。屏幕刷新状态通过；实际画面外观待用户目视确认。屏幕确认开启后USB重枚举、开启后再重启以及手机USB联网尚未实测，不能据此宣称整套手机控制已完成。
+已通过串口REBOOT执行一次正常软件重启：日志reset_reason=3，重启后HID、Wi-Fi、蓝牙仍关闭，实际USB接口class仅2（CDC控制）和10（CDC数据），无class3（HID），PID为0x4001。屏幕刷新状态通过；用户已目视确认“能看到，显示正常”。屏幕确认开启后USB重枚举、开启后再重启以及手机USB联网尚未实测，不能据此宣称整套手机控制已完成。
 
 屏幕原故障已定位：5ms延时在100Hz调度下为0 tick，原循环约20ms就误报预期10秒的超时；现已用esp_timer真实10秒截止时间，并保证至少1 tick等待。旧驱动超时后的abort可能导致USB反复枚举，现改为仅隔离屏幕故障，保留串口诊断。
 
