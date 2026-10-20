@@ -8,7 +8,7 @@
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_random.h"
-#include "mbedtls/sha256.h"
+#include "psa/crypto.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -40,13 +40,17 @@ static bool append(const char *line){
 }
 static bool verify_skill(const char *path,const char *expected){
  FILE *f=fopen(path,"rb");if(!f)return false;
- mbedtls_sha256_context ctx;mbedtls_sha256_init(&ctx);bool ok=mbedtls_sha256_starts(&ctx,0)==0;
+ /* ESP-IDF 6.0 ships mbedTLS with the PSA backend and no mbedtls/sha256.h. */
+ psa_hash_operation_t op=PSA_HASH_OPERATION_INIT;
+ bool ok=psa_hash_setup(&op,PSA_ALG_SHA_256)==PSA_SUCCESS;
  unsigned char buffer[256],digest[32];size_t total=0,n;
- while(ok && (n=fread(buffer,1,sizeof(buffer),f))){total+=n;if(total>32768){ok=false;break;}ok=mbedtls_sha256_update(&ctx,buffer,n)==0;}
+ while(ok && (n=fread(buffer,1,sizeof(buffer),f))){total+=n;if(total>32768){ok=false;break;}ok=psa_hash_update(&op,buffer,n)==PSA_SUCCESS;}
  if(ferror(f))ok=false;
  fclose(f);
- if(ok)ok=mbedtls_sha256_finish(&ctx,digest)==0;
- mbedtls_sha256_free(&ctx);if(!ok)return false;
+ size_t digest_len=0;
+ if(ok)ok=psa_hash_finish(&op,digest,sizeof(digest),&digest_len)==PSA_SUCCESS && digest_len==32;
+ else psa_hash_abort(&op);
+ if(!ok)return false;
  char hex[65];for(int i=0;i<32;++i)snprintf(hex+i*2,3,"%02x",digest[i]);
  return strcmp(hex,expected)==0;
 }
