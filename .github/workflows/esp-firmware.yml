@@ -1,0 +1,83 @@
+name: Build ESP-IDF firmware
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  # 必须 >= 项目 idf_component.yml 里声明的 idf 版本
+  IDF_IMAGE: espressif/idf:v6.0
+  FIRMWARE_DIR: firmware-epaper
+  PROJECT_NAME: phone_controller_epaper
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/esp-idf /usr/local/lib/android || true
+          df -h /
+
+      - name: Build in official image
+        run: |
+          docker run --rm \
+            -v "$PWD/$FIRMWARE_DIR:/project" \
+            -w /project \
+            "$IDF_IMAGE" \
+            bash -c '
+              set -e
+              . $IDF_PATH/export.sh
+              idf.py -DIDF_TARGET=esp32s3 -B build reconfigure build
+            '
+
+      - name: Collect artifacts
+        run: |
+          set -e
+          D="$FIRMWARE_DIR/build"
+          mkdir -p out
+          cp "$D/$PROJECT_NAME.bin"     out/app.bin
+          cp "$D/bootloader/bootloader.bin" out/bootloader.bin
+          cp "$D/partition_table/partition-table.bin" out/partition-table.bin
+          cp "$D/ota_data_initial.bin"  out/ota_data_initial.bin 2>/dev/null || true
+          # 单文件刷机包（0x0 起，含 bootloader+分区表+app）
+          python3 - <<'PY'
+          import json,pathlib
+          d=pathlib.Path("${{ env.FIRMWARE_DIR }}")/"build"
+          print("app size:", (d/"${{ env.PROJECT_NAME }}.bin").stat().st_size)
+          PY
+          cd out && sha256sum *.bin | tee SHA256SUMS
+          ls -la
+
+      - name: Verify OTA slot capacity
+        run: |
+          # ota_0 / ota_1 各 0x340000 = 3407872 字节，超了板子刷不进去
+          SZ=$(stat -c%s out/app.bin)
+          echo "app.bin = $SZ bytes, OTA slot limit = 3407872"
+          test "$SZ" -lt 3407872 || { echo "::error::firmware exceeds OTA slot size"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp-firmware-${{ github.run_number }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
+
+      # 可选：构建完直接推给 OTA 服务端，板子下次轮询自动升级
+      - name: Publish to OTA endpoint
+        if: vars.OTA_ENABLED == 'true'
+        env:
+          OTA_ENDPOINT: ${{ secrets.OTA_ENDPOINT }}
+          OTA_TOKEN: ${{ secrets.OTA_TOKEN }}
+          VERSION: ${{ github.ref_name }}-${{ github.run_number }}
+        run: |
+          set -e
+          SHA=$(sha256sum out/app.bin | cut -d' ' -f1)
+          SIZE=$(stat -c%s out/app.bin)
+          echo "publishing $VERSION sha=$SHA size=$SIZE"
+          curl -fsS -X POST "$OTA_ENDPOINT/firmware" \
+            -H "Authorization: Bearer $OTA_TOKEN" \
+            -H "X-Firmware-Version: $VERSION" \
+            -H "X-Firmware-Sha256: $SHA" \
+            --data-binary @out/app.bin
