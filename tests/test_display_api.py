@@ -1,4 +1,5 @@
-import http.client,json,tempfile,threading,unittest
+import http.client,json,tempfile,threading,unittest,array,secrets
+from unittest.mock import patch
 from pathlib import Path
 from http.server import ThreadingHTTPServer
 from display_service import app,control
@@ -19,9 +20,12 @@ class DisplayApiTest(unittest.TestCase):
   cls.server.shutdown();cls.server.server_close();cls.thread.join()
   app.CONFIG,app.QUOTAS,control.ROOT=cls.old
   cls.tmp.cleanup()
- def request(self,path,token=None,method='GET'):
+ def request(self,path,token=None,method='GET',body=None,extra=None):
   c=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=5)
-  c.request(method,path,headers={'Authorization':'Bearer '+token} if token else {})
+  headers={'Authorization':'Bearer '+token} if token else {}
+  if path=='/voice':headers.update({'X-Voice-Session':secrets.token_hex(8),'X-Voice-Sequence':'1'})
+  if extra:headers.update(extra)
+  c.request(method,path,body=body,headers=headers)
   r=c.getresponse();result=(r.status,r.read());c.close();return result
  def test_anonymous_and_wrong_token_rejected(self):
   self.assertEqual(self.request('/status')[0],401)
@@ -42,3 +46,39 @@ class DisplayApiTest(unittest.TestCase):
   self.assertEqual(len(raw),5000)
  def test_arbitrary_file_routes_not_available(self):
   self.assertEqual(self.request('/../../etc/phone-controller/devices.example.json','a'*64)[0],404)
+
+ def test_voice_auth_and_invalid_audio(self):
+  self.assertEqual(self.request('/voice',method='POST',body=b'bad')[0],401)
+  self.assertEqual(self.request('/voice','b'*64,'POST',b'bad')[0],422)
+ def test_voice_recognizes_without_claiming_execution(self):
+  raw=array.array('h',[600,-600]*4000).tobytes()
+  with patch.object(app,'recognize',return_value='打开设置'):
+   status,body=self.request('/voice','b'*64,'POST',raw)
+  self.assertEqual(status,200)
+  self.assertFalse(json.loads(body)['actuatorConnected'])
+  state=control.read('phone-b')
+  self.assertEqual(state['state'],'waiting')
+  self.assertIn('打开设置',state['task'])
+ def test_stop_wins_over_inflight_recognition(self):
+  entered=threading.Event();finish=threading.Event();result=[]
+  def recognize(raw):
+   entered.set();finish.wait(3);return '迟到的识别'
+  raw=array.array('h',[600,-600]*4000).tobytes()
+  with patch.object(app,'recognize',side_effect=recognize):
+   worker=threading.Thread(target=lambda:result.append(self.request('/voice','b'*64,'POST',raw)))
+   worker.start();self.assertTrue(entered.wait(2))
+   self.assertEqual(self.request('/stop','b'*64,'POST')[0],200)
+   finish.set();worker.join(3)
+  self.assertEqual(result[0][0],409)
+  self.assertEqual(control.read('phone-b')['state'],'stopped')
+
+ def test_stop_before_upload_admission_rejects_old_recording(self):
+  session=secrets.token_hex(8)
+  self.assertEqual(self.request('/stop','b'*64,'POST',extra={'X-Voice-Session':session,'X-Voice-Sequence':'2'})[0],200)
+  raw=array.array('h',[600,-600]*4000).tobytes()
+  with patch.object(app,'recognize') as cloud:
+   self.assertEqual(self.request('/voice','b'*64,'POST',raw,{'X-Voice-Session':session,'X-Voice-Sequence':'1'})[0],409)
+   cloud.assert_not_called()
+  self.assertEqual(control.read('phone-b')['state'],'stopped')
+  with patch.object(app,'recognize',return_value='新录音'):
+   self.assertEqual(self.request('/voice','b'*64,'POST',raw,{'X-Voice-Session':session,'X-Voice-Sequence':'3'})[0],200)

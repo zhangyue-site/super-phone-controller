@@ -27,6 +27,8 @@
 #include "usb_network.h"
 #include "network_screens.h"
 #include "ui_assets.h"
+#include "voice.h"
+#include "voice_screens.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
@@ -57,6 +59,7 @@ static const int PAGE_COUNT=4;
 #endif
 void controller_net_changed(){online=wifi_connected.load()||controller_usb_net_has_ip();screen_dirty=true;}
 void controller_usb_disconnected(){
+ controller_voice_cancel();stop_pending=true;
  taskENTER_CRITICAL(&consent_mux);
  controller_usb_request_mode(false);controller_release();go_page(0);
  taskEXIT_CRITICAL(&consent_mux);
@@ -108,7 +111,11 @@ static bool request(const char *path,uint8_t *out){
  esp_http_client_handle_t client=esp_http_client_init(&cfg);if(!client)return false;
  esp_http_client_set_header(client,"Authorization",auth);
  esp_http_client_set_header(client,"Host","controller.example.invalid");
- if(!out)esp_http_client_set_method(client,HTTP_METHOD_POST);
+ if(!out){
+  esp_http_client_set_method(client,HTTP_METHOD_POST);
+  char seq[16];snprintf(seq,sizeof(seq),"%u",controller_voice_cancel_sequence());
+  esp_http_client_set_header(client,"X-Voice-Session",controller_voice_session());esp_http_client_set_header(client,"X-Voice-Sequence",seq);
+ }
  esp_err_t err=esp_http_client_open(client,0);
  int total=0,status=0;
  if(err==ESP_OK){
@@ -132,7 +139,7 @@ static bool paint(epaper_driver_display &display,const uint8_t *frame,bool full)
  return display.healthy();
 }
 // Clock uses UTC+8 explicitly; never display a fabricated time before SNTP sync.
-static void draw_footer(uint8_t *frame){
+static void draw_footer(uint8_t *frame,bool voice){
  memset(frame+178*25,255,22*25);
  time_t utc=time(nullptr);
  if(utc>=1704067200){
@@ -145,7 +152,30 @@ static void draw_footer(uint8_t *frame){
    for(int y=0;y<12;++y)frame[(178+y)*25+1+i]=clock_glyphs[glyph][y];
   }
  }else memcpy(frame+178*25,clock_unknown,300);
- memcpy(frame+190*25,footer_hint,250); // Bottom ten rows fit the panel.
+ memcpy(frame+190*25,voice?voice_hint:footer_hint,250); // Bottom ten rows fit the panel.
+}
+bool controller_voice_online(){return online.load();}
+void controller_voice_changed(bool completed){
+ if(completed)go_page(1);
+ screen_dirty=true;
+}
+bool controller_voice_upload(const unsigned char *pcm,unsigned size,unsigned sequence){
+ char url[256],auth[128];snprintf(url,sizeof(url),"%s/voice",DISPLAY_ENDPOINT);
+ snprintf(auth,sizeof(auth),"Bearer %s",DISPLAY_TOKEN);
+ esp_http_client_config_t cfg={};cfg.url=url;cfg.timeout_ms=80000;
+ cfg.common_name="controller.example.invalid";cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.disable_auto_redirect=true;
+ auto client=esp_http_client_init(&cfg);if(!client)return false;
+ esp_http_client_set_header(client,"Authorization",auth);esp_http_client_set_header(client,"Host","controller.example.invalid");
+ char seq[16];snprintf(seq,sizeof(seq),"%u",sequence);
+ esp_http_client_set_header(client,"X-Voice-Session",controller_voice_session());esp_http_client_set_header(client,"X-Voice-Sequence",seq);
+ esp_http_client_set_header(client,"Content-Type","application/octet-stream");esp_http_client_set_method(client,HTTP_METHOD_POST);
+ esp_err_t err=esp_http_client_open(client,size);unsigned sent=0;
+ if(err==ESP_OK){
+  while(sent<size){int n=esp_http_client_write(client,(const char*)pcm+sent,size-sent);if(n<=0)break;sent+=n;}
+ }
+ int status=0;if(sent==size && esp_http_client_fetch_headers(client)>=0)status=esp_http_client_get_status_code(client);
+ esp_http_client_close(client);esp_http_client_cleanup(client);
+ ESP_LOGI(TAG,"Voice upload bytes=%u status=%d",sent,status);return status==200;
 }
 static void screen_task(void*){
  custom_lcd_spi_t pins={11,10,9,8,13,12,SPI3_HOST,5000};
@@ -161,7 +191,7 @@ static void screen_task(void*){
   if(current_page==2){
    memcpy(frame,hid?mode_enabled_screen:mode_disabled_screen,5000);
   }else if(current_page==PAGE_COUNT-1){
-   memcpy(frame,help_screen,5000);
+   int voice=controller_voice_stage();memcpy(frame,voice_screens[(voice>=0&&voice<7)?voice:5],5000);
   }else if(current_page==3){
    int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);
   }else{
@@ -171,7 +201,7 @@ static void screen_task(void*){
    }
    if(!success){int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);}
   }
-  if(current_page!=2)draw_footer(frame);
+  if(current_page!=2)draw_footer(frame,current_page==PAGE_COUNT-1);
   if(epoch!=screen_epoch.load() || current_page!=page.load())continue;
   if(memcmp(frame,previous,5000) || previous_epoch!=epoch){
    if(!paint(display,frame,refreshes++%20==0)){
@@ -193,7 +223,7 @@ static void screen_task(void*){
 }
 static void stop_now(){
  taskENTER_CRITICAL(&consent_mux);
- stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
+ controller_voice_cancel();stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
  taskEXIT_CRITICAL(&consent_mux);
  if(screen_task_handle)xTaskNotifyGive(screen_task_handle);
  ESP_LOGI(TAG,"Local stop latched; no actuator enabled");
@@ -205,9 +235,10 @@ static void input_task(void*){
   bool down=gpio_get_level(GPIO_NUM_0)==0;
   int64_t now=esp_timer_get_time()/1000;
   if(down&&!held){held=true;long_sent=false;began=now;}
-  if(down&&held&&!long_sent&&page!=2&&now-began>=1200){long_sent=true;stop_now();}
+  if(down&&held&&!long_sent&&page==PAGE_COUNT-1&&now-began>=250){long_sent=true;stopped=false;controller_voice_hold(true);}
+  if(down&&held&&!long_sent&&page!=2&&page!=PAGE_COUNT-1&&now-began>=1200){long_sent=true;stop_now();}
   if(!down&&held){
-   held=false;
+   held=false;controller_voice_hold(false);
    if(!long_sent && page==2 && now-began>=2000){
     taskENTER_CRITICAL(&consent_mux);
     bool same=page==2 && painted_epoch.load()==screen_epoch.load() &&
@@ -235,12 +266,13 @@ static void console_command(char *line){
  else if(strcmp(line,"LOGS")==0)controller_logs_dump();
  else if(strcmp(line,"WIFI ON")==0){wifi_start();controller_usb_write("WiFi enabled for this boot\r\n");}
  else if(strcmp(line,"WIFI OFF")==0){wifi_enabled=false;wifi_connected=false;online=controller_usb_net_has_ip();if(wifi_initialized){esp_wifi_stop();}controller_usb_write("WiFi disabled\r\n");}
+ else if(strcmp(line,"MIC TEST")==0){controller_voice_test();controller_usb_write("Microphone diagnostic: one second; samples discarded\r\n");}
  else if(strcmp(line,"PAGE")==0)go_page((page.load()+1)%PAGE_COUNT);
  else if(strcmp(line,"SAFE")==0){taskENTER_CRITICAL(&consent_mux);controller_usb_request_mode(false);go_page(0);taskEXIT_CRITICAL(&consent_mux);}
  else if(strcmp(line,"STATUS")==0){
   uint32_t rx,tx;controller_usb_net_counters(&rx,&tx);
-  char status[256];snprintf(status,sizeof(status),"STATUS wifi=%d wifi_enabled=%d usb=%d hid=%d bluetooth=0 page=%d stopped=%d screen_error=%d psram=%u net=%d rx=%u tx=%u\r\n",
-   online.load(),wifi_enabled.load(),controller_usb_ready(),controller_usb_hid_enabled(),page.load(),stopped.load(),screen_failed.load(),(unsigned)esp_psram_get_size(),controller_usb_net_stage(),(unsigned)rx,(unsigned)tx);
+  char status[256];snprintf(status,sizeof(status),"STATUS online=%d wifi=%d wifi_enabled=%d usb=%d hid=%d bluetooth=0 page=%d stopped=%d screen_error=%d psram=%u net=%d rx=%u tx=%u voice=%d time=%lld\r\n",
+   online.load(),wifi_connected.load(),wifi_enabled.load(),controller_usb_ready(),controller_usb_hid_enabled(),page.load(),stopped.load(),screen_failed.load(),(unsigned)esp_psram_get_size(),controller_usb_net_stage(),(unsigned)rx,(unsigned)tx,controller_voice_stage(),(long long)time(nullptr));
   controller_usb_write(status);
  }else if(strcmp(line,"REBOOT")==0 || strcmp(line,"BOOTLOADER")==0){
   controller_usb_request_mode(false);
@@ -285,7 +317,7 @@ extern "C" void app_main(){
  gpio_config_t power={};power.pin_bit_mask=(1ULL<<6)|(1ULL<<42)|(1ULL<<17);power.mode=GPIO_MODE_OUTPUT;
  ESP_ERROR_CHECK(gpio_config(&power));gpio_set_level(GPIO_NUM_6,0);gpio_set_level(GPIO_NUM_42,1);gpio_set_level(GPIO_NUM_17,1);
  gpio_config_t button={};button.pin_bit_mask=(1ULL<<0)|(1ULL<<18);button.mode=GPIO_MODE_INPUT;button.pull_up_en=GPIO_PULLUP_ENABLE;ESP_ERROR_CHECK(gpio_config(&button));
- controller_usb_start();
+ controller_usb_start();controller_voice_init();
  xTaskCreate(screen_task,"screen",24576,nullptr,3,&screen_task_handle);
  xTaskCreate(input_task,"button",3072,nullptr,5,nullptr);
  xTaskCreate(console_task,"console",4096,nullptr,2,nullptr);
