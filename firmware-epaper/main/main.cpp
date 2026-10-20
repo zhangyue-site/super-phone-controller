@@ -32,15 +32,23 @@
 #include "voice_screens.h"
 #include "preflight.h"
 #include "preparation_screens.h"
+#include "touch.h"
+#include "touch_ui.h"
+#include "touch_screens.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
 static const char *TAG="controller";
 static std::atomic<bool> online(false), stopped(false), stop_pending(false);
-static std::atomic<int> page(0);
+#if CONFIG_TINYUSB_NET_MODE_NCM
+static const int HOME_PAGE=5;
+#else
+static const int HOME_PAGE=4;
+#endif
+static std::atomic<int> page(HOME_PAGE);
 static std::atomic<int64_t> consent_visible_at(0);
 static std::atomic<unsigned> screen_epoch(1), painted_epoch(0);
-static std::atomic<bool> painted_hid(false), screen_failed(false), screen_dirty(false);
+static std::atomic<bool> painted_hid(false), screen_failed(false), screen_dirty(false), screen_painting(true);
 static TaskHandle_t screen_task_handle;
 static portMUX_TYPE consent_mux=portMUX_INITIALIZER_UNLOCKED;
 static void go_page(int target){
@@ -65,7 +73,7 @@ void controller_net_changed(){online=wifi_connected.load()||controller_usb_net_h
 void controller_usb_disconnected(){
  controller_adb_cancel();controller_voice_cancel();stop_pending=true;
  taskENTER_CRITICAL(&consent_mux);
- controller_usb_request_mode(false);controller_release();go_page(0);
+ controller_usb_request_mode(false);controller_release();go_page(HOME_PAGE);
  taskEXIT_CRITICAL(&consent_mux);
 }
 
@@ -220,7 +228,9 @@ static void screen_task(void*){
   const bool hid=controller_usb_hid_enabled();
   bool success=false;
   if(online && stop_pending.exchange(false) && !request("/stop",nullptr))stop_pending=true;
-  if(current_page==2){
+  if(current_page==HOME_PAGE){
+   memcpy(frame,touch_home_screen,5000);
+  }else if(current_page==2){
    memcpy(frame,hid?mode_enabled_screen:mode_disabled_screen,5000);
   }else if(current_page==PAGE_COUNT-1){
    int voice=controller_voice_stage();
@@ -239,15 +249,11 @@ static void screen_task(void*){
    }
    if(!success){int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);}
   }
-  if(current_page!=2){
-#if CONFIG_CONTROLLER_USB_LOCAL
-   draw_footer(frame,current_page==PAGE_COUNT-1?2:0);
-#else
-   draw_footer(frame,current_page==PAGE_COUNT-1?1:0);
-#endif
-  }
+  if(current_page==HOME_PAGE)draw_footer(frame,0);
+  else memcpy(frame+178*25,touch_navigation,sizeof(touch_navigation));
   if(epoch!=screen_epoch.load() || current_page!=page.load())continue;
   if(memcmp(frame,previous,5000) || previous_epoch!=epoch){
+   screen_painting=true;
    if(!paint(display,frame,refreshes++%20==0)){
     consent_visible_at=0;screen_failed=true;
     ESP_LOGE(TAG,"Screen disabled after driver fault; USB recovery remains available");
@@ -255,11 +261,15 @@ static void screen_task(void*){
    }
    memcpy(previous,frame,5000);previous_epoch=epoch;
    taskENTER_CRITICAL(&consent_mux);
+   if(epoch==screen_epoch.load() && current_page==page.load()){
+    painted_epoch=epoch;
+   }
    if(current_page==2 && epoch==screen_epoch.load() && page==2){
     painted_hid=hid;painted_epoch=epoch;
     consent_visible_at=esp_timer_get_time()/1000;
    }
    taskEXIT_CRITICAL(&consent_mux);
+   screen_painting=false;
    ESP_LOGI(TAG,"Screen updated page=%d",current_page);
   }
   ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(15000));
@@ -272,12 +282,53 @@ static void stop_now(){
  if(screen_task_handle)xTaskNotifyGive(screen_task_handle);
  ESP_LOGI(TAG,"Local stop latched; no actuator enabled");
 }
+static void touch_action(controller::TouchTarget target,int64_t began,int64_t now){
+ using controller::TouchTarget;
+ switch(target){
+ case TouchTarget::START:
+  go_page(PAGE_COUNT-1);
+#if CONFIG_CONTROLLER_USB_LOCAL
+  stopped=false;controller_voice_hold(true);
+#endif
+  break;
+ case TouchTarget::HOME:controller_voice_hold(false);go_page(HOME_PAGE);break;
+ case TouchTarget::QUOTA:go_page(0);break;
+ case TouchTarget::CONTROL:go_page(2);break;
+ case TouchTarget::STOP:stop_now();go_page(HOME_PAGE);break;
+ case TouchTarget::CONFIRM:{
+  taskENTER_CRITICAL(&consent_mux);
+  bool same=page==2 && painted_epoch.load()==screen_epoch.load() &&
+            painted_hid.load()==controller_usb_hid_enabled() && !screen_failed;
+  if(controller::can_confirm(consent_visible_at.load(),began,now,same)){
+   controller_usb_request_mode(!painted_hid.load());go_page(HOME_PAGE);
+  }
+  taskEXIT_CRITICAL(&consent_mux);break;
+ }
+ default:break;
+ }
+}
 static void input_task(void*){
+ controller::TouchGesture gesture;controller::TouchContact contact_state;int touch_page=-1;
+
  bool held=false,long_sent=false;int64_t began=0;
  bool power_held=false,power_done=false;int64_t power_began=0;
  for(;;){
   bool down=gpio_get_level(GPIO_NUM_0)==0;
   int64_t now=esp_timer_get_time()/1000;
+  int tx=0,ty=0;int contact=controller_touch_read(tx,ty);
+  auto edge=contact_state.update(contact);
+  if(contact==1){
+   auto target=controller::touch_target(page.load(),tx,ty,HOME_PAGE);
+   if(edge==controller::TouchEdge::DOWN){
+    touch_page=page.load();
+    if(!screen_failed && !screen_painting)gesture.begin(screen_epoch.load(),painted_epoch.load(),target,now);
+    ESP_LOGI(TAG,"Touch down x=%d y=%d page=%d",tx,ty,touch_page);
+   }else if(screen_painting || page!=touch_page || target!=gesture.target)gesture.cancel();
+  }else if(contact==0 && edge==controller::TouchEdge::UP){
+   auto target=gesture.target;int64_t start=gesture.began;
+   if(!screen_failed && !screen_painting && gesture.release(screen_epoch.load(),now))touch_action(target,start,now);
+  }else if(contact<0){gesture.cancel();/* wait for confirmed finger-up before accepting a new gesture */}
+
   if(down&&!held){held=true;long_sent=false;began=now;}
   if(down&&held&&!long_sent&&page==PAGE_COUNT-1&&now-began>=
 #if CONFIG_CONTROLLER_USB_LOCAL
@@ -297,9 +348,9 @@ static void input_task(void*){
      controller_usb_request_mode(!painted_hid.load());go_page(0);
     }
     taskEXIT_CRITICAL(&consent_mux);
-   }else if(!long_sent&&now-began>=50){go_page((page.load()+1)%PAGE_COUNT);}
+   }else if(!long_sent&&now-began>=50){go_page(page==HOME_PAGE?PAGE_COUNT-1:(page.load()+1)%PAGE_COUNT);}
   }
-  if(page==2 && consent_visible_at>0 && now-consent_visible_at.load()>=15000)go_page(0);
+  if(page==2 && consent_visible_at>0 && now-consent_visible_at.load()>=15000)go_page(HOME_PAGE);
   bool power_down=gpio_get_level(GPIO_NUM_18)==0;
   if(power_down&&!power_held){power_held=true;power_done=false;power_began=now;}
   if(!power_down)power_held=false;
@@ -323,7 +374,7 @@ static void console_command(char *line){
  }
  else if(strcmp(line,"WIFI OFF")==0){wifi_enabled=false;wifi_connected=false;online=controller_usb_net_has_ip();if(wifi_initialized){esp_wifi_stop();}controller_usb_write("WiFi disabled\r\n");}
  else if(strcmp(line,"MIC TEST")==0){controller_voice_test();controller_usb_write("Microphone diagnostic: one second; samples discarded\r\n");}
- else if(strcmp(line,"PAGE")==0)go_page((page.load()+1)%PAGE_COUNT);
+ else if(strcmp(line,"PAGE")==0)go_page(page==HOME_PAGE?PAGE_COUNT-1:(page.load()+1)%PAGE_COUNT);
  else if(strcmp(line,"SAFE")==0){taskENTER_CRITICAL(&consent_mux);controller_usb_request_mode(false);go_page(0);taskEXIT_CRITICAL(&consent_mux);}
  else if(strcmp(line,"STATUS")==0){
   uint32_t rx,tx;controller_usb_net_counters(&rx,&tx);
@@ -373,6 +424,7 @@ extern "C" void app_main(){
  gpio_config_t power={};power.pin_bit_mask=(1ULL<<6)|(1ULL<<42)|(1ULL<<17);power.mode=GPIO_MODE_OUTPUT;
  ESP_ERROR_CHECK(gpio_config(&power));gpio_set_level(GPIO_NUM_6,0);gpio_set_level(GPIO_NUM_42,1);gpio_set_level(GPIO_NUM_17,1);
  gpio_config_t button={};button.pin_bit_mask=(1ULL<<0)|(1ULL<<18);button.mode=GPIO_MODE_INPUT;button.pull_up_en=GPIO_PULLUP_ENABLE;ESP_ERROR_CHECK(gpio_config(&button));
+ controller_touch_init();
  controller_usb_start();controller_adb_init();controller_voice_init();
  xTaskCreate(screen_task,"screen",24576,nullptr,3,&screen_task_handle);
  xTaskCreate(input_task,"button",3072,nullptr,5,nullptr);
