@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "epaper_driver_bsp.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "esp_heap_caps.h"
 
@@ -119,22 +120,27 @@ void epaper_driver_display::spi_port_init() {
 }
 
 void epaper_driver_display::read_busy() {
-    int busy = lcd_spi_data.busy;
-    int waits = 0;
-    while(gpio_get_level((gpio_num_t)busy) == 1)
-    {
-        if (++waits > 2000) { ESP_LOGE(TAG, "EPD busy timeout"); abort(); }
-        vTaskDelay(pdMS_TO_TICKS(5));   //LOW: idle, HIGH: busy
+    if(faulted)return;
+    const int busy=lcd_spi_data.busy;
+    const int64_t deadline=esp_timer_get_time()+10000000;
+    while(gpio_get_level((gpio_num_t)busy)==1){
+        if(esp_timer_get_time()>=deadline){
+            ESP_LOGE(TAG,"EPD busy timeout gpio=%d level=1 after 10s; keeping USB alive",busy);
+            faulted=true;return;
+        }
+        // CONFIG_FREERTOS_HZ=100: 5ms rounds to zero ticks. Use >= one tick.
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 void epaper_driver_display::spi_write(const uint8_t *buf, int len) {
+    if(faulted)return;
     set_cs_0();
     spi_transaction_t t = {};
     t.length = 8 * len;
     t.tx_buffer = buf;
     esp_err_t ret = spi_device_polling_transmit(spi, &t);
-    assert(ret == ESP_OK);
+    if(ret != ESP_OK){faulted=true;ESP_LOGE(TAG,"EPD SPI failed: %s",esp_err_to_name(ret));}
     set_cs_1();
 }
 
@@ -217,7 +223,9 @@ void epaper_driver_display::EPD_HardReset() {
 }
 
 void epaper_driver_display::EPD_Init() {
+    ESP_LOGI(TAG,"EPD init: reset pin=%d busy=%d initial=%d",lcd_spi_data.rst,lcd_spi_data.busy,gpio_get_level((gpio_num_t)lcd_spi_data.busy));
     EPD_HardReset();
+    ESP_LOGI(TAG,"EPD after reset busy=%d",gpio_get_level((gpio_num_t)lcd_spi_data.busy));
 
     read_busy();
     EPD_SendCommand(0x12);  //SWRESET
@@ -274,6 +282,7 @@ void epaper_driver_display::EPD_DisplayPartBaseImage() {
 
 void epaper_driver_display::EPD_Init_Partial() {
     EPD_HardReset();
+    ESP_LOGI(TAG,"EPD after reset busy=%d",gpio_get_level((gpio_num_t)lcd_spi_data.busy));
 
     read_busy();
 
