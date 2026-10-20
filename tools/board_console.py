@@ -34,7 +34,7 @@ def command(device,text,seconds=2):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port')
-    parser.add_argument('command',choices=['status','logs','safe','reboot','bootloader','wifi-on','wifi-off','page','mic-test','watch'])
+    parser.add_argument('command',choices=['status','logs','storage','sdlogs','safe','reboot','bootloader','wifi-on','wifi-off','page','mic-test','watch'])
     parser.add_argument('--seconds',type=float,default=20)
     args=parser.parse_args()
     with connect(args.port) as device:
