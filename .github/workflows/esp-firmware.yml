@@ -1,6 +1,11 @@
 name: Build ESP-IDF firmware
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: '固件版本号（留空则用日期+run号）'
+        required: false
+        type: string
 permissions:
   contents: read
 env:
@@ -8,6 +13,13 @@ env:
   IDF_IMAGE: espressif/idf:v6.0
   FIRMWARE_DIR: firmware-epaper
   PROJECT_NAME: phone_controller_epaper
+  # ── ESP-IDF 6.0 实测踩过的坑（换成 idf:v5.x 时都不需要）──────────────
+  # 1) usb 组件已移出核心树 → main/idf_component.yml 加 espressif/usb
+  # 2) driver 被拆成 esp_driver_{gpio,spi,uart,...} → 各组件 CMakeLists
+  #    里补 PRIV_REQUIRES，第三方组件则升级到已适配的版本
+  # 3) mbedtls/sha256.h 不再提供 → 改用 psa/crypto.h 的 PSA 哈希 API
+  # 4) device_config.h 是 .gitignore 的本机配置 → 由 secrets 生成
+  # 5) 产物容器是 espressif/idf，用 root 跑会产出 root 属主的 build/
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,16 +45,32 @@ jobs:
           test -n "$DISPLAY_ENDPOINT" || echo "::warning::DISPLAY_ENDPOINT secret not set, using placeholder"
           test -n "$DISPLAY_TOKEN" || echo "::warning::DISPLAY_TOKEN secret not set, using placeholder"
 
+      - name: Compute firmware version
+        id: ver
+        run: |
+          # 版本号会写进 esp_app_desc_t，OTA 服务端靠它比较版本。
+          # 优先级：手动输入 > git tag > 日期+run号。
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME}"; fi
+          fi
+          if [ -z "$V" ]; then V="$(date +%Y.%m.%d)-ci${{ github.run_number }}"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Firmware version: $V"
+
       - name: Build in official image
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           docker run --rm \
             -v "$PWD/$FIRMWARE_DIR:/project" \
+            -e VERSION \
             -w /project \
             "$IDF_IMAGE" \
             bash -c '
               set -e
               . $IDF_PATH/export.sh
-              idf.py -DIDF_TARGET=esp32s3 -B build reconfigure build
+              idf.py -DIDF_TARGET=esp32s3 -DPROJECT_VER="$VERSION" -B build reconfigure build
             '
 
       - name: Collect artifacts

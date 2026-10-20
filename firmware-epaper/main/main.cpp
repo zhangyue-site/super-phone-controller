@@ -37,6 +37,7 @@
 #include "touch_screens.h"
 #include "button_gesture.h"
 #include "sd_store.h"
+#include "ble_ota.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
@@ -437,7 +438,7 @@ static void console_task(void*){
 }
 extern "C" void app_main(){
  controller_logs_start();
- ESP_LOGI(TAG,"Boot reset_reason=%d; HID=OFF WiFi=OFF Bluetooth=OFF",esp_reset_reason());
+ ESP_LOGI(TAG,"Boot reset_reason=%d; HID=OFF WiFi=OFF Bluetooth=BLE-OTA",esp_reset_reason());
  ESP_ERROR_CHECK(nvs_flash_init());
  ESP_ERROR_CHECK(esp_netif_init());ESP_ERROR_CHECK(esp_event_loop_create_default());
  gpio_config_t power={};power.pin_bit_mask=(1ULL<<6)|(1ULL<<42)|(1ULL<<17);power.mode=GPIO_MODE_OUTPUT;
@@ -446,6 +447,8 @@ extern "C" void app_main(){
  controller_touch_init();
  controller_usb_start();controller_adb_init();controller_voice_init();
  controller_storage_start();
+ // BLE OTA 早点起来：板子没 Wi-Fi 时这是唯一的升级通道。
+ { int rc=ble_ota_start(); if(rc!=0)ESP_LOGE(TAG,"BLE OTA start failed rc=%d",rc); }
  xTaskCreate(screen_task,"screen",24576,nullptr,3,&screen_task_handle);
  xTaskCreate(input_task,"button",3072,nullptr,5,nullptr);
  xTaskCreate(console_task,"console",4096,nullptr,2,nullptr);
