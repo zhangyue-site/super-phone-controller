@@ -41,3 +41,10 @@ python3 -m unittest discover -s tests -v
 https://github.com/onehumanbeing/esp32-iphone-agent
 
 已阅读其 AirPlay mirror.c 与 video_link.cpp：板端处理 H.264 码流而不解码，经 BLE 发回手机 App；视频 GOP 缓冲 4 MiB，另有 512 KiB scratch，均分配 PSRAM。该项目不是免 App 方案，也未证明支持小米 Miracast。下一步需核实：压缩流直接上传联网服务的可行性、网络上行、当前板子的流式内存预算；安卓 Miracast 接入另行研究。没有合入第三方代码。
+
+## 2026-10-20 墨水屏新增进度
+
+- 新增 `firmware-epaper/`：独立的微雪200×200固件，已编译、备份原板整片Flash后刷写校验通过；USB设备随后换为另一块，板端启动与显示尚待原板重新接入验证。
+- 新增 `display_service/`：已在106部署，额度与交互由服务器生成；经过HTTPS验证，匿名401、设备鉴权200、位图5000字节。
+- MiMo当时登录有效；扩展现有自动续期策略，覆盖HTTP403及业务401/403，不将网络错误误判为登录过期。
+- 自动手机操作、投屏与语音尚未接通。现固件是额度与交互展示基础，不代表整个手机控制器已完成。
