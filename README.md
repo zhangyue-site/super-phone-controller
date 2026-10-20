@@ -13,11 +13,11 @@
 
 ## 无应用方案的待定硬件
 
-手机不装采集应用时，候选为独立 Linux 接收盒：安卓 Miracast，iPhone AirPlay。每部受控手机连接一块独立 USB HID 板；采集源与板子必须显式配对。是否接受接收盒仍待确认。
+手机不装采集应用时，候选为独立 Linux 接收盒：安卓 Miracast，iPhone AirPlay。每部受控手机连接一块独立 USB HID 板；采集源与板子必须显式配对。用户已明确拒绝独立接收盒；该方案不再作为实施目标。
 
 Miracast 多路并发受网卡、驱动和 Wi-Fi Direct 组合限制；必须先验证单路，再评估多网卡或独立接收通道。不能假定单网卡支持多部。iPhone 鼠标需开启系统 AssistiveTouch；屏幕共享需用户启动。受保护画面可能无法采集。
 
-当前 AtomS3U 无 PSRAM，不承担完整无线投屏接收或本地视觉模型。仅靠现有小板且不增加接收端，完整目标尚无已验证方案。
+当前 AtomS3U 无 PSRAM，不承担完整无线投屏接收或本地视觉模型。新调研发现 ESP32-S3 上接收 AirPlay H.264 压缩流的参考实现，但它要求 PSRAM 和手机 App。应研究无 App 的转发/解码方案，不可据此宣布现有无 PSRAM 板子已可用。
 
 ## 验证
 
@@ -35,3 +35,9 @@ python3 -m unittest discover -s tests -v
 - https://github.com/Genymobile/scrcpy
 
 仅列为调研参考，尚未合入其代码。引入时保留并遵守各自许可证。
+
+## 新增调研：插入式接收
+
+https://github.com/onehumanbeing/esp32-iphone-agent
+
+已阅读其 AirPlay mirror.c 与 video_link.cpp：板端处理 H.264 码流而不解码，经 BLE 发回手机 App；视频 GOP 缓冲 4 MiB，另有 512 KiB scratch，均分配 PSRAM。该项目不是免 App 方案，也未证明支持小米 Miracast。下一步需核实：压缩流直接上传联网服务的可行性、网络上行、当前板子的流式内存预算；安卓 Miracast 接入另行研究。没有合入第三方代码。
