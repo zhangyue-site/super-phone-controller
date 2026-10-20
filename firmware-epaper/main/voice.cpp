@@ -1,4 +1,5 @@
 #include "voice.h"
+#include "touch.h"
 #include "adb_local.h"
 #include "sdkconfig.h"
 #include <atomic>
@@ -26,10 +27,8 @@ static void state(int value){stage=value;controller_voice_changed(false);}
 static bool init_mic(){
  if(attempted)return mic!=nullptr;
  attempted=true;
- i2c_master_bus_config_t buscfg={};buscfg.i2c_port=I2C_NUM_0;buscfg.sda_io_num=GPIO_NUM_47;buscfg.scl_io_num=GPIO_NUM_48;
- buscfg.clk_source=I2C_CLK_SRC_DEFAULT;buscfg.glitch_ignore_cnt=7;buscfg.flags.enable_internal_pullup=true;
- i2c_master_bus_handle_t bus;
- if(i2c_new_master_bus(&buscfg,&bus)!=ESP_OK)return false;
+ i2c_master_bus_handle_t bus=controller_i2c_bus();
+ if(!bus)return false;
  if(i2c_master_probe(bus,0x18,100)!=ESP_OK){ESP_LOGW("voice","ES8311 not responding");return false;}
  i2s_chan_handle_t tx,rx;
  i2s_chan_config_t channel=I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0,I2S_ROLE_MASTER);
