@@ -62,6 +62,7 @@ static void run(void*){
    unsigned cancel_at_start=cancel_sequence.load();uint32_t consent=adb_consent.load();
    if(cancelled)continue;
    state(7);bool ready=controller_adb_activate(consent);
+   if(ready && !cancelled && controller_voice_online())ready=controller_preflight_probe();
    if(!cancelled && cancel_sequence.load()==cancel_at_start){state(ready?8:9);held=false;}
    continue;
   }

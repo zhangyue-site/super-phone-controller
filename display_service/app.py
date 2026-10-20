@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse,parse_qs
 from .model import quota_rows
 from .voice import validate_pcm,recognize
+from .readiness import READINESS
 from .render import render
 from .control import read as read_interaction, write as write_interaction
 
@@ -50,6 +51,7 @@ class Handler(BaseHTTPRequestHandler):
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         parsed=urlparse(self.path)
+        if parsed.path=='/checks':return self.reply(200,json.dumps(READINESS.snapshot()).encode())
         if parsed.path not in ('/screen.bin','/screen.png','/status'):return self.reply(404,b'{}')
         rows=snapshot()
         with LOCK:interaction=read_interaction(device)
@@ -65,6 +67,12 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(10)
         device=self.device()
         if device is None:return self.reply(401,b'{}')
+        if self.path in ('/checks','/checks.bin'):
+            result=READINESS.run()
+            if self.path=='/checks.bin':
+                data=''.join('1' if result[k]=='ok' else '2' for k in ('server','chat','asr')).encode()
+                return self.reply(200,data,'application/octet-stream')
+            return self.reply(200,json.dumps(result).encode())
         session=self.headers.get('X-Voice-Session','')
         seq=self.headers.get('X-Voice-Sequence','')
         valid_session=bool(re.fullmatch(r'[0-9a-f]{16}',session) and re.fullmatch(r'[0-9]{1,10}',seq))

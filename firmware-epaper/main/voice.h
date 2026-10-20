@@ -10,3 +10,5 @@ bool controller_voice_upload(const unsigned char *pcm,unsigned size,unsigned seq
 void controller_voice_test();
 const char *controller_voice_session();
 unsigned controller_voice_cancel_sequence();
+
+bool controller_preflight_probe();
