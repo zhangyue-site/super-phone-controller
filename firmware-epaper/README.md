@@ -21,11 +21,13 @@
 
 ## 当前硬件验收限制
 
-原板（MAC末尾D4:18）已恢复下载连接，最小恢复固件已刷入并收到3秒间隔的连续心跳。随后已写入第一版默认CDC的确认固件，真机STATUS返回 `usb=1 hid=0 bluetooth=0 screen_error=1`，PID为0x4001；屏幕驱动故障被隔离，未因屏幕超时重启。屏幕确认、授权后的USB重枚举与重启后关闭仍待实机验收，不能仅凭构建通过宣称完成。
+2026-10-20 原板（MAC末尾D4:18）已完成屏幕时钟修正版刷写，各区域通过esptool校验，并使用watchdog_reset启动。USB STATUS返回 `wifi=0 wifi_enabled=0 usb=1 hid=0 bluetooth=0 screen_error=0`。LOGS显示屏幕完成刷新，未再过早超时。
 
-默认Wi-Fi关闭及LOGS缓存的版本已写入，真机返回 `wifi=0 wifi_enabled=0 usb=1 hid=0 bluetooth=0`，LOGS完整读出缓存。读到屏幕BUSY从0变1后约20ms报超时，定位到原驱动5ms延时在100Hz调度下变成0 tick，循环计数并非真实10秒；修正版改用esp_timer真实10秒截止时间并每次至少等待1 tick，待写入并验证屏幕。
+已通过串口REBOOT执行一次正常软件重启：日志reset_reason=3，重启后HID、Wi-Fi、蓝牙仍关闭，实际USB接口class仅2（CDC控制）和10（CDC数据），无class3（HID），PID为0x4001。屏幕刷新状态通过；实际画面外观待用户目视确认。屏幕确认开启后USB重枚举、开启后再重启以及手机USB联网尚未实测，不能据此宣称整套手机控制已完成。
 
-`esptool --after watchdog_reset`已成功从原生下载模式启动应用；普通RTS hard_reset曾持续回到下载模式。BOOTLOADER命令后的USB重枚举仍未可靠通过，不能当作已验证的软件恢复入口；修正版将在USB断开、卸载TinyUSB后把共享PHY交还USB-Serial/JTAG，再进入ROM，仍待实测。
+屏幕原故障已定位：5ms延时在100Hz调度下为0 tick，原循环约20ms就误报预期10秒的超时；现已用esp_timer真实10秒截止时间，并保证至少1 tick等待。旧驱动超时后的abort可能导致USB反复枚举，现改为仅隔离屏幕故障，保留串口诊断。
+
+`esptool --after watchdog_reset`已成功从原生下载模式启动应用；普通RTS hard_reset曾持续回到下载模式。BOOTLOADER命令已增加卸载TinyUSB并把共享PHY交还USB-Serial/JTAG的步骤，但该最终路径仍未实测，不作为已验证的软件恢复入口。
 
 `python3 tools/board_console.py status` 查看状态，`logs`读取最近4KiB日志，`watch --seconds 20`循环读取状态和日志。只自动选择唯一的Epaper Phone Controller，避免误操作M5stack。日志保存在RAM，重启清空，不上传服务器；固件不记录Wi-Fi密码或Bearer令牌。
 
