@@ -120,12 +120,21 @@ static void stop_now(){
 }
 static void input_task(void*){
  bool held=false,long_sent=false;int64_t began=0;
+ bool power_held=false,power_done=false;int64_t power_began=0;
  for(;;){
   bool down=gpio_get_level(GPIO_NUM_0)==0;
   int64_t now=esp_timer_get_time()/1000;
   if(down&&!held){held=true;long_sent=false;began=now;}
   if(down&&held&&!long_sent&&now-began>=1200){long_sent=true;stop_now();}
   if(!down&&held){held=false;if(!long_sent&&now-began>=50){page=1-page.load();if(screen_task_handle)xTaskNotifyGive(screen_task_handle);}}
+  bool power_down=gpio_get_level(GPIO_NUM_18)==0;
+  if(power_down&&!power_held){power_held=true;power_done=false;power_began=now;}
+  if(!power_down)power_held=false;
+  if(power_down&&power_held&&!power_done&&now-power_began>=1500){
+   power_done=true;stop_now();
+   ESP_LOGI(TAG,"PWR long press: disabling battery power latch; USB may still supply power");
+   gpio_set_level(GPIO_NUM_17,0);
+  }
   vTaskDelay(pdMS_TO_TICKS(20));
  }
 }
@@ -148,9 +157,9 @@ static void console_task(void*){
 }
 extern "C" void app_main(){
  ESP_ERROR_CHECK(nvs_flash_init());
- gpio_config_t power={};power.pin_bit_mask=(1ULL<<6)|(1ULL<<42)|(1ULL<<17)|(1ULL<<18);power.mode=GPIO_MODE_OUTPUT;
- ESP_ERROR_CHECK(gpio_config(&power));gpio_set_level(GPIO_NUM_6,0);gpio_set_level(GPIO_NUM_42,1);gpio_set_level(GPIO_NUM_17,1);gpio_set_level(GPIO_NUM_18,1);
- gpio_config_t button={};button.pin_bit_mask=1ULL<<0;button.mode=GPIO_MODE_INPUT;button.pull_up_en=GPIO_PULLUP_ENABLE;ESP_ERROR_CHECK(gpio_config(&button));
+ gpio_config_t power={};power.pin_bit_mask=(1ULL<<6)|(1ULL<<42)|(1ULL<<17);power.mode=GPIO_MODE_OUTPUT;
+ ESP_ERROR_CHECK(gpio_config(&power));gpio_set_level(GPIO_NUM_6,0);gpio_set_level(GPIO_NUM_42,1);gpio_set_level(GPIO_NUM_17,1);
+ gpio_config_t button={};button.pin_bit_mask=(1ULL<<0)|(1ULL<<18);button.mode=GPIO_MODE_INPUT;button.pull_up_en=GPIO_PULLUP_ENABLE;ESP_ERROR_CHECK(gpio_config(&button));
  controller_usb_start();
  xTaskCreate(screen_task,"screen",24576,nullptr,3,&screen_task_handle);
  xTaskCreate(input_task,"button",3072,nullptr,5,nullptr);
