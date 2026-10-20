@@ -23,3 +23,6 @@ firmware-epaper/main/device_config.h
 
 firmware/sdkconfig
 previews/live-*
+firmware-recovery/build/
+firmware-recovery/sdkconfig
+firmware-recovery/sdkconfig.old
