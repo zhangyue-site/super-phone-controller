@@ -1,0 +1,16 @@
+host/wifi.local
+firmware/build/
+**/__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+state/
+captures/
+*.wav
+*.mp4
+*.apk
+*.keystore
+.DS_Store
