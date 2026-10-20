@@ -310,8 +310,9 @@ static int gap_event(struct ble_gap_event *event, void *) {
         if (event->connect.status == 0) {
             s_conn = event->connect.conn_handle;
             ESP_LOGI(TAG, "connected");
-            // 手机端改 MTU 后吞吐能翻倍，这里主动请求大 MTU。
-            ble_gattc_exchange_mtu(s_conn, NULL, NULL);
+            // MTU 由手机端发起交换（Android requestMtu / iOS 自动协商），
+            // 外设侧只被动接受。这里调用 ble_gattc_exchange_mtu 需要 central
+            // 角色支持，本固件为省内存已关闭 central，故不主动请求。
         } else {
             ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER,
                               NULL, gap_event, NULL);
