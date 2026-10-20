@@ -71,7 +71,7 @@ static const int PAGE_COUNT=5;
 #else
 static const int PAGE_COUNT=4;
 #endif
-void controller_net_changed(){online=wifi_connected.load()||controller_usb_net_has_ip();screen_dirty=true;}
+void controller_net_changed(){online=wifi_connected.load()||controller_usb_net_has_ip()||controller_adb_network_available();screen_dirty=true;}
 void controller_usb_disconnected(){
  controller_adb_cancel();controller_voice_cancel();stop_pending=true;
  taskENTER_CRITICAL(&consent_mux);
@@ -116,8 +116,14 @@ static void wifi_start(){
  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));ESP_ERROR_CHECK(esp_wifi_start());
  wifi_initialized=true;
 }
+static const char *server_endpoint(){
+#if CONFIG_CONTROLLER_USB_LOCAL
+ if(controller_adb_network_available())return "https://127.0.0.1:18843/phone-controller";
+#endif
+ return DISPLAY_ENDPOINT;
+}
 static bool request(const char *path,uint8_t *out){
- char url[256],auth[128];snprintf(url,sizeof(url),"%s%s",DISPLAY_ENDPOINT,path);
+ char url[256],auth[128];snprintf(url,sizeof(url),"%s%s",server_endpoint(),path);
  snprintf(auth,sizeof(auth),"Bearer %s",DISPLAY_TOKEN);
  esp_http_client_config_t cfg={};cfg.url=url;cfg.timeout_ms=8000;
  cfg.common_name="erweima.zhangyue.site";
@@ -174,7 +180,7 @@ void controller_voice_changed(bool completed){
  screen_dirty=true;
 }
 bool controller_voice_upload(const unsigned char *pcm,unsigned size,unsigned sequence){
- char url[256],auth[128];snprintf(url,sizeof(url),"%s/voice",DISPLAY_ENDPOINT);
+ char url[256],auth[128];snprintf(url,sizeof(url),"%s/voice",server_endpoint());
  snprintf(auth,sizeof(auth),"Bearer %s",DISPLAY_TOKEN);
  esp_http_client_config_t cfg={};cfg.url=url;cfg.timeout_ms=80000;
  cfg.common_name="erweima.zhangyue.site";cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.disable_auto_redirect=true;
@@ -194,7 +200,7 @@ bool controller_voice_upload(const unsigned char *pcm,unsigned size,unsigned seq
 bool controller_preflight_probe(){
  if(!online)return false;
  check_server=controller::RUN;check_chat=check_asr=controller::WAIT;screen_dirty=true;
- char url[256],auth[128];snprintf(url,sizeof(url),"%s/checks.bin",DISPLAY_ENDPOINT);
+ char url[256],auth[128];snprintf(url,sizeof(url),"%s/checks.bin",server_endpoint());
  snprintf(auth,sizeof(auth),"Bearer %s",DISPLAY_TOKEN);
  esp_http_client_config_t cfg={};cfg.url=url;cfg.timeout_ms=120000;cfg.common_name="erweima.zhangyue.site";
  cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.disable_auto_redirect=true;
@@ -214,7 +220,7 @@ bool controller_preflight_probe(){
 }
 static auto current_preflight(){
  controller::PreflightInput input={controller_usb_ready(),controller_usb_net_peer()!=0,controller_adb_stage(),
-  controller_usb_net_has_ip(),(controller::CheckStatus)check_server.load(),(controller::CheckStatus)check_chat.load(),(controller::CheckStatus)check_asr.load()};
+  controller_usb_net_has_ip()||controller_adb_network_available(),(controller::CheckStatus)check_server.load(),(controller::CheckStatus)check_chat.load(),(controller::CheckStatus)check_asr.load()};
  return controller::preflight(input);
 }
 bool controller_voice_prepared(){return online && current_preflight()[7]==controller::DONE;}

@@ -7,3 +7,5 @@ int controller_adb_stage();
 uint32_t controller_adb_ticket();
 
 int controller_adb_error();
+
+bool controller_adb_network_available();

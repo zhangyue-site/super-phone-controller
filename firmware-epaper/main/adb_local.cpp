@@ -3,6 +3,7 @@
 #if CONFIG_CONTROLLER_USB_LOCAL
 #include "adb_packet.h"
 #include "adb_gate.h"
+#include "adb_stream.h"
 #include "device_adb_keys.h"
 #include "usb_network.h"
 #include "voice.h"
@@ -24,11 +25,12 @@ static AdbGate gate;
 static std::atomic<uint64_t> status(0),failure(0);
 static int connect_error=0;
 static TaskHandle_t worker;
-static int fd=-1;
+static int fd=-1,listener=-1;
+static uint32_t next_stream=2;
 static unsigned active_epoch;
 static int64_t deadline;
 static bool live(){return gate.active(active_epoch) && controller_usb_net_peer()!=0;}
-static void state(uint32_t token,int s){status=((uint64_t)token<<32)|(unsigned)s;controller_voice_changed(false);}
+static void state(uint32_t token,int s){status=((uint64_t)token<<32)|(unsigned)s;controller_net_changed();controller_voice_changed(false);}
 static bool io(void *buffer,size_t len,bool write){
  auto p=(unsigned char*)buffer;size_t done=0;
  while(done<len && live() && esp_timer_get_time()<deadline){
@@ -106,7 +108,73 @@ static bool shell_probe(unsigned char *data){
  }
  return false;
 }
+// Only this fixed server destination is permitted. TLS stays on the board.
+static bool proxy_write(int client,const unsigned char *data,size_t length){
+ size_t done=0;
+ while(done<length && live() && esp_timer_get_time()<deadline){
+  int n=send(client,data+done,length-done,0);
+  if(n>0){done+=n;continue;}
+  if(n==0 || (errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR))return false;
+  vTaskDelay(pdMS_TO_TICKS(10));
+ }
+ return done==length;
+}
+static bool proxy_session(int client,unsigned char *data){
+ const char service[]="exec:toybox nc 106.52.123.149 443";
+ AdbStream stream(next_stream++);
+ deadline=esp_timer_get_time()+150000000;
+ if(!packet(ADB_OPEN,stream.local,0,service,sizeof(service)))return false;
+ bool transport_ok=true,closed_by_phone=false;unsigned long to_phone=0,to_board=0;
+ while(live() && esp_timer_get_time()<deadline){
+  fd_set inputs;FD_ZERO(&inputs);FD_SET(fd,&inputs);
+  if(stream.can_send)FD_SET(client,&inputs);
+  timeval timeout={0,100000};int n=select((fd>client?fd:client)+1,&inputs,nullptr,nullptr,&timeout);
+  if(n<0){if(errno==EINTR)continue;transport_ok=false;break;}
+  if(FD_ISSET(fd,&inputs)){
+   AdbHeader h;if(!receive(h,data)){transport_ok=false;break;}
+   StreamEvent event=stream.receive(h.command,h.arg0,h.arg1);
+   if(event==StreamEvent::ERROR){transport_ok=false;break;}
+   if(event==StreamEvent::CLOSED){closed_by_phone=true;packet(ADB_CLSE,stream.local,h.arg0);break;}
+   if(event==StreamEvent::DATA){
+    if(!proxy_write(client,data,h.length))break;
+    to_board+=h.length;
+    if(!packet(ADB_OKAY,stream.local,stream.remote)){transport_ok=false;break;}
+   }
+  }
+  if(stream.can_send && FD_ISSET(client,&inputs)){
+   int count=recv(client,data,4096,0);
+   if(count==0)break;
+   if(count<0){if(errno==EAGAIN||errno==EWOULDBLOCK||errno==EINTR)continue;break;}
+   if(!stream.sent() || !packet(ADB_WRTE,stream.local,stream.remote,data,count)){transport_ok=false;break;}
+   to_phone+=count;
+  }
+ }
+ if(!closed_by_phone && stream.remote && live())packet(ADB_CLSE,stream.local,stream.remote);
+ ESP_LOGI("adb_local","USB TLS pipe bytes up=%lu down=%lu transport=%d",to_phone,to_board,transport_ok);
+ return transport_ok;
+}
+static bool proxy_loop(unsigned char *data){
+ while(live()){
+  fd_set inputs;FD_ZERO(&inputs);FD_SET(listener,&inputs);FD_SET(fd,&inputs);
+  timeval timeout={0,100000};int n=select((listener>fd?listener:fd)+1,&inputs,nullptr,nullptr,&timeout);
+  if(n<0){if(errno==EINTR)continue;return false;}
+  if(FD_ISSET(fd,&inputs)){
+   // Consume late closes/acks instead of spinning on an unread packet.
+   deadline=esp_timer_get_time()+2000000;AdbHeader h;
+   if(!receive(h,data))return false;
+   if(h.command==ADB_WRTE || h.command==ADB_CLSE)packet(ADB_CLSE,h.arg1,h.arg0);
+  }
+  if(FD_ISSET(listener,&inputs)){
+   int client=accept(listener,nullptr,nullptr);if(client<0)continue;
+   fcntl(client,F_SETFL,fcntl(client,F_GETFL,0)|O_NONBLOCK);
+   bool ok=proxy_session(client,data);shutdown(client,SHUT_RDWR);close(client);
+   if(!ok)return false;
+  }
+ }
+ return false;
+}
 static void run(void*){
+
  unsigned char *data=(unsigned char*)malloc(4096);
  for(;;){
   ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
@@ -123,17 +191,20 @@ static void run(void*){
   if(!ok)ESP_LOGW("adb_local","Probe failed phase=%d socket_error=%d; verify direct phone connection",reason,connect_error);
   if(ok && live()){
    state(active_epoch,3);ESP_LOGI("adb_local","Authorized USB-local ADB shell probe succeeded; no phone action executed");
-   while(live()){
-    unsigned char byte;int n=recv(fd,&byte,1,MSG_PEEK|MSG_DONTWAIT);
-    if(n==0 || (n<0 && errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR))break;
-    vTaskDelay(pdMS_TO_TICKS(100));
-   }
+   if(listener>=0)proxy_loop(data);
   }
   if(fd>=0){shutdown(fd,SHUT_RDWR);close(fd);fd=-1;}
   if(gate.finish(active_epoch)){failure=((uint64_t)(active_epoch&~1u)<<32)|(unsigned)(reason?reason:7);state(active_epoch&~1u,5);}
  }
 }
-void controller_adb_init(){xTaskCreate(run,"usb_local_adb",8192,nullptr,3,&worker);}
+void controller_adb_init(){
+ listener=socket(AF_INET,SOCK_STREAM,0);
+ if(listener>=0){
+  sockaddr_in address={};address.sin_family=AF_INET;address.sin_port=htons(18843);inet_pton(AF_INET,"127.0.0.1",&address.sin_addr);
+  if(bind(listener,(sockaddr*)&address,sizeof(address))!=0 || listen(listener,2)!=0){close(listener);listener=-1;}
+ }
+ xTaskCreate(run,"usb_local_adb",10240,nullptr,3,&worker);
+}
 uint32_t controller_adb_ticket(){return gate.ticket();}
 bool controller_adb_activate(uint32_t consent){
  if(gate.active(consent) && controller_adb_stage()==3)return true;
@@ -151,6 +222,8 @@ int controller_adb_stage(){
 }
 int controller_adb_error(){uint64_t snapshot=failure.load();return (uint32_t)(snapshot>>32)==gate.ticket()?(int)(snapshot&0xffffffffu):0;}
 
+bool controller_adb_network_available(){return listener>=0 && controller_adb_stage()==3;}
+
 #else
 void controller_adb_init(){}
 bool controller_adb_activate(uint32_t){return false;}
@@ -158,4 +231,5 @@ uint32_t controller_adb_ticket(){return 0;}
 void controller_adb_cancel(){}
 int controller_adb_stage(){return 0;}
 int controller_adb_error(){return 0;}
+bool controller_adb_network_available(){return false;}
 #endif
