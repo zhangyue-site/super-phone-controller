@@ -1,6 +1,7 @@
 #include "ble_ota.h"
 #include <string.h>
-#include <atomic>
+#include <stdbool.h>
+#include <stdatomic.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -21,13 +22,13 @@ static const char *TAG = "ble_ota";
 // ---------------------------------------------------------------------------
 // 状态
 // ---------------------------------------------------------------------------
-static std::atomic<int> s_state(BLE_OTA_IDLE);
-static std::atomic<int> s_err(BLE_OTA_OK);
-static std::atomic<int> s_progress(0);
-static std::atomic<bool> s_busy(false);
+static atomic_int s_state = BLE_OTA_IDLE;
+static atomic_int s_err = BLE_OTA_OK;
+static atomic_int s_progress = 0;
+static atomic_bool s_busy = false;
 
 static esp_ota_handle_t s_ota_handle = 0;
-static const esp_partition_t *s_ota_part = nullptr;
+static const esp_partition_t *s_ota_part = NULL;
 static uint32_t s_total = 0;
 static uint32_t s_written = 0;
 static uint8_t s_expect_sha[32];
@@ -43,14 +44,14 @@ typedef struct {
     uint16_t len;
     uint8_t data[512];
 } chunk_t;
-static QueueHandle_t s_queue = nullptr;
+static QueueHandle_t s_queue = NULL;
 
 static void notify_status(void);
 
 static void set_state(ble_ota_state_t st, ble_ota_err_t err) {
-    s_err.store(err);
-    s_state.store(st);
-    ESP_LOGI(TAG, "state=%d err=%d progress=%d", (int)st, (int)err, s_progress.load());
+    atomic_store(&s_err, err);
+    atomic_store(&s_state, st);
+    ESP_LOGI(TAG, "state=%d err=%d progress=%d", (int)st, (int)err, atomic_load(&s_progress));
     notify_status();
 }
 
@@ -62,13 +63,13 @@ static void set_state(ble_ota_state_t st, ble_ota_err_t err) {
 
 static ble_ota_err_t begin_transfer(const uint8_t *p, uint16_t len) {
     if (len < 1 + 4 + 32) return BLE_OTA_ERR_PARAM;
-    if (s_busy.load()) return BLE_OTA_ERR_STATE;
+    if (atomic_load(&s_busy)) return BLE_OTA_ERR_STATE;
 
     uint32_t total = (uint32_t)p[1] | ((uint32_t)p[2] << 8) |
                      ((uint32_t)p[3] << 16) | ((uint32_t)p[4] << 24);
     if (total < MIN_IMAGE) return BLE_OTA_ERR_PARAM;
 
-    s_ota_part = esp_ota_get_next_update_partition(nullptr);
+    s_ota_part = esp_ota_get_next_update_partition(NULL);
     if (!s_ota_part) return BLE_OTA_ERR_FLASH;
     if (total > s_ota_part->size) {
         ESP_LOGE(TAG, "image %u > slot %u", total, (unsigned)s_ota_part->size);
@@ -93,8 +94,8 @@ static ble_ota_err_t begin_transfer(const uint8_t *p, uint16_t len) {
 
     s_total = total;
     s_written = 0;
-    s_progress.store(0);
-    s_busy.store(true);
+    atomic_store(&s_progress, 0);
+    atomic_store(&s_busy, true);
     xQueueReset(s_queue);
     set_state(BLE_OTA_RECEIVING, BLE_OTA_OK);
     return BLE_OTA_OK;
@@ -103,14 +104,14 @@ static ble_ota_err_t begin_transfer(const uint8_t *p, uint16_t len) {
 static ble_ota_err_t abort_transfer(void) {
     if (s_ota_handle) { esp_ota_abort(s_ota_handle); s_ota_handle = 0; }
     if (s_sha_live) { psa_hash_abort(&s_sha); s_sha_live = false; }
-    s_busy.store(false);
-    s_progress.store(0);
+    atomic_store(&s_busy, false);
+    atomic_store(&s_progress, 0);
     set_state(BLE_OTA_IDLE, BLE_OTA_OK);
     return BLE_OTA_OK;
 }
 
 static ble_ota_err_t end_transfer(void) {
-    if (!s_busy.load() || !s_ota_handle) return BLE_OTA_ERR_STATE;
+    if (!atomic_load(&s_busy) || !s_ota_handle) return BLE_OTA_ERR_STATE;
     // 队列里可能还有没写完的片：等它们落盘再校验，否则最后一片会丢。
     while (uxQueueMessagesWaiting(s_queue) > 0) vTaskDelay(pdMS_TO_TICKS(20));
 
@@ -144,7 +145,7 @@ static ble_ota_err_t end_transfer(void) {
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "ota_end: %s", esp_err_to_name(e));
         // esp_ota_end 失败已经释放句柄，不需要再 abort。
-        s_busy.store(false);
+        atomic_store(&s_busy, false);
         set_state(BLE_OTA_ERROR, BLE_OTA_ERR_HASH);
         return BLE_OTA_ERR_HASH;
     }
@@ -152,13 +153,13 @@ static ble_ota_err_t end_transfer(void) {
     e = esp_ota_set_boot_partition(s_ota_part);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "set_boot: %s", esp_err_to_name(e));
-        s_busy.store(false);
+        atomic_store(&s_busy, false);
         set_state(BLE_OTA_ERROR, BLE_OTA_ERR_FLASH);
         return BLE_OTA_ERR_FLASH;
     }
 
-    s_progress.store(100);
-    s_busy.store(false);
+    atomic_store(&s_progress, 100);
+    atomic_store(&s_busy, false);
     set_state(BLE_OTA_READY, BLE_OTA_OK);
     ESP_LOGI(TAG, "image verified, boot partition switched");
     return BLE_OTA_OK;
@@ -169,10 +170,10 @@ static ble_ota_err_t end_transfer(void) {
 // ---------------------------------------------------------------------------
 static void writer_task(void *) {
     chunk_t *c = (chunk_t *)malloc(sizeof(chunk_t));
-    if (!c) { ESP_LOGE(TAG, "no mem"); vTaskDelete(nullptr); return; }
+    if (!c) { ESP_LOGE(TAG, "no mem"); vTaskDelete(NULL); return; }
     for (;;) {
         if (xQueueReceive(s_queue, c, portMAX_DELAY) != pdTRUE) continue;
-        if (!s_busy.load() || !s_ota_handle) continue;
+        if (!atomic_load(&s_busy) || !s_ota_handle) continue;
 
         uint32_t room = s_total - s_written;
         uint16_t n = c->len;
@@ -194,8 +195,8 @@ static void writer_task(void *) {
         s_written += n;
         int pct = (int)((uint64_t)s_written * 100 / s_total);
         // 只在百分比整数变化时通知，省 BLE 带宽。
-        if (pct != s_progress.load()) {
-            s_progress.store(pct);
+        if (pct != atomic_load(&s_progress)) {
+            atomic_store(&s_progress, pct);
             notify_status();
         }
     }
@@ -216,8 +217,8 @@ static const ble_uuid128_t STAT_UUID =
 
 static void notify_status(void) {
     if (s_conn == BLE_HS_CONN_HANDLE_NONE || !s_status_handle) return;
-    uint8_t buf[4] = {(uint8_t)s_state.load(), (uint8_t)s_progress.load(),
-                      (uint8_t)s_err.load(), 0};
+    uint8_t buf[4] = {(uint8_t)atomic_load(&s_state), (uint8_t)atomic_load(&s_progress),
+                      (uint8_t)atomic_load(&s_err), 0};
     struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, sizeof(buf));
     if (!om) return;
     ble_gatts_notify_custom(s_conn, s_status_handle, om);
@@ -229,25 +230,25 @@ static int ctrl_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
     if (len < 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
 
     uint8_t cmd = 0;
-    ble_hs_mbuf_to_flat(ctxt->om, &cmd, 1, nullptr);
+    ble_hs_mbuf_to_flat(ctxt->om, &cmd, 1, NULL);
 
     switch (cmd) {
     case 0x01: {  // BEGIN
         uint8_t buf[1 + 4 + 32];
         if (len < sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-        ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), nullptr);
+        ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), NULL);
         ble_ota_err_t r = begin_transfer(buf, sizeof(buf));
         if (r != BLE_OTA_OK) set_state(BLE_OTA_ERROR, r);
         break;
     }
     case 0x02: {  // DATA
-        if (!s_busy.load() || len < 2) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (!atomic_load(&s_busy) || len < 2) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         chunk_t c;
         c.len = len - 1;
         if (c.len > sizeof(c.data)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         // 整包一次性拷出来，再从偏移 1 取正文——os_mbuf_adj 会改坏原始 mbuf。
         uint8_t tmp[1 + sizeof(c.data)];
-        ble_hs_mbuf_to_flat(ctxt->om, tmp, 1 + c.len, nullptr);
+        ble_hs_mbuf_to_flat(ctxt->om, tmp, 1 + c.len, NULL);
         memcpy(c.data, tmp + 1, c.len);
         if (xQueueSend(s_queue, &c, 0) != pdTRUE) {
             ESP_LOGW(TAG, "queue full, dropping chunk");
@@ -269,8 +270,8 @@ static int ctrl_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
 
 static int stat_access(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt, void *) {
     if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_UNLIKELY;
-    uint8_t buf[4] = {(uint8_t)s_state.load(), (uint8_t)s_progress.load(),
-                      (uint8_t)s_err.load(), 0};
+    uint8_t buf[4] = {(uint8_t)atomic_load(&s_state), (uint8_t)atomic_load(&s_progress),
+                      (uint8_t)atomic_load(&s_err), 0};
     int rc = os_mbuf_append(ctxt->om, buf, sizeof(buf));
     return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 }
@@ -310,26 +311,26 @@ static int gap_event(struct ble_gap_event *event, void *) {
             s_conn = event->connect.conn_handle;
             ESP_LOGI(TAG, "connected");
             // 手机端改 MTU 后吞吐能翻倍，这里主动请求大 MTU。
-            ble_gattc_exchange_mtu(s_conn, nullptr, nullptr);
+            ble_gattc_exchange_mtu(s_conn, NULL, NULL);
         } else {
-            ble_gap_adv_start(own_addr_type, nullptr, BLE_HS_FOREVER,
-                              nullptr, gap_event, nullptr);
+            ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER,
+                              NULL, gap_event, NULL);
         }
         return 0;
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnected reason=%d", event->disconnect.reason);
         s_conn = BLE_HS_CONN_HANDLE_NONE;
         // 连接断了但传输没完成：不能继续写，必须回滚，否则槽位被半包固件占着。
-        if (s_busy.load()) abort_transfer();
-        ble_gap_adv_start(own_addr_type, nullptr, BLE_HS_FOREVER,
-                          nullptr, gap_event, nullptr);
+        if (atomic_load(&s_busy)) abort_transfer();
+        ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER,
+                          NULL, gap_event, NULL);
         return 0;
     case BLE_GAP_EVENT_MTU:
         ESP_LOGI(TAG, "mtu=%d", event->mtu.value);
         return 0;
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        ble_gap_adv_start(own_addr_type, nullptr, BLE_HS_FOREVER,
-                          nullptr, gap_event, nullptr);
+        ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER,
+                          NULL, gap_event, NULL);
         return 0;
     default:
         return 0;
@@ -354,8 +355,8 @@ static void advertise(void) {
     struct ble_gap_adv_params params = {};
     params.conn_mode = BLE_GAP_CONN_MODE_UND;
     params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    rc = ble_gap_adv_start(own_addr_type, nullptr, BLE_HS_FOREVER,
-                           &params, gap_event, nullptr);
+    rc = ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER,
+                           &params, gap_event, NULL);
     if (rc != 0) ESP_LOGE(TAG, "adv_start rc=%d", rc);
 }
 
@@ -378,14 +379,14 @@ static void host_task(void *) {
 // ---------------------------------------------------------------------------
 // 对外
 // ---------------------------------------------------------------------------
-extern "C" int ble_ota_start(void) {
+int ble_ota_start(void) {
     static bool started = false;
     if (started) return 0;
     started = true;
 
     s_queue = xQueueCreate(48, sizeof(chunk_t));
     if (!s_queue) return -1;
-    xTaskCreate(writer_task, "ble_ota_w", 6144, nullptr, 5, nullptr);
+    xTaskCreate(writer_task, "ble_ota_w", 6144, NULL, 5, NULL);
 
     esp_err_t e = nimble_port_init();
     if (e != ESP_OK) { ESP_LOGE(TAG, "nimble_port_init: %s", esp_err_to_name(e)); return -1; }
@@ -406,10 +407,10 @@ extern "C" int ble_ota_start(void) {
     return 0;
 }
 
-extern "C" void ble_ota_status(ble_ota_state_t *state, uint8_t *progress, uint8_t *err) {
-    if (state) *state = (ble_ota_state_t)s_state.load();
-    if (progress) *progress = (uint8_t)s_progress.load();
-    if (err) *err = (uint8_t)s_err.load();
+void ble_ota_status(ble_ota_state_t *state, uint8_t *progress, uint8_t *err) {
+    if (state) *state = (ble_ota_state_t)atomic_load(&s_state);
+    if (progress) *progress = (uint8_t)atomic_load(&s_progress);
+    if (err) *err = (uint8_t)atomic_load(&s_err);
 }
 
-extern "C" bool ble_ota_busy(void) { return s_busy.load(); }
+bool ble_ota_busy(void) { return atomic_load(&s_busy); }
