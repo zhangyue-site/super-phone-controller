@@ -14,3 +14,12 @@ captures/
 *.apk
 *.keystore
 .DS_Store
+private-backups/
+firmware-epaper/build/
+firmware-epaper/managed_components/
+firmware-epaper/sdkconfig
+firmware-epaper/sdkconfig.old
+firmware-epaper/main/device_config.h
+
+firmware/sdkconfig
+previews/live-*
