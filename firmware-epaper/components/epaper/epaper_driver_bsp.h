@@ -29,6 +29,7 @@ private:
     const int Height;
     spi_device_handle_t spi;
     uint8_t *buffer = NULL;
+    bool faulted = false;
 
     void spi_gpio_init();
     void spi_port_init();
@@ -53,6 +54,7 @@ private:
     void EPD_TurnOnDisplayPart();
 
 public:
+    bool healthy() const { return !faulted; }
     epaper_driver_display(int width, int height,custom_lcd_spi_t _lcd_spi_data);
     ~epaper_driver_display();
 
