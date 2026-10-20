@@ -17,7 +17,7 @@
 static std::atomic<bool> held(false),cancelled(false);
 static std::atomic<int> stage(0);
 static std::atomic<uint32_t> adb_consent(0);
-static std::atomic<bool> diagnostic(false);
+static std::atomic<bool> diagnostic(false),prepare_only(false);
 static TaskHandle_t worker;
 static esp_codec_dev_handle_t mic;
 static bool attempted=false;
@@ -55,9 +55,10 @@ static void run(void*){
  for(;;){
   ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
   bool test=diagnostic.exchange(false);
+  bool prepare=prepare_only.exchange(false);
   if((!held || cancelled) && !test)continue;
 #if CONFIG_CONTROLLER_USB_LOCAL
-  if(!test){
+  if(!test && (prepare || !controller_voice_prepared())){
    unsigned cancel_at_start=cancel_sequence.load();uint32_t consent=adb_consent.load();
    if(cancelled)continue;
    state(7);bool ready=controller_adb_activate(consent);
@@ -66,6 +67,7 @@ static void run(void*){
    continue;
   }
 #endif
+  if(!test && prepare){state(6);held=false;continue;}
   if(!test && !controller_voice_online()){state(6);continue;}
   if(!pcm || !init_mic()){state(5);continue;}
   unsigned sequence=record_sequence.load();
@@ -101,10 +103,17 @@ static void run(void*){
  }
 }
 void controller_voice_init(){snprintf(session,sizeof(session),"%08x%08x",(unsigned)esp_random(),(unsigned)esp_random());xTaskCreate(run,"voice",6144,nullptr,4,&worker);}
+static void begin_voice_request(){
+ adb_consent=controller_adb_ticket();record_sequence=next_sequence.fetch_add(1);cancelled=false;held=true;xTaskNotifyGive(worker);
+}
+void controller_voice_prepare(){
+ if(stage==1 || stage==2 || stage==4 || stage==7)return;
+ prepare_only=true;begin_voice_request();
+}
 void controller_voice_hold(bool value){
  if(!value){held=false;return;}
- if(stage==1 || stage==2 || stage==4)return;
- adb_consent=controller_adb_ticket();record_sequence=next_sequence.fetch_add(1);cancelled=false;held=true;xTaskNotifyGive(worker);
+ if(stage==1 || stage==2 || stage==4 || stage==7)return;
+ prepare_only=false;begin_voice_request();
 }
 void controller_voice_cancel(){cancel_sequence=next_sequence.fetch_add(1);cancelled=true;held=false;}
 int controller_voice_stage(){

@@ -3,13 +3,14 @@
 using namespace controller;
 int main(){
  assert(touch_target(5,50,75)==TouchTarget::START);
- assert(touch_target(5,40,120)==TouchTarget::QUOTA);
- assert(touch_target(5,150,120)==TouchTarget::CONTROL);
+ assert(touch_target(5,40,120)==TouchTarget::NONE);
+ assert(touch_target(5,150,150)==TouchTarget::STOP);
  assert(touch_target(4,30,188)==TouchTarget::HOME);
- assert(touch_target(4,90,188)==TouchTarget::START);
- assert(touch_target(4,175,188)==TouchTarget::STOP);
+ assert(touch_target(4,90,188)==TouchTarget::HOME);
+ assert(touch_target(4,175,188)==TouchTarget::HOME);
  assert(touch_target(2,90,95)==TouchTarget::CONFIRM);
  assert(touch_target(5,250,75)==TouchTarget::NONE);
+ assert(touch_target(3,80,90,4)==TouchTarget::START);
  TouchContact contact;
  assert(contact.update(-1)==TouchEdge::NONE);
  assert(contact.update(1)==TouchEdge::NONE); // unknown/multitouch cannot become new down

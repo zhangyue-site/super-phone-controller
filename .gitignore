@@ -35,3 +35,5 @@ firmware-epaper/sdkconfig.usb-network.old
 firmware-epaper/sdkconfig.usb-local
 firmware-epaper/sdkconfig.usb-local.old
 firmware-epaper/main/device_adb_keys.h
+
+/firmware-epaper/main/device_skill_cache.h

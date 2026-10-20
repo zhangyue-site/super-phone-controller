@@ -12,3 +12,6 @@ const char *controller_voice_session();
 unsigned controller_voice_cancel_sequence();
 
 bool controller_preflight_probe();
+
+void controller_voice_prepare();
+bool controller_voice_prepared();
