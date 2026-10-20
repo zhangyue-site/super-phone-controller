@@ -14,3 +14,5 @@ void controller_usb_net_backend(bool ready);
 void controller_usb_net_counters(uint32_t *rx,uint32_t *tx);
 // Called from event/task context. Must only update application state.
 void controller_net_changed();
+
+uint32_t controller_usb_net_peer();

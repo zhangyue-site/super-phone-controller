@@ -1,0 +1,9 @@
+menu "Controller experimental transport"
+config CONTROLLER_USB_LOCAL
+    bool "USB local-only DHCP server for ADB bootstrap tests"
+    depends on TINYUSB_NET_MODE_NCM
+    default n
+    help
+        Isolated test: board 192.168.77.1 leases an address to the phone.
+        No internet gateway/DNS advertised. Does not enable ADB automatically.
+endmenu

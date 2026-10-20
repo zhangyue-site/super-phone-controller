@@ -31,3 +31,7 @@ firmware-epaper/sdkconfig.usb-network
 firmware-epaper/sdkconfig.usb-network.old
 
 /build-usb-network/
+/build-usb-local/
+firmware-epaper/sdkconfig.usb-local
+firmware-epaper/sdkconfig.usb-local.old
+firmware-epaper/main/device_adb_keys.h

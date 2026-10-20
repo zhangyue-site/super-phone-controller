@@ -28,6 +28,7 @@
 #include "network_screens.h"
 #include "ui_assets.h"
 #include "voice.h"
+#include "adb_local.h"
 #include "voice_screens.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
@@ -59,7 +60,7 @@ static const int PAGE_COUNT=4;
 #endif
 void controller_net_changed(){online=wifi_connected.load()||controller_usb_net_has_ip();screen_dirty=true;}
 void controller_usb_disconnected(){
- controller_voice_cancel();stop_pending=true;
+ controller_adb_cancel();controller_voice_cancel();stop_pending=true;
  taskENTER_CRITICAL(&consent_mux);
  controller_usb_request_mode(false);controller_release();go_page(0);
  taskEXIT_CRITICAL(&consent_mux);
@@ -191,7 +192,7 @@ static void screen_task(void*){
   if(current_page==2){
    memcpy(frame,hid?mode_enabled_screen:mode_disabled_screen,5000);
   }else if(current_page==PAGE_COUNT-1){
-   int voice=controller_voice_stage();memcpy(frame,voice_screens[(voice>=0&&voice<7)?voice:5],5000);
+   int voice=controller_voice_stage();memcpy(frame,voice_screens[(voice>=0&&voice<10)?voice:5],5000);
   }else if(current_page==3){
    int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);
   }else{
@@ -223,7 +224,7 @@ static void screen_task(void*){
 }
 static void stop_now(){
  taskENTER_CRITICAL(&consent_mux);
- controller_voice_cancel();stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
+ controller_adb_cancel();controller_voice_cancel();stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
  taskEXIT_CRITICAL(&consent_mux);
  if(screen_task_handle)xTaskNotifyGive(screen_task_handle);
  ESP_LOGI(TAG,"Local stop latched; no actuator enabled");
@@ -264,15 +265,21 @@ static void input_task(void*){
 static void console_command(char *line){
  if(strcmp(line,"STOP")==0)stop_now();
  else if(strcmp(line,"LOGS")==0)controller_logs_dump();
- else if(strcmp(line,"WIFI ON")==0){wifi_start();controller_usb_write("WiFi enabled for this boot\r\n");}
+ else if(strcmp(line,"WIFI ON")==0){
+#if CONFIG_CONTROLLER_USB_LOCAL
+  controller_usb_write("WiFi forbidden in USB-local test build\r\n");
+#else
+  wifi_start();controller_usb_write("WiFi enabled for this boot\r\n");
+#endif
+ }
  else if(strcmp(line,"WIFI OFF")==0){wifi_enabled=false;wifi_connected=false;online=controller_usb_net_has_ip();if(wifi_initialized){esp_wifi_stop();}controller_usb_write("WiFi disabled\r\n");}
  else if(strcmp(line,"MIC TEST")==0){controller_voice_test();controller_usb_write("Microphone diagnostic: one second; samples discarded\r\n");}
  else if(strcmp(line,"PAGE")==0)go_page((page.load()+1)%PAGE_COUNT);
  else if(strcmp(line,"SAFE")==0){taskENTER_CRITICAL(&consent_mux);controller_usb_request_mode(false);go_page(0);taskEXIT_CRITICAL(&consent_mux);}
  else if(strcmp(line,"STATUS")==0){
   uint32_t rx,tx;controller_usb_net_counters(&rx,&tx);
-  char status[256];snprintf(status,sizeof(status),"STATUS online=%d wifi=%d wifi_enabled=%d usb=%d hid=%d bluetooth=0 page=%d stopped=%d screen_error=%d psram=%u net=%d rx=%u tx=%u voice=%d time=%lld\r\n",
-   online.load(),wifi_connected.load(),wifi_enabled.load(),controller_usb_ready(),controller_usb_hid_enabled(),page.load(),stopped.load(),screen_failed.load(),(unsigned)esp_psram_get_size(),controller_usb_net_stage(),(unsigned)rx,(unsigned)tx,controller_voice_stage(),(long long)time(nullptr));
+  char status[256];snprintf(status,sizeof(status),"STATUS online=%d wifi=%d wifi_enabled=%d usb=%d hid=%d bluetooth=0 page=%d stopped=%d screen_error=%d psram=%u net=%d rx=%u tx=%u voice=%d time=%lld peer=%08x adb=%d\r\n",
+   online.load(),wifi_connected.load(),wifi_enabled.load(),controller_usb_ready(),controller_usb_hid_enabled(),page.load(),stopped.load(),screen_failed.load(),(unsigned)esp_psram_get_size(),controller_usb_net_stage(),(unsigned)rx,(unsigned)tx,controller_voice_stage(),(long long)time(nullptr),(unsigned)controller_usb_net_peer(),controller_adb_stage());
   controller_usb_write(status);
  }else if(strcmp(line,"REBOOT")==0 || strcmp(line,"BOOTLOADER")==0){
   controller_usb_request_mode(false);
@@ -317,7 +324,7 @@ extern "C" void app_main(){
  gpio_config_t power={};power.pin_bit_mask=(1ULL<<6)|(1ULL<<42)|(1ULL<<17);power.mode=GPIO_MODE_OUTPUT;
  ESP_ERROR_CHECK(gpio_config(&power));gpio_set_level(GPIO_NUM_6,0);gpio_set_level(GPIO_NUM_42,1);gpio_set_level(GPIO_NUM_17,1);
  gpio_config_t button={};button.pin_bit_mask=(1ULL<<0)|(1ULL<<18);button.mode=GPIO_MODE_INPUT;button.pull_up_en=GPIO_PULLUP_ENABLE;ESP_ERROR_CHECK(gpio_config(&button));
- controller_usb_start();controller_voice_init();
+ controller_usb_start();controller_adb_init();controller_voice_init();
  xTaskCreate(screen_task,"screen",24576,nullptr,3,&screen_task_handle);
  xTaskCreate(input_task,"button",3072,nullptr,5,nullptr);
  xTaskCreate(console_task,"console",4096,nullptr,2,nullptr);
