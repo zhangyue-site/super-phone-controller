@@ -72,6 +72,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         return;
       }
       final info = await widget.service.readInfo();
+      if (!mounted) return;
       setState(() {
         _deviceVersion = info?.version ?? _deviceVersion;
         _chunkSize = chunk;
@@ -243,18 +244,18 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
               icon: Icons.info_outline, text: '第 2 步：选择固件。传输时请保持手机靠近控制板，避免断电。'),
           const SizedBox(height: 16),
           _SourceCard(
-            icon: Icons.folder_open_outlined,
-            title: '选择已下载的固件',
-            subtitle: '选择 app.bin，不要选择整片备份文件',
-            primary: true,
-            onTap: _busy ? null : _pickLocal,
-          ),
-          const SizedBox(height: 10),
-          _SourceCard(
             icon: Icons.cloud_download_outlined,
             title: '下载最新固件',
             subtitle: '通过已连接的控制板自动授权，无需选择文件',
+            primary: true,
             onTap: _busy ? null : _fetchFromServer,
+          ),
+          const SizedBox(height: 10),
+          _SourceCard(
+            icon: Icons.folder_open_outlined,
+            title: '选择本地固件（高级）',
+            subtitle: '仅用于恢复，选择 app.bin 应用镜像',
+            onTap: _busy ? null : _pickLocal,
           ),
           if (_busy) ...[
             const SizedBox(height: 20),
