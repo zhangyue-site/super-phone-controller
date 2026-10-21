@@ -39,6 +39,7 @@
 #include "sd_store.h"
 #include "ota.h"
 #include "ble_ota.h"
+#include "gesture.h"
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
 #include "soc/soc.h"
@@ -442,6 +443,7 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
 static void input_task(void*){
  controller::TouchGesture gesture;controller::TouchContact contact_state;int touch_page=-1;
  controller::ButtonGesture side_key;bool touch_voicing=false,key_voicing=false,key_confirming=false;int64_t key_began=0;unsigned key_epoch=0;unsigned touch_voice_epoch=0;
+ controller::GestureDetector swipes;int64_t swipe_fired_ms=-100000;
 
  bool power_held=false,power_done=false;int64_t power_began=0;
  for(;;){
@@ -449,7 +451,28 @@ static void input_task(void*){
   int64_t now=esp_timer_get_time()/1000;
   int tx=0,ty=0;int contact=controller_touch_read(tx,ty);
   auto edge=contact_state.update(contact);
-  if(controller_ota_busy()){if(gpio_get_level(GPIO_NUM_18)==0)controller_ota_cancel();gesture.cancel();vTaskDelay(pdMS_TO_TICKS(20));continue;}
+  // 轨迹手势（滑动/双击/长按）：只在这一处喂点，抬手时最多吐一次结果。
+  auto swipe=swipes.feed(contact==1,tx,ty,now);
+  if(swipe!=controller::Gesture::None){
+   swipe_fired_ms=now;
+   controller_event("swipe",page.load(),(int)swipe);
+   bool in_confirm=page==2 || touch_voicing || key_voicing || key_confirming;
+   switch(swipe){
+   case controller::Gesture::SwipeUp:
+    if(!in_confirm)go_page(controller::next_page(page.load(),HOME_PAGE));break;
+   case controller::Gesture::SwipeDown:
+    if(!in_confirm)go_page(page.load()<=HOME_PAGE?PAGE_COUNT-1:page.load()-1);break;
+   case controller::Gesture::DoubleTap:
+    if(!in_confirm){screen_dirty=true;xTaskNotifyGive(screen_task_handle);}break;
+   case controller::Gesture::LongPress:
+    // 长按与既有"按住说话"共用入口；确认页/录音中不抢。
+    if(!in_confirm && page==HOME_PAGE){go_page(PAGE_COUNT-1);touch_voice_epoch=screen_epoch.load();
+     touch_voicing=true;stopped=false;controller_voice_hold(true);}
+    break;
+   default:break;
+   }
+  }
+  if(controller_ota_busy()){if(gpio_get_level(GPIO_NUM_18)==0)controller_ota_cancel();gesture.cancel();swipes.reset();vTaskDelay(pdMS_TO_TICKS(20));continue;}
   if(contact==1){
    auto target=controller::touch_target(page.load(),tx,ty,HOME_PAGE);
    if(touch_voicing){
@@ -467,7 +490,9 @@ static void input_task(void*){
     touch_voicing=true;stopped=false;controller_voice_hold(true);
    }
   }else if(contact==0 && edge==controller::TouchEdge::UP){
-   if(touch_voicing){touch_voicing=false;controller_voice_hold(false);gesture.cancel();}
+   // 刚判定过滑动/双击/长按的抬手不再当按钮点按，防一次滑动+按钮双触发。
+   if(swipe_fired_ms==now){/* consumed by gesture */}
+   else if(touch_voicing){touch_voicing=false;controller_voice_hold(false);gesture.cancel();}
    else{auto target=gesture.target;int64_t start=gesture.began;
     if(!screen_failed && !screen_painting && gesture.release(screen_epoch.load(),now))touch_action(target,start,now);
    }
