@@ -57,6 +57,8 @@ static void state(int value){stage=value;controller_voice_changed(false);}
 static bool init_mic(){
  if(attempted)return mic!=nullptr;
  attempted=true;
+ // V2 PA_EN is an active-low P-MOS supply for both ES8311 and amplifier.
+ gpio_set_level(GPIO_NUM_42,0);vTaskDelay(pdMS_TO_TICKS(20));
  i2c_master_bus_handle_t bus=controller_i2c_bus();
  if(!bus)return false;
  if(i2c_master_probe(bus,0x18,100)!=ESP_OK){ESP_LOGW("voice","ES8311 not responding");return false;}
@@ -71,7 +73,7 @@ static bool init_mic(){
  audio_codec_i2c_cfg_t ctrlcfg={};ctrlcfg.port=0;ctrlcfg.addr=ES8311_CODEC_DEFAULT_ADDR;ctrlcfg.bus_handle=bus;
  auto ctrl=audio_codec_new_i2c_ctrl(&ctrlcfg);
  es8311_codec_cfg_t codec={};codec.ctrl_if=ctrl;codec.gpio_if=audio_codec_new_gpio();codec.codec_mode=ESP_CODEC_DEV_WORK_MODE_BOTH;
- codec.pa_pin=46;codec.hw_gain.pa_voltage=5.0;codec.hw_gain.codec_dac_voltage=3.3;codec.use_mclk=true;
+ codec.pa_pin=46;codec.hw_gain.pa_gain=6.0;codec.hw_gain.pa_voltage=3.3;codec.hw_gain.codec_dac_voltage=3.3;codec.use_mclk=true;
  auto cif=es8311_codec_new(&codec);
  audio_codec_i2s_cfg_t datacfg={};datacfg.port=0;datacfg.rx_handle=rx;datacfg.tx_handle=tx;
  auto data=audio_codec_new_i2s_data(&datacfg);

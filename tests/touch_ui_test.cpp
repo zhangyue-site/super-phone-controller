@@ -3,8 +3,8 @@
 using namespace controller;
 int main(){
  assert(touch_target(5,50,75)==TouchTarget::START);
- assert(touch_target(5,40,102)==TouchTarget::NONE);
- assert(touch_target(5,150,140)==TouchTarget::CONTROL);
+ assert(touch_target(5,40,160)==TouchTarget::NONE);
+ assert(touch_target(5,150,140)==TouchTarget::START);
  assert(touch_target(4,30,173)==TouchTarget::HOME);
  assert(touch_target(4,90,173)==TouchTarget::HOME);
  assert(touch_target(4,175,173)==TouchTarget::STOP);

@@ -48,6 +48,7 @@
 
 static const char *TAG="controller";
 static std::atomic<bool> online(false), stopped(false), stop_pending(false);
+static std::atomic<unsigned> stop_sequence(0);
 #if CONFIG_TINYUSB_NET_MODE_NCM
 static const int HOME_PAGE=5;
 #else
@@ -357,9 +358,9 @@ static void screen_task(void*){
    int voice=controller_voice_stage();
 #if CONFIG_CONTROLLER_USB_LOCAL
    if(voice>=7 || voice==0 || voice==6)preparation(frame);
-   else memcpy(frame,voice_screens[(voice>=0&&voice<10)?voice:5],5000);
+   else memcpy(frame,interaction_voice[(voice>=0&&voice<10)?voice:5],5000);
 #else
-   memcpy(frame,voice_screens[(voice>=0&&voice<10)?voice:5],5000);
+   memcpy(frame,interaction_voice[(voice>=0&&voice<10)?voice:5],5000);
 #endif
   }else if(current_page==3){
    int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);
@@ -377,7 +378,7 @@ static void screen_task(void*){
    for(int y=31;y<39;++y)for(int x=8;x<192;++x)
     if(y==31||y==38||x==8||x==191||x<8+184*percent/100)frame[y*25+x/8]&=~(0x80>>(x%8));
   }
-  memcpy(frame+188*25,version_footer,sizeof(version_footer));
+  memset(frame+188*25,255,12*25); // Keep tiny build metadata off the 1.54-inch display.
   if(epoch!=screen_epoch.load() || current_page!=page.load())continue;
   if(memcmp(frame,previous,5000) || previous_epoch!=epoch){
    screen_painting=true;
@@ -406,12 +407,12 @@ static void screen_task(void*){
  }
 }
 static void stop_now(){
+ stop_sequence.fetch_add(1);
  controller_event("stop",page.load());
  taskENTER_CRITICAL(&consent_mux);
  ble_ota_cancel();controller_ota_cancel();controller_adb_cancel();controller_voice_cancel();stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
  taskEXIT_CRITICAL(&consent_mux);
  if(screen_task_handle)xTaskNotifyGive(screen_task_handle);
- controller_audio_prompt(controller::SpeechPrompt::STOPPED);
  ESP_LOGI(TAG,"Local stop latched; no actuator enabled");
 }
 static void touch_action(controller::TouchTarget target,int64_t began,int64_t now){
@@ -434,10 +435,12 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
  case TouchTarget::QUOTA:go_page(0);break;
  case TouchTarget::CONTROL:go_page(controller_usb_hid_enabled()?HOME_PAGE+1:2);break;
  case TouchTarget::PHONE_HOME:case TouchTarget::PHONE_BACK:{
+  if(!controller_usb_hid_enabled()){go_page(2);break;}
   bool ok=controller_usb_phone_key(target==TouchTarget::PHONE_HOME);
   controller_event("action",page.load(),(int)target,1,ok?1:0);break;
  }
  case TouchTarget::UP:case TouchTarget::DOWN:case TouchTarget::LEFT:case TouchTarget::RIGHT:case TouchTarget::CLICK:{
+  if(!controller_usb_hid_enabled()){go_page(2);break;}
   bool ok=controller_usb_mouse(target==TouchTarget::LEFT?-24:target==TouchTarget::RIGHT?24:0,
     target==TouchTarget::UP?-24:target==TouchTarget::DOWN?24:0,target==TouchTarget::CLICK);
   controller_event("mouse",page.load(),(int)target,0,ok?1:0);break;
@@ -457,24 +460,54 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
 }
 static void input_task(void*){
  controller::TouchGesture gesture;controller::TouchContact contact_state;int touch_page=-1;
- controller::ButtonGesture side_key;controller::GestureDetector swipes;
+ controller::ButtonGesture side_key;controller::ControlButton control_key;controller::GestureDetector swipes;
+ controller::DebouncedButton voice_debounce,power_debounce,external_control_debounce;
  unsigned swipe_epoch=0;bool swipe_contact=false;
- bool touch_voicing=false,key_voicing=false,key_confirming=false;
- int64_t key_began=0;unsigned key_epoch=0,touch_voice_epoch=0;
+ bool touch_voicing=false,key_voicing=false;unsigned touch_voice_epoch=0;
  bool updating=false;
- bool power_held=false,power_done=false;int64_t power_began=0;
+ controller::PowerOffHold power_off;controller::StopReleaseGate stop_gate;unsigned seen_stop=stop_sequence.load();
  for(;;){
-  bool down=gpio_get_level(GPIO_NUM_0)==0;int64_t now=esp_timer_get_time()/1000;
+  int64_t now=esp_timer_get_time()/1000;
+  bool voice_raw=gpio_get_level(GPIO_NUM_0)==0,external_control_raw=false;
+#if CONFIG_CONTROLLER_EXTERNAL_KEYS
+  voice_raw=voice_raw||gpio_get_level(GPIO_NUM_1)==0;
+  external_control_raw=gpio_get_level(GPIO_NUM_2)==0;
+#endif
+  bool down=voice_debounce.update(voice_raw,now);
+  bool power_down=power_debounce.update(gpio_get_level(GPIO_NUM_18)==0,now);
+  bool external_control_down=external_control_debounce.update(external_control_raw,now);
+  bool control_down=power_down||external_control_down;
   int tx=0,ty=0;int contact=controller_touch_read(tx,ty);auto edge=contact_state.update(contact);
   auto target=contact==1?controller::touch_target(page.load(),tx,ty,HOME_PAGE):controller::TouchTarget::NONE;
   // Stop is acted on at contact-down, including during display refresh and OTA.
   if(edge==controller::TouchEdge::DOWN&&target==controller::TouchTarget::STOP){
-   stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=key_confirming=false;gesture.cancel();swipes.reset();
+   stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();
   }
-  if(controller_ota_busy()||ble_ota_busy()){
-   if(!updating){controller_voice_cancel();touch_voicing=key_voicing=key_confirming=false;}
+  auto control_event=control_key.update(control_down,now);
+  bool ota_busy=controller_ota_busy()||ble_ota_busy();
+  if(control_event==controller::ControlEvent::STOP){
+   stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();
+  }else if(control_event==controller::ControlEvent::MUTE){
+   controller_audio_toggle_mute();
+   if(!ota_busy&&!touch_voicing&&!key_voicing)go_page(HOME_PAGE+6);else controller_ota_changed();
+  }else if(control_event==controller::ControlEvent::HOME&&!ota_busy){
+   if(page==HOME_PAGE+6){controller_audio_adjust(-20);controller_ota_changed();}
+   else{controller_voice_cancel();touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();if(page!=HOME_PAGE)go_page(HOME_PAGE);}
+  }
+  // Only the onboard power key can shut down. External B is always a control key.
+  if(power_off.update(power_down,now)){stop_now();gpio_set_level(GPIO_NUM_17,0);}
+  if(seen_stop!=stop_sequence.load()){
+   stop_gate.stop();seen_stop=stop_sequence.load();controller_voice_cancel();
+   controller_audio_prompt(controller::SpeechPrompt::STOPPED);
+  }
+  if(stop_gate.blocked(down,control_down,contact==1)){
+   gesture.cancel();swipes.reset();side_key=controller::ButtonGesture{};control_key=controller::ControlButton{};
+   touch_voicing=key_voicing=false;vTaskDelay(pdMS_TO_TICKS(20));continue;
+  }
+  if(ota_busy){
+   (void)side_key.update(down,now);
+   if(!updating){controller_voice_cancel();touch_voicing=key_voicing=false;}
    updating=true;
-   if(gpio_get_level(GPIO_NUM_18)==0)stop_now();
    gesture.cancel();swipes.reset();vTaskDelay(pdMS_TO_TICKS(20));continue;
   }
   updating=false;
@@ -489,7 +522,7 @@ static void input_task(void*){
   else{
    auto swipe=controller::Gesture::None;
    if(edge==controller::TouchEdge::DOWN){swipe_epoch=screen_epoch.load();swipe_contact=true;}
-   if(!screen_painting&&!screen_failed&&page!=2&&!key_voicing&&!key_confirming&&swipe_contact&&swipe_epoch==screen_epoch.load())
+   if(!screen_painting&&!screen_failed&&page!=2&&!key_voicing&&swipe_contact&&swipe_epoch==screen_epoch.load())
     swipe=swipes.feed(contact==1,tx,ty,now);
    else {swipes.reset();swipe_contact=false;}
    if(contact==0)swipe_contact=false;
@@ -518,27 +551,22 @@ static void input_task(void*){
   }
   switch(side_key.update(down,now)){
   case controller::ButtonEvent::NEXT:
-   controller_voice_cancel();touch_voicing=key_voicing=key_confirming=false;gesture.cancel();swipes.reset();
-   go_page(controller::next_page(page.load(),HOME_PAGE));break;
+   if(page==HOME_PAGE+6){controller_audio_adjust(20);controller_ota_changed();}
+   else{controller_voice_cancel();touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();go_page(controller::next_page(page.load(),HOME_PAGE));}
+   break;
   case controller::ButtonEvent::HOME:
-   controller_voice_cancel();touch_voicing=key_voicing=key_confirming=false;gesture.cancel();swipes.reset();go_page(HOME_PAGE);break;
+   controller_voice_cancel();touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();go_page(HOME_PAGE);break;
   case controller::ButtonEvent::VOICE_DOWN:
-   if(page==HOME_PAGE+5){controller_ota_start();}
-   else if(page==2){key_confirming=true;key_began=side_key.pressed;key_epoch=screen_epoch.load();}
-   else if(page>HOME_PAGE&&page<=HOME_PAGE+4){controller_usb_phone_key(true);}
-   else if(page<=HOME_PAGE&&!touch_voicing){key_voicing=true;go_page(PAGE_COUNT-1);stopped=false;controller_voice_hold(true);}
+   // A always means hold-to-talk, regardless of the current page. It never
+   // silently confirms HID access or starts a firmware update.
+   if(!touch_voicing){key_voicing=true;go_page(PAGE_COUNT-1);stopped=false;controller_voice_hold(true);}
    break;
   case controller::ButtonEvent::VOICE_UP:
-   if(key_confirming){key_confirming=false;if(key_epoch==screen_epoch.load())touch_action(controller::TouchTarget::CONFIRM,key_began,now);}
-   else if(key_voicing){key_voicing=false;controller_voice_hold(false);}
+   if(key_voicing){key_voicing=false;controller_voice_hold(false);}
    break;
   default:break;
   }
   if(page==2&&consent_visible_at>0&&now-consent_visible_at.load()>=15000)go_page(HOME_PAGE);
-  bool power_down=gpio_get_level(GPIO_NUM_18)==0;
-  if(power_down&&!power_held){power_held=true;power_done=false;power_began=now;}
-  if(!power_down&&power_held)power_held=false;
-  if(power_down&&power_held&&!power_done&&now-power_began>=1500){power_done=true;stop_now();gpio_set_level(GPIO_NUM_17,0);}
   vTaskDelay(pdMS_TO_TICKS(20));
  }
 }
@@ -618,7 +646,11 @@ extern "C" void app_main(){
  ESP_ERROR_CHECK(esp_netif_init());ESP_ERROR_CHECK(esp_event_loop_create_default());
  gpio_config_t power={};power.pin_bit_mask=(1ULL<<6)|(1ULL<<42)|(1ULL<<17);power.mode=GPIO_MODE_OUTPUT;
  ESP_ERROR_CHECK(gpio_config(&power));gpio_set_level(GPIO_NUM_6,0);gpio_set_level(GPIO_NUM_42,1);gpio_set_level(GPIO_NUM_17,1);
- gpio_config_t button={};button.pin_bit_mask=(1ULL<<0)|(1ULL<<18);button.mode=GPIO_MODE_INPUT;button.pull_up_en=GPIO_PULLUP_ENABLE;ESP_ERROR_CHECK(gpio_config(&button));
+ gpio_config_t button={};button.pin_bit_mask=(1ULL<<0)|(1ULL<<18);
+#if CONFIG_CONTROLLER_EXTERNAL_KEYS
+ button.pin_bit_mask|=(1ULL<<1)|(1ULL<<2);
+#endif
+button.mode=GPIO_MODE_INPUT;button.pull_up_en=GPIO_PULLUP_ENABLE;ESP_ERROR_CHECK(gpio_config(&button));
  controller_touch_init();
  controller_usb_start();controller_adb_init();controller_voice_init();
  controller_storage_start();
