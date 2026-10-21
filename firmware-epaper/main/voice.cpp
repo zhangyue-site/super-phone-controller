@@ -36,7 +36,7 @@ static void upload_run(void*){
 }
 static esp_codec_dev_handle_t mic;
 static std::atomic<int> output_volume(60),pending_prompt(0);
-static std::atomic<bool> output_muted(false);
+static std::atomic<bool> output_muted(false),click_playing(false);
 static std::atomic<unsigned> playback_epoch(0);
 #define AUDIO_ASSET(name) extern const uint8_t name##_start[] asm("_binary_" #name "_pcm_start"); extern const uint8_t name##_end[] asm("_binary_" #name "_pcm_end");
 AUDIO_ASSET(ready)
@@ -51,7 +51,7 @@ static void save_audio(){
 void controller_audio_interrupt(){playback_epoch.fetch_add(1);pending_prompt=0;}
 int controller_audio_volume(){return output_volume.load();}
 bool controller_audio_muted(){return output_muted.load();}
-void controller_audio_adjust(int delta){output_volume=controller::clamp_volume(output_volume.load()+delta);save_audio();controller_audio_prompt(controller::SpeechPrompt::CLICK);}
+void controller_audio_adjust(int delta){int previous=output_volume.load();output_volume=controller::clamp_volume(previous+delta);save_audio();if(previous==0&&output_volume>0)controller_audio_prompt(controller::SpeechPrompt::CLICK);}
 void controller_audio_toggle_mute(){output_muted=!output_muted.load();controller_audio_interrupt();save_audio();if(!output_muted)controller_audio_prompt(controller::SpeechPrompt::CLICK);}
 void controller_audio_prompt(controller::SpeechPrompt value){
  if(!controller::feedback_allowed(output_volume,output_muted,held))return;
@@ -137,7 +137,7 @@ static void play_feedback(controller::Feedback cue,bool before_recording=false){
 }
 static void play_prompt(int prompt){
  using controller::SpeechPrompt;using controller::Feedback;
- if(prompt==(int)SpeechPrompt::CLICK){play_feedback(Feedback::CLICK);return;}
+ if(prompt==(int)SpeechPrompt::CLICK){click_playing=true;play_feedback(Feedback::CLICK,true);click_playing=false;return;}
  if(prompt==(int)SpeechPrompt::LISTEN){play_feedback(Feedback::LISTEN);return;}
  if(prompt==(int)SpeechPrompt::SUCCESS){play_feedback(Feedback::SUCCESS);return;}
  if(prompt==(int)SpeechPrompt::STOPPED){play_feedback(Feedback::STOP);return;}
@@ -152,13 +152,12 @@ static void run(void*){
  for(;;){
   ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
   int prompt=pending_prompt.exchange(0);
-  if(prompt && !held){play_prompt(prompt);continue;}
+  if(prompt && (!held||prompt==(int)controller::SpeechPrompt::CLICK)){play_prompt(prompt);if(held)xTaskNotifyGive(worker);continue;}
   unsigned turn_epoch=conversation_epoch.load();
   bool test=diagnostic.exchange(false);
   bool prepare=prepare_only.exchange(false);
   if((!held || cancelled) && !test)continue;
   controller::VoiceLifecycle::Lease lease(lifecycle);
-  if(!test)play_feedback(controller::Feedback::CLICK,true);
   if(cancelled||!lifecycle.current(turn_epoch))continue;
 #if CONFIG_CONTROLLER_USB_LOCAL
   if(!test && (prepare || !controller_voice_prepared())){
@@ -238,7 +237,8 @@ void controller_voice_init(){
  nvs_handle_t h;if(nvs_open("audio",NVS_READONLY,&h)==ESP_OK){uint8_t v=60,m=0;nvs_get_u8(h,"volume",&v);nvs_get_u8(h,"muted",&m);output_volume=controller::clamp_volume(v)/20*20;output_muted=m!=0;nvs_close(h);}
  snprintf(session,sizeof(session),"%08x%08x",(unsigned)esp_random(),(unsigned)esp_random());xTaskCreate(upload_run,"voice_stream",8192,nullptr,3,&stream_worker);xTaskCreate(run,"voice",12288,nullptr,4,&worker);}
 static void begin_voice_request(){
- controller_audio_interrupt();controller_dialogue_screen(nullptr);
+ if(!click_playing&&pending_prompt!=(int)controller::SpeechPrompt::CLICK)controller_audio_interrupt();
+ controller_dialogue_screen(nullptr);
  adb_consent=controller_adb_ticket();record_sequence=next_sequence.fetch_add(1);cancelled=false;held=true;xTaskNotifyGive(worker);
 }
 void controller_voice_prepare(){
@@ -250,7 +250,7 @@ void controller_voice_hold(bool value){
  if(!lifecycle.can_start())return;
  conversation=false;conversation_epoch.fetch_add(1);prepare_only=false;begin_voice_request();
 }
-void controller_voice_cancel(){if(conversation||lifecycle.busy)controller_adb_cancel();lifecycle.cancel();controller_voice_changed(false);conversation=false;controller_audio_interrupt();cancel_sequence=next_sequence.fetch_add(1);cancelled=true;held=false;}
+void controller_voice_cancel(){if(conversation||lifecycle.busy)controller_adb_cancel();lifecycle.cancel();controller_voice_changed(false);conversation=false;if(!click_playing&&pending_prompt!=(int)controller::SpeechPrompt::CLICK)controller_audio_interrupt();cancel_sequence=next_sequence.fetch_add(1);cancelled=true;held=false;}
 int controller_voice_stage(){
 #if CONFIG_CONTROLLER_USB_LOCAL
  if(stage>=7&&stage<=9){int adb=controller_adb_stage();return adb==3?8:(adb==1||adb==2)?7:(adb==0?0:9);}
