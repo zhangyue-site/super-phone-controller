@@ -130,7 +130,7 @@ class Handler(BaseHTTPRequestHandler):
                             CONVERSATION.start(device,session,sequence,text)
                     else:
                         if type(body['ok']) is not bool or not isinstance(body['output'],str) or len(body['output'].encode())>48000:raise ValueError('result shape')
-                        CONVERSATION.mailbox.ack(device,session,sequence,body['id'],body['ok'],body['output'])
+                        CONVERSATION.mailbox.ack(device,session,sequence,body['id'],body['ok'],body['output'],body.get('error',''))
                     return self.reply(200,b'{"accepted":true}')
                 return self.reply(404,b'{}')
             except (ValueError,KeyError,TypeError):return self.reply(409,b'{"error":"turn rejected"}')

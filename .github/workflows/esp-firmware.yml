@@ -18,6 +18,9 @@ on:
       - 'tests/**'
       - 'tools/test_host.py'
       - '.github/workflows/esp-firmware.yml'
+concurrency:
+  group: esp-firmware-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 env:
@@ -180,20 +183,26 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # 可选：构建完直接推给 OTA 服务端，板子下次轮询自动升级
+      # Main builds publish through a restricted SSH key, not a public upload API.
       - name: Publish to OTA endpoint
         if: vars.OTA_ENABLED == 'true' && github.ref == 'refs/heads/main'
         env:
-          OTA_ENDPOINT: ${{ secrets.OTA_ENDPOINT }}
-          OTA_TOKEN: ${{ secrets.OTA_TOKEN }}
-          VERSION: ${{ github.ref_name }}-${{ github.run_number }}
+          OTA_SSH_HOST: ${{ vars.OTA_SSH_HOST }}
+          OTA_DEVICE: ${{ vars.OTA_DEVICE }}
+          OTA_SSH_KEY: ${{ secrets.OTA_SSH_KEY }}
+          OTA_SSH_KNOWN_HOSTS: ${{ secrets.OTA_SSH_KNOWN_HOSTS }}
         run: |
-          set -e
-          SHA=$(sha256sum out/app.bin | cut -d' ' -f1)
-          SIZE=$(stat -c%s out/app.bin)
-          echo "publishing $VERSION sha=$SHA size=$SIZE"
-          curl -fsS -X POST "$OTA_ENDPOINT/firmware" \
-            -H "Authorization: Bearer $OTA_TOKEN" \
-            -H "X-Firmware-Version: $VERSION" \
-            -H "X-Firmware-Sha256: $SHA" \
-            --data-binary @out/app.bin
+          set -euo pipefail
+          test -n "$OTA_SSH_HOST" && test -n "$OTA_DEVICE"
+          mkdir -p "$RUNNER_TEMP/ota-ssh"
+          chmod 700 "$RUNNER_TEMP/ota-ssh"
+          printf '%s\n' "$OTA_SSH_KEY" > "$RUNNER_TEMP/ota-ssh/key"
+          printf '%s\n' "$OTA_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ota-ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/ota-ssh/key" "$RUNNER_TEMP/ota-ssh/known_hosts"
+          trap 'rm -rf "$RUNNER_TEMP/ota-ssh"' EXIT
+          python3 - <<'PYDATA' | ssh -T -i "$RUNNER_TEMP/ota-ssh/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/ota-ssh/known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "root@$OTA_SSH_HOST" ota-publish
+          import json,os,sys
+          from pathlib import Path
+          sys.stdout.buffer.write((json.dumps({'source':os.environ['GITHUB_SHA'],'generation':int(os.environ['GITHUB_RUN_NUMBER'])})+'\n').encode())
+          sys.stdout.buffer.write(Path('out/app.bin').read_bytes())
+          PYDATA

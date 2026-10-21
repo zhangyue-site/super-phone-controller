@@ -46,3 +46,16 @@ class RunnerTests(unittest.TestCase):
   current=XML.replace('com.android.settings','com.example.app').replace('text="设置"','text="账单"')
   j,_=self.run_turn([{'action':'launch','component':'com.guessed/.Wrong'},{'action':'launch','component':'com.example.app/.MainActivity'},{'action':'done','reply':'已打开','evidence':'账单'}],[initial,initial,'ok',current],task='打开账单应用')
   self.assertEqual(j.state,'done')
+
+ def test_observation_failure_has_specific_spoken_guidance(self):
+  m=Mailbox();j=m.create('d','a'*16,1)
+  c=Conversation(m,lambda messages:{'action':'observe'},lambda text:b'\1\0'*100,lambda *a,**kw:None)
+  t=threading.Thread(target=c.run,args=(j,'打开设置'));t.start()
+  while t.is_alive():
+   cmd=m.poll('d','a'*16,1)
+   if cmd['op']=='observe':m.ack('d','a'*16,1,cmd['id'],False,'',error='observe_failed')
+   time.sleep(.005)
+  self.assertEqual(j.state,'error');self.assertIn('读取手机界面失败',j.reply);self.assertTrue(j.audio)
+ def test_incomplete_ui_has_specific_spoken_guidance(self):
+  j,_=self.run_turn([{'action':'observe'}],['FOCUS com.android.settings/.Settings\nLOCKED false'])
+  self.assertIn('界面数据不完整',j.reply)

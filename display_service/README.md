@@ -40,3 +40,5 @@ python3 -m display_service.control epaper-01 --state waiting --task '等待手�
 ADB连接依赖手机5555已启用及RSA授权。当前板子是USB网络设备，不能自动代替原生USB Host在普通未root手机重启后恢复已关闭的ADB TCP端口。未连接时显示具体错误，动作不自动重放。
 
 [本次验证与实机缺口](../docs/handoff/2026-10-21-dialogue-adb-validation.md)
+
+后续开发与升级采用云端工作区、GitHub Actions构建和106私有OTA发布，详见 [云端开发与升级](../docs/cloud-development-and-ota.md)。手机可由机主手动恢复ADB5555；屏幕会明确提醒。本轮不要求改USB Host硬件。

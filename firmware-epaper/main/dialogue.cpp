@@ -6,6 +6,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "esp_log.h"
 #include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -66,13 +67,16 @@ bool controller_dialogue_run(unsigned sequence){
   else if(!strcmp(op,"swipe")){cmd.op=controller::AdbOp::SWIPE;valid=integer(j,"x",cmd.x)&&integer(j,"y",cmd.y)&&integer(j,"x2",cmd.x2)&&integer(j,"y2",cmd.y2);}
   else valid=false;
   const char *id=str(j,"id");if(strlen(id)!=32)valid=false;
-  bool ok=valid&&live(sequence)&&controller_adb_execute(cmd,observed,output,48001,ticket);
+  const char *error=valid?"cancelled":"invalid_command";
+  ESP_LOGI("dialogue","Command received op=%s id=%.8s valid=%d",op,id,valid);
+  bool ok=valid&&live(sequence)&&controller_adb_execute(cmd,observed,output,48001,ticket,&error);
   if(!ok)output[0]=0;
   if(ok&&cmd.op==controller::AdbOp::OBSERVE)strcpy(observed,output);
   else observed[0]=0; // One observation cannot authorize two input actions.
-  cJSON *ack=cJSON_CreateObject();cJSON_AddStringToObject(ack,"id",id);cJSON_AddBoolToObject(ack,"ok",ok);cJSON_AddStringToObject(ack,"output",output);
+  cJSON *ack=cJSON_CreateObject();cJSON_AddStringToObject(ack,"id",id);cJSON_AddBoolToObject(ack,"ok",ok);cJSON_AddStringToObject(ack,"output",output);if(!ok)cJSON_AddStringToObject(ack,"error",error);
   char *body=cJSON_PrintUnformatted(ack);cJSON_Delete(ack);cJSON_Delete(j);
   char result[128];bool sent=body&&post("/dialogue/result",sequence,body,(unsigned char*)result,sizeof(result))>=0;free(body);
+  ESP_LOGI("dialogue","Command result ok=%d error=%s ack=%d",ok,ok?"":error,sent);
   if(!sent)break;
  }
  free(output);free(observed);return success&&live(sequence);

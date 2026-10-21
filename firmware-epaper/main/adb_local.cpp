@@ -36,6 +36,8 @@ static uint32_t next_stream=2;
 static SemaphoreHandle_t command_mutex;
 static std::atomic<int> command_state(0); // 0 idle, 1 queued, 2 complete
 static std::atomic<bool> command_ok(false);
+static const char *command_error="";
+static bool command_transport_broken=false;
 static AdbCommand queued_command;
 static uint32_t command_ticket;
 static char *command_expected,*command_output;
@@ -138,13 +140,17 @@ static const char observation_command[]=
  "policy=$(dumpsys window policy) || exit 31; printf 'LOCKED '; if printf '%s' \"$policy\" | grep -q 'showing=true'; then echo true; elif printf '%s' \"$policy\" | grep -q 'showing=false'; then echo false; else exit 32; fi; "
  "printf 'SIZE '; wm size | tail -n 1 | sed 's/.*: //'; "
  "printf 'LAUNCHER '; cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tail -n 1; "
- "echo APPS_BEGIN; cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER | sed 's/^[[:space:]]*//' | head -n 128; echo APPS_END; "
- "uiautomator dump /proc/self/fd/1 || exit 33; "
+ "echo APPS_BEGIN; cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER | sed 's/^[[:space:]]*//' | grep -E '^[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+$' | head -n 128; echo APPS_END; "
+ "umask 077; ui=$(mktemp \"${TMPDIR:-/data/local/tmp}/controller-ui.XXXXXX\") || exit 36; "
+ "trap 'rm -f \"$ui\"' EXIT HUP INT TERM; "
+ "uiautomator dump --compressed \"$ui\" >/dev/null || exit 33; "
+ "test -s \"$ui\" && cat \"$ui\" || exit 33; "
  "printf '\\nEND_FOCUS '; dumpsys activity activities | sed -n 's/.*topResumedActivity.* u[0-9]* \\([^ ]*\\).*/\\1/p' | head -n 1; "
  "policy=$(dumpsys window policy) || exit 34; printf 'END_LOCKED '; if printf '%s' \"$policy\" | grep -q 'showing=true'; then echo true; elif printf '%s' \"$policy\" | grep -q 'showing=false'; then echo false; else exit 35; fi";
 static bool shell_command(const char *command,char *out,unsigned capacity,unsigned char *data){
- char service[1400];int n=snprintf(service,sizeof(service),"shell:%s; echo __PC_EXIT_$?__",command);
+ char service[2048];int n=snprintf(service,sizeof(service),"shell:%s; echo __PC_EXIT_$?__",command);
  if(n<=0||n>=(int)sizeof(service))return false;
+ command_transport_broken=true;
  AdbStream s(next_stream++);unsigned used=0;AdbReply reply;
  deadline=esp_timer_get_time()+12000000;
  if(!packet(ADB_OPEN,s.local,0,service,n+1))return false;
@@ -164,39 +170,45 @@ static bool shell_command(const char *command,char *out,unsigned capacity,unsign
  }
  out[used]=0;
  if(!complete&&s.remote&&live())packet(ADB_CLSE,s.local,s.remote);
+ if(complete)command_transport_broken=false;
  bool ok=complete&&reply.success();
  if(ok){char *marker=strstr(out,"__PC_EXIT_0__");if(marker)*marker=0;}
  return ok;
 }
 static bool execute_queued(unsigned char *data){
- if(!live()||!command_output||!command_expected)return false;
+ command_transport_broken=false;
+ if(!live()||!command_output||!command_expected){command_error="adb_unavailable";return false;}
  command_output[0]=0;
- if(queued_command.op==AdbOp::OBSERVE)return shell_command(observation_command,command_output,48001,data);
+ if(queued_command.op==AdbOp::OBSERVE){bool ok=shell_command(observation_command,command_output,48001,data);if(!ok)command_error="observe_failed";return ok;}
  // Read again immediately before input. No network/model call occurs between them.
- if(!shell_command(observation_command,command_output,48001,data)||strcmp(command_output,command_expected))return false;
- if(!live()||command_ticket!=active_epoch)return false;
+ if(!shell_command(observation_command,command_output,48001,data)){command_error="observe_failed";return false;}
+ if(strcmp(command_output,command_expected)){command_error="screen_changed";return false;}
+ if(!live()||command_ticket!=active_epoch){command_error="cancelled";return false;}
  if(queued_command.op==AdbOp::LAUNCH){
   char entry[164];snprintf(entry,sizeof(entry),"\n%s\n",queued_command.component);
   const char *begin=strstr(command_output,"APPS_BEGIN\n"),*end=strstr(command_output,"APPS_END\n");
   const char *match=begin?strstr(begin,entry):nullptr;
-  if(!match||!end||match>=end)return false;
+  if(!match||!end||match>=end){command_error="app_unavailable";return false;}
  }
- char command[320];if(!adb_command(queued_command,command,sizeof(command)))return false;
- return shell_command(command,command_output,48001,data);
+ char command[320];if(!adb_command(queued_command,command,sizeof(command))){command_error="invalid_command";return false;}
+ bool ok=shell_command(command,command_output,48001,data);if(!ok)command_error="input_failed";return ok;
 }
-bool controller_adb_execute(const AdbCommand &command,const char *expected,char *out,unsigned capacity,uint32_t ticket){
- if(!out||capacity<1||!command_mutex||!command_output||!command_expected||!gate.active(ticket))return false;
- if(xSemaphoreTake(command_mutex,pdMS_TO_TICKS(100))!=pdTRUE)return false;
- if(command_state!=0||controller_adb_stage()!=3){xSemaphoreGive(command_mutex);return false;}
+bool controller_adb_execute(const AdbCommand &command,const char *expected,char *out,unsigned capacity,uint32_t ticket,const char **error){
+ auto fail=[&](const char *reason){if(error)*error=reason;return false;};
+ if(error)*error="";
+ if(!out||capacity<1||!command_mutex||!command_output||!command_expected||!gate.active(ticket))return fail("adb_unavailable");
+ if(xSemaphoreTake(command_mutex,pdMS_TO_TICKS(100))!=pdTRUE)return fail("busy");
+ if(command_state!=0||controller_adb_stage()!=3){xSemaphoreGive(command_mutex);return fail("adb_unavailable");}
  size_t size=expected?strlen(expected):0;
- if(size>48000||(command.op!=AdbOp::OBSERVE&&size==0)){xSemaphoreGive(command_mutex);return false;}
- memcpy(command_expected,expected?expected:"",size+1);queued_command=command;command_ticket=ticket;command_ok=false;command_state=1;
+ if(size>48000||(command.op!=AdbOp::OBSERVE&&size==0)){xSemaphoreGive(command_mutex);return fail("invalid_command");}
+ memcpy(command_expected,expected?expected:"",size+1);command_output[0]=0;queued_command=command;command_ticket=ticket;command_ok=false;command_error="";command_state=1;
  // The storage belongs to this module, so cancellation cannot leave a stack pointer queued.
  while(command_state==1&&gate.active(ticket))vTaskDelay(pdMS_TO_TICKS(20));
  bool ok=command_state==2&&command_ok&&gate.active(ticket);
  if(ok){size_t n=strlen(command_output);if(n>=capacity)ok=false;else memcpy(out,command_output,n+1);}
  // Wait for transport owner to release the buffers before a new request can reuse them.
  while(command_state==1)vTaskDelay(pdMS_TO_TICKS(20));
+ if(!ok&&error)*error=*command_error?command_error:!gate.active(ticket)?"cancelled":"input_failed";
  command_state=0;xSemaphoreGive(command_mutex);return ok;
 }
 
@@ -248,9 +260,12 @@ static bool proxy_session(int client,unsigned char *data){
 static bool proxy_loop(unsigned char *data){
  while(live()){
   if(command_state==1){
+   int64_t began=esp_timer_get_time();
    bool ok=command_ticket==active_epoch&&execute_queued(data);
+   ESP_LOGI("adb_local","Command op=%d ok=%d error=%s bytes=%u elapsed_ms=%lld",(int)queued_command.op,ok,command_error,(unsigned)strlen(command_output),(esp_timer_get_time()-began)/1000);
    command_ok=ok;command_state=2;
-   if(!ok)return false;
+   // Safe refusals still need this same ADB tunnel to ACK and fetch TTS.
+   if(!ok&&command_transport_broken)return false;
   }
   fd_set inputs;FD_ZERO(&inputs);FD_SET(listener,&inputs);FD_SET(fd,&inputs);
   timeval timeout={0,100000};int n=select((listener>fd?listener:fd)+1,&inputs,nullptr,nullptr,&timeout);
@@ -326,7 +341,7 @@ int controller_adb_error(){uint64_t snapshot=failure.load();return (uint32_t)(sn
 bool controller_adb_network_available(){return listener>=0 && controller_adb_stage()==3;}
 
 #else
-bool controller_adb_execute(const controller::AdbCommand&,const char*,char*,unsigned,uint32_t){return false;}
+bool controller_adb_execute(const controller::AdbCommand&,const char*,char*,unsigned,uint32_t,const char **error){if(error)*error="adb_unavailable";return false;}
 void controller_adb_init(){}
 bool controller_adb_activate(uint32_t){return false;}
 uint32_t controller_adb_ticket(){return 0;}
