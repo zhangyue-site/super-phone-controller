@@ -37,3 +37,7 @@ class DialogueTests(unittest.TestCase):
   self.assertTrue(dialogue.verify_done('打开设置',{'evidence':'设置'},obs))
   self.assertFalse(dialogue.verify_done('打开设置',{'evidence':'不存在'},obs))
   self.assertFalse(dialogue.verify_done('回到桌面',{'evidence':'设置'},obs))
+ def test_open_app_cannot_be_verified_from_launcher_icon(self):
+  raw=XML.replace('com.android.settings/.Settings','com.miui.home/.launcher.Launcher').replace('package="com.android.settings"','package="com.miui.home"').replace('SIZE 1080x2400','SIZE 1080x2400\nLAUNCHER com.miui.home/.launcher.Launcher')
+  obs=dialogue.parse_observation(raw)
+  self.assertFalse(dialogue.verify_done('打开相册',{'evidence':'设置'},obs))

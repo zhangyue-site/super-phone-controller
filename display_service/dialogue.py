@@ -45,6 +45,7 @@ def action_command(d,obs):
 def verify_done(task,d,obs):
  evidence=d.get('evidence')
  if not isinstance(evidence,str) or not evidence.strip() or not any(evidence in n['label'] for n in obs['nodes']):return False
+ if '打开' in task and obs['launcher']:return False
  if re.search(r'打开.*设置',task) and obs['package']!='com.android.settings':return False
  if re.search(r'(回到|返回|回).*桌面|手机首页',task) and not obs['launcher']:return False
  return True
