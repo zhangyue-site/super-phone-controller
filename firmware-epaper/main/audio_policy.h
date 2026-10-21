@@ -8,5 +8,5 @@ inline VoiceContact voice_contact(int contact,int x,int y,bool same_epoch){
  if(contact<0||!same_epoch||x<8||x>=192||y<45||y>=155)return VoiceContact::CANCEL;
  return VoiceContact::KEEP;
 }
-enum class SpeechPrompt { NONE=0, READY, RECOGNIZED, FAILED, STOPPED, TEST };
+enum class SpeechPrompt { NONE=0, READY, RECOGNIZED, FAILED, STOPPED, TEST, CLICK, LISTEN, SUCCESS };
 }

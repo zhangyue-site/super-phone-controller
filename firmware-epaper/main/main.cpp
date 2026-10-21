@@ -435,6 +435,7 @@ static void stop_now(){
 static void touch_action(controller::TouchTarget target,int64_t began,int64_t now){
  using controller::TouchTarget;
  controller_event("action",page.load(),(int)target);
+ if(target!=TouchTarget::VOLUME_DOWN&&target!=TouchTarget::VOLUME_UP&&target!=TouchTarget::MUTE&&target!=TouchTarget::SOUND_TEST&&target!=TouchTarget::START&&target!=TouchTarget::HOME&&target!=TouchTarget::STOP&&target!=TouchTarget::NONE)controller_audio_prompt(controller::SpeechPrompt::CLICK);
  switch(target){
  case TouchTarget::SOUND_SETTINGS:go_page(HOME_PAGE+6);break;
  case TouchTarget::VOLUME_DOWN:controller_audio_adjust(-20);controller_ota_changed();break;
@@ -447,7 +448,7 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
   go_page(PAGE_COUNT-1);
   stopped=false;controller_voice_conversation();
   break;
- case TouchTarget::HOME:controller_voice_cancel();go_page(HOME_PAGE);break;
+ case TouchTarget::HOME:controller_voice_cancel();go_page(HOME_PAGE);controller_audio_prompt(controller::SpeechPrompt::CLICK);break;
  case TouchTarget::QUOTA:go_page(0);break;
  case TouchTarget::CONTROL:go_page(controller_usb_hid_enabled()?HOME_PAGE+1:2);break;
  case TouchTarget::PHONE_HOME:case TouchTarget::PHONE_BACK:{
@@ -606,6 +607,12 @@ static void console_command(char *line){
 #endif
  }
  else if(strcmp(line,"WIFI OFF")==0){wifi_enabled=false;wifi_connected=false;online=controller_usb_net_has_ip();if(wifi_initialized){esp_wifi_stop();}controller_usb_write("WiFi disabled\r\n");}
+ else if(strcmp(line,"AUDIO")==0){char out[120];snprintf(out,sizeof(out),"AUDIO volume=%d muted=%d stage=%d\r\n",controller_audio_volume(),controller_audio_muted(),controller_voice_stage());controller_usb_write(out);}
+ else if(strcmp(line,"AUDIO UP")==0){controller_audio_adjust(20);controller_ota_changed();}
+ else if(strcmp(line,"AUDIO DOWN")==0){controller_audio_adjust(-20);controller_ota_changed();}
+ else if(strcmp(line,"AUDIO MUTE")==0){controller_audio_toggle_mute();controller_ota_changed();}
+ else if(strcmp(line,"AUDIO TEST")==0){controller_audio_prompt(controller::SpeechPrompt::TEST);}
+ else if(strcmp(line,"AUDIO CLICK")==0){controller_audio_prompt(controller::SpeechPrompt::CLICK);}
  else if(strcmp(line,"MIC TEST")==0){controller_voice_test();controller_usb_write("Microphone diagnostic: one second; samples discarded\r\n");}
  else if(strcmp(line,"PAGE")==0)go_page(controller::next_page(page.load(),HOME_PAGE));
  else if(strcmp(line,"SAFE")==0){taskENTER_CRITICAL(&consent_mux);controller_usb_request_mode(false);go_page(0);taskEXIT_CRITICAL(&consent_mux);}
