@@ -9,3 +9,5 @@ BLE AUTH read/write and INFO read never expose device token. Clear proof on disc
 After READY, App waits for actual disconnection, reconnects the same remote BLE ID, reads INFO, and checks changed boot nonce, full version, ELF image identity and valid OTA state (2). Until then show waiting; timeout/rollback remains unconfirmed/failure. Cancellation does not claim rollback after commit.
 
 Tests: real HTTP challenge/proof/replay/expiry/cross-device/immutable artifact/hash and existing bearer endpoints; Dart download/status polling with injected transports; cloud IDF + Flutter CI. Hardware test requires physically connected powered target S3. Real phone App acceptance reported separately from desktop BLE test.
+
+Review clarifications: grant fixes binary SHA/size/version; ELF identity comes from verified downloaded bytes. Boot nonce is random 128 bits once per boot, unchanged on reconnect/read. Require device ID and remote ID. Atomically consume challenge; strict 64-hex nonce/proof; bounded stores256, outstanding4/device, issuance12/minute/device. Concurrent replay test exactly one winner.
