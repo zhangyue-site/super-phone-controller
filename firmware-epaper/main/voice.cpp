@@ -100,6 +100,7 @@ static bool play_pcm(const unsigned char *data,unsigned size,bool before_recordi
  if(esp_codec_dev_open(mic,&fs)!=ESP_CODEC_DEV_OK)return false;
  esp_codec_dev_set_out_mute(mic,false);
  int16_t stereo[512];unsigned used=0;bool ok=true,io_ok=true;
+ int64_t output_started=esp_timer_get_time();
  auto active=[&](){return (!held||before_recording)&&!output_muted&&output_volume>0&&epoch==playback_epoch.load();};
  auto silence=[&](unsigned frames){
   memset(stereo,0,sizeof(stereo));
@@ -123,7 +124,7 @@ static bool play_pcm(const unsigned char *data,unsigned size,bool before_recordi
  // Clock silence through the entire ring before muting/closing. Cancellation
  // bypasses the drain so STOP never waits for the tail.
  if(ok&&used==size&&active())ok=silence(controller::audio_tail_frames);
- ESP_LOGI("voice","OUTPUT bytes=%u/%u drained=%d interrupted=%d",used,size,ok&&used==size,!active());
+ ESP_LOGI("voice","OUTPUT bytes=%u/%u drained=%d interrupted=%d elapsed_ms=%lld",used,size,ok&&used==size,!active(),(long long)((esp_timer_get_time()-output_started)/1000));
  esp_codec_dev_set_out_mute(mic,true);esp_codec_dev_close(mic);
  return io_ok&&(!held||before_recording)&&(output_muted||output_volume==0||epoch==playback_epoch.load());
 }
@@ -132,7 +133,9 @@ static void play_feedback(controller::Feedback cue,bool before_recording=false){
  static auto pcm=(int16_t*)heap_caps_malloc(4800*sizeof(int16_t),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
  if(!pcm)return;
  int count=controller::feedback_samples(cue);
- for(int i=0;i<count;i++)pcm[i]=controller::feedback_sample(cue,i);
+ int peak=0;
+ for(int i=0;i<count;i++){pcm[i]=controller::feedback_sample(cue,i);if(abs(pcm[i])>peak)peak=abs(pcm[i]);}
+ ESP_LOGI("voice","CUE id=%d frames=%d peak=%d",(int)cue,count,peak);
  play_pcm((const unsigned char*)pcm,count*2,before_recording);
 }
 static void play_prompt(int prompt){
