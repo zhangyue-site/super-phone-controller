@@ -57,7 +57,7 @@ def render_dialogue(reply,state,speech_error=False):
     if not os.path.isfile(font_path):font_path='/System/Library/Fonts/STHeiti Medium.ttc'
     title=ImageFont.truetype(font_path,24);font=ImageFont.truetype(font_path,17)
     im=Image.new('1',(200,200),1);d=ImageDraw.Draw(im)
-    label='播报不可用' if speech_error else '正在播报' if state=='done' else '本轮未完成'
+    label='播报不可用' if speech_error else '本轮结果' if state=='done' else '本轮未完成'
     d.text((8,5),label,font=title,fill=0)
     lines=[];line=''
     for c in reply:

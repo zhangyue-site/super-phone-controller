@@ -28,3 +28,7 @@
 单回合180秒、最多8次决策/6次输入、ADB单命令12秒、15秒失联取消。连续输入单轮10秒，最多12轮；90毫秒脉冲不会被当作有效语音。允许导航与查看，发送、支付、删除、授权、登录等不在本次自动执行范围。
 
 接口及手机连接要求见 display_service/README.md；手机操作的证据为新UI，不是模型口头声称。
+
+106正式服务SNI/TLS烟测通过：测试回答、40960字节PCM、5000字节位图及停止均成功。外部直连固定106 IP并验证域名证书返回预期401（未带令牌），与板端固定IP通道一致。默认域名解析路径此次返回404，未将其算作固定ADB代理通道失败，也未改其他域名路由。Flutter再次通过静态分析与5项测试。
+
+依据：[Android ADB Wi-Fi架构](https://android.googlesource.com/platform/packages/modules/adb/+/HEAD/docs/dev/adb_wifi.md)、[ADB协议](https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/docs/dev/protocol.md)、[MiMo TTS](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/audio/speech-synthesis-v2.5)、[IDF6 cJSON迁移](https://docs.espressif.com/projects/esp-idf/en/v6.0/esp32c3/migration-guides/release-6.x/6.0/protocols.html)。
