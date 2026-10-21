@@ -171,6 +171,7 @@ static bool request(const char *path,uint8_t *out){
 // Operation telemetry is separate from free-form ESP logs/user content.
 static void upload_events(){
  if(controller_ota_busy())return;
+ if(controller_voice_conversing() || controller_voice_stage()==10 || controller_voice_stage()==11)return;
  if(!online || controller_voice_stage()==1 || controller_voice_stage()==2 || controller_voice_stage()==4 || controller_voice_stage()==7)return;
  static char body[4097];size_t size=controller_events_snapshot(body,sizeof(body));if(!size)return;
  char url[256],auth[128];snprintf(url,sizeof(url),"%s/events",server_endpoint());snprintf(auth,sizeof(auth),"Bearer %s",DISPLAY_TOKEN);
@@ -246,7 +247,7 @@ bool controller_voice_upload(const unsigned char *pcm,unsigned size,unsigned seq
 bool controller_voice_stream_upload(VoiceStream &stream){
  char url[256],auth[128],seq[16];snprintf(url,sizeof(url),"%s/voice/stream",server_endpoint());
  snprintf(auth,sizeof(auth),"Bearer %s",DISPLAY_TOKEN);snprintf(seq,sizeof(seq),"%u",stream.sequence);
- esp_http_client_config_t cfg={};cfg.url=url;cfg.timeout_ms=5000;cfg.common_name="controller.example.invalid";
+ esp_http_client_config_t cfg={};cfg.url=url;cfg.timeout_ms=15000;cfg.common_name="controller.example.invalid";
  cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.disable_auto_redirect=true;
  auto client=esp_http_client_init(&cfg);if(!client)return false;
  esp_http_client_set_header(client,"Authorization",auth);esp_http_client_set_header(client,"Host","controller.example.invalid");

@@ -116,7 +116,7 @@ static bool authenticate(unsigned char *data){
  mbedtls_pk_free(&key);return ok;
 }
 static bool shell_probe(unsigned char *data){
- const char command[]="shell:echo __CONTROLLER_ADB_OK__";
+ const char command[]="shell:f=/data/local/tmp/controller-ime.restore; if test -f \"$f\"; then o=$(cat \"$f\"); case \"$o\" in ''|*[!a-zA-Z0-9_./$]*) exit 40;; esac; ime set \"$o\" >/dev/null && rm -f \"$f\" || exit 41; fi; echo __CONTROLLER_ADB_OK__";
  if(!packet(ADB_OPEN,1,0,command,sizeof(command)))return false;
  AdbHeader h;uint32_t remote=0;bool marker=false;size_t matched=0;
  while(receive(h,data)){
@@ -148,7 +148,7 @@ static const char observation_command[]=
  "printf '\\nEND_FOCUS '; dumpsys activity activities | sed -n 's/.*topResumedActivity.* u[0-9]* \\([^ ]*\\).*/\\1/p' | head -n 1; "
  "policy=$(dumpsys window policy) || exit 34; printf 'END_LOCKED '; if printf '%s' \"$policy\" | grep -q 'showing=true'; then echo true; elif printf '%s' \"$policy\" | grep -q 'showing=false'; then echo false; else exit 35; fi";
 static bool shell_command(const char *command,char *out,unsigned capacity,unsigned char *data){
- char service[2048];int n=snprintf(service,sizeof(service),"shell:%s; echo __PC_EXIT_$?__",command);
+ char service[4096];int n=snprintf(service,sizeof(service),"shell:%s; echo __PC_EXIT_$?__",command);
  if(n<=0||n>=(int)sizeof(service))return false;
  command_transport_broken=true;
  AdbStream s(next_stream++);unsigned used=0;AdbReply reply;
@@ -179,6 +179,7 @@ static bool execute_queued(unsigned char *data){
  command_transport_broken=false;
  if(!live()||!command_output||!command_expected){command_error="adb_unavailable";return false;}
  command_output[0]=0;
+ if(queued_command.op==AdbOp::SCREENSHOT){char c[64];adb_command(queued_command,c,sizeof(c));bool ok=shell_command(c,command_output,786433,data);if(!ok)command_error="observe_failed";return ok;}
  if(queued_command.op==AdbOp::OBSERVE){bool ok=shell_command(observation_command,command_output,48001,data);if(!ok)command_error="observe_failed";return ok;}
  // Read again immediately before input. No network/model call occurs between them.
  if(!shell_command(observation_command,command_output,48001,data)){command_error="observe_failed";return false;}
@@ -190,7 +191,7 @@ static bool execute_queued(unsigned char *data){
   const char *match=begin?strstr(begin,entry):nullptr;
   if(!match||!end||match>=end){command_error="app_unavailable";return false;}
  }
- char command[320];if(!adb_command(queued_command,command,sizeof(command))){command_error="invalid_command";return false;}
+ char command[2048];if(!adb_command(queued_command,command,sizeof(command))){command_error="invalid_command";return false;}
  bool ok=shell_command(command,command_output,48001,data);if(!ok)command_error="input_failed";return ok;
 }
 bool controller_adb_execute(const AdbCommand &command,const char *expected,char *out,unsigned capacity,uint32_t ticket,const char **error){
@@ -200,7 +201,7 @@ bool controller_adb_execute(const AdbCommand &command,const char *expected,char 
  if(xSemaphoreTake(command_mutex,pdMS_TO_TICKS(100))!=pdTRUE)return fail("busy");
  if(command_state!=0||controller_adb_stage()!=3){xSemaphoreGive(command_mutex);return fail("adb_unavailable");}
  size_t size=expected?strlen(expected):0;
- if(size>48000||(command.op!=AdbOp::OBSERVE&&size==0)){xSemaphoreGive(command_mutex);return fail("invalid_command");}
+ if(size>48000||(command.op!=AdbOp::OBSERVE&&command.op!=AdbOp::SCREENSHOT&&size==0)){xSemaphoreGive(command_mutex);return fail("invalid_command");}
  memcpy(command_expected,expected?expected:"",size+1);command_output[0]=0;queued_command=command;command_ticket=ticket;command_ok=false;command_error="";command_state=1;
  // The storage belongs to this module, so cancellation cannot leave a stack pointer queued.
  while(command_state==1&&gate.active(ticket))vTaskDelay(pdMS_TO_TICKS(20));
@@ -313,7 +314,7 @@ static void run(void*){
 void controller_adb_init(){
  command_mutex=xSemaphoreCreateMutex();
  command_expected=(char*)heap_caps_malloc(48001,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
- command_output=(char*)heap_caps_malloc(48001,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+ command_output=(char*)heap_caps_malloc(786433,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
  listener=socket(AF_INET,SOCK_STREAM,0);
  if(listener>=0){
   sockaddr_in address={};address.sin_family=AF_INET;address.sin_port=htons(18843);inet_pton(AF_INET,"127.0.0.1",&address.sin_addr);

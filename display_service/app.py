@@ -118,7 +118,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(200,CONVERSATION.mailbox.audio(device,session,sequence),'application/octet-stream')
                 if self.path in ('/dialogue/result','/dialogue/text'):
                     size=int(self.headers.get('Content-Length','0'))
-                    if not 1<=size<=128000:raise ValueError('body size')
+                    if not 1<=size<=850000:raise ValueError('body size')
                     raw=self.rfile.read(size)
                     if len(raw)!=size:raise ValueError('truncated')
                     body=json.loads(raw)
@@ -129,7 +129,7 @@ class Handler(BaseHTTPRequestHandler):
                             if sequence<=VOICE_CANCELLED.get(device,{}).get(session,0):raise ValueError('cancelled turn')
                             CONVERSATION.start(device,session,sequence,text)
                     else:
-                        if type(body['ok']) is not bool or not isinstance(body['output'],str) or len(body['output'].encode())>48000:raise ValueError('result shape')
+                        if type(body['ok']) is not bool or not isinstance(body['output'],str) or len(body['output'].encode())>786432:raise ValueError('result shape')
                         CONVERSATION.mailbox.ack(device,session,sequence,body['id'],body['ok'],body['output'],body.get('error',''))
                     return self.reply(200,b'{"accepted":true}')
                 return self.reply(404,b'{}')
@@ -163,7 +163,7 @@ class Handler(BaseHTTPRequestHandler):
                     if generation!=VOICE_GENERATION.get(device,0):return self.reply(409,b'{}')
                     write_interaction(device,'thinking','语音已上传，正在云端识别')
                 text=recognize(raw)
-                print("VOICE recognized asr_ms=%d"%((time.monotonic()-received)*1000),flush=True)
+                print("VOICE recognized asr_ms=%d text=%s"%((time.monotonic()-received)*1000,json.dumps(text,ensure_ascii=False)),flush=True)
                 with LOCK:
                     if generation!=VOICE_GENERATION.get(device,0):return self.reply(409,b'{}')
                     if self.headers.get('X-Voice-Dialogue')=='1':

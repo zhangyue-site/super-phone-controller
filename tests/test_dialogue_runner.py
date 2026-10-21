@@ -59,3 +59,9 @@ class RunnerTests(unittest.TestCase):
  def test_incomplete_ui_has_specific_spoken_guidance(self):
   j,_=self.run_turn([{'action':'observe'}],['FOCUS com.android.settings/.Settings\nLOCKED false'])
   self.assertIn('界面数据不完整',j.reply)
+
+ def test_active_turn_survives_expiry_sweep(self):
+  now=[0];m=Mailbox(clock=lambda:now[0]);j=m.create('d','a'*16,1)
+  c=Conversation(m,status=lambda *a,**kw:None)
+  now[0]=10;c.expire();self.assertFalse(j.cancelled)
+  now[0]=46;c.expire();self.assertTrue(j.cancelled)
