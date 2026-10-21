@@ -59,3 +59,7 @@ class AiHidHomeTests(unittest.TestCase):
   for kwargs in ({'failure':True},{'receipt':'queued'}):
    j,calls=self.run_home('返回手机桌面',**kwargs)
    self.assertEqual(j.state,'error');self.assertNotIn('已发出',j.reply);self.assertEqual(len(calls),1)
+
+ def test_negated_home_or_stop_does_not_dispatch_even_if_model_returns_home(self):
+  for text in ('不要回到手机桌面','停止返回手机桌面','取消回到手机桌面'):
+   j,calls=self.run_home(text);self.assertFalse(calls);self.assertEqual(j.state,'error')
