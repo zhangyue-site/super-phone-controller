@@ -37,10 +37,9 @@ class HttpTests(unittest.TestCase):
      response=conn.getresponse();self.assertEqual(response.status,200);response.read();conn.close()
      self.assertIn('one',c.mailbox.jobs)
    finally:server.shutdown();server.server_close()
- def test_voice_to_phone_command_failure_to_spoken_result(self):
+ def test_voice_to_phone_request_reports_hardware_pending(self):
   import array,time
-  from test_dialogue import XML
-  decisions=iter([{'action':'observe'},{'action':'open_settings'}])
+  decisions=iter([{'action':'observe'}])
   with tempfile.TemporaryDirectory() as temp:
    config=Path(temp)/'devices.json';config.write_text(json.dumps({'one':'token1'}))
    c=Conversation(Mailbox(),lambda messages:next(decisions),lambda text:b'\1\0'*100,lambda *a,**kw:None)
@@ -54,16 +53,13 @@ class HttpTests(unittest.TestCase):
    try:
     with patch.object(app,'CONFIG',config),patch.object(app,'CONVERSATION',c),patch.object(app,'recognize',lambda raw:'打开设置'),patch.object(app,'write_interaction',lambda *a,**kw:None):
      self.assertEqual(post('/voice',voice=True)[0],200)
-     commands=[];until=time.monotonic()+3
+     until=time.monotonic()+3
      while time.monotonic()<until:
       status,raw=post('/dialogue/poll');self.assertEqual(status,200);item=json.loads(raw)
       if item['op']=='done':break
-      if item['op']!='wait':
-       commands.append(item['op']);ok=item['op']=='observe'
-       self.assertEqual(post('/dialogue/result',dict(id=item['id'],ok=ok,output=XML if ok else '',error='' if ok else 'screen_changed'))[0],200)
-      time.sleep(.005)
-     self.assertEqual(commands,['observe','observe','open_settings'])
-     self.assertEqual(item['state'],'error');self.assertIn('界面已变化',item['reply'])
+      self.assertEqual(item['op'],'wait');time.sleep(.005)
+     self.assertEqual(item['state'],'error')
+     self.assertIn('尚未接入',item['reply']);self.assertIn('当前没有执行',item['reply'])
      self.assertEqual(post('/dialogue/audio'),(200,b'\1\0'*100))
      self.assertEqual(len(post('/dialogue/screen')[1]),5000)
      self.assertEqual(post('/stop')[0],200)

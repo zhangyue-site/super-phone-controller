@@ -31,11 +31,9 @@ static int post(const char *path,unsigned sequence,const char *body,unsigned cha
  esp_http_client_close(c);esp_http_client_cleanup(c);return ok&&live(sequence)?used:-1;
 }
 static const char *str(cJSON *j,const char *key){auto v=cJSON_GetObjectItemCaseSensitive(j,key);return cJSON_IsString(v)?v->valuestring:"";}
-static bool integer(cJSON *j,const char *key,int &out){auto v=cJSON_GetObjectItemCaseSensitive(j,key);if(!cJSON_IsNumber(v)||v->valuedouble!=v->valueint||v->valueint<0||v->valueint>10000)return false;out=v->valueint;return true;}
 bool controller_dialogue_run(unsigned sequence){
- auto output=(char*)heap_caps_malloc(786433,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
- auto observed=(char*)heap_caps_calloc(48001,1,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
- if(!output||!observed){free(output);free(observed);return false;}
+ auto output=(char*)heap_caps_malloc(48001,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+ if(!output)return false;
  bool success=false;int64_t until=esp_timer_get_time()+180000000;uint32_t ticket=controller_adb_ticket();
  controller_voice_state(10);
  while(live(sequence)&&esp_timer_get_time()<until){
@@ -54,32 +52,18 @@ bool controller_dialogue_run(unsigned sequence){
    }
    break;
   }
-  controller::AdbCommand cmd{controller::AdbOp::OBSERVE};bool valid=true;
-  if(!strcmp(op,"observe"))cmd.op=controller::AdbOp::OBSERVE;
-  else if(!strcmp(op,"screenshot"))cmd.op=controller::AdbOp::SCREENSHOT;
-  else if(!strcmp(op,"type_text")){cmd.op=controller::AdbOp::TYPE_TEXT;const char *v=str(j,"text_b64");valid=strlen(v)>0&&strlen(v)<sizeof(cmd.text_b64);if(valid)strcpy(cmd.text_b64,v);}
-  else if(!strcmp(op,"home"))cmd.op=controller::AdbOp::HOME;
-  else if(!strcmp(op,"back"))cmd.op=controller::AdbOp::BACK;
-  else if(!strcmp(op,"open_settings"))cmd.op=controller::AdbOp::SETTINGS;
-  else if(!strcmp(op,"launch")){
-   cmd.op=controller::AdbOp::LAUNCH;const char *component=str(j,"component");
-   valid=strlen(component)>0&&strlen(component)<sizeof(cmd.component);if(valid)strcpy(cmd.component,component);
-  }
-  else if(!strcmp(op,"tap")){cmd.op=controller::AdbOp::TAP;valid=integer(j,"x",cmd.x)&&integer(j,"y",cmd.y);}
-  else if(!strcmp(op,"swipe")){cmd.op=controller::AdbOp::SWIPE;valid=integer(j,"x",cmd.x)&&integer(j,"y",cmd.y)&&integer(j,"x2",cmd.x2)&&integer(j,"y2",cmd.y2);}
-  else valid=false;
+  controller::AdbCommand cmd{};bool valid=!strcmp(op,"type_text");
+  if(valid){const char *v=str(j,"text_b64");valid=strlen(v)>0&&strlen(v)<sizeof(cmd.text_b64);if(valid)strcpy(cmd.text_b64,v);}
   const char *id=str(j,"id");if(strlen(id)!=32)valid=false;
   const char *error=valid?"cancelled":"invalid_command";
   ESP_LOGI("dialogue","Command received op=%s id=%.8s valid=%d",op,id,valid);
-  bool ok=valid&&live(sequence)&&controller_adb_execute(cmd,observed,output,786433,ticket,&error);
+  bool ok=valid&&live(sequence)&&controller_adb_execute(cmd,nullptr,output,48001,ticket,&error);
   if(!ok)output[0]=0;
-  if(ok&&cmd.op==controller::AdbOp::OBSERVE)strcpy(observed,output);
-  else if(cmd.op!=controller::AdbOp::SCREENSHOT)observed[0]=0; // One observation cannot authorize two input actions.
   cJSON *ack=cJSON_CreateObject();cJSON_AddStringToObject(ack,"id",id);cJSON_AddBoolToObject(ack,"ok",ok);cJSON_AddStringToObject(ack,"output",output);if(!ok)cJSON_AddStringToObject(ack,"error",error);
   char *body=cJSON_PrintUnformatted(ack);cJSON_Delete(ack);cJSON_Delete(j);
   char result[128];bool sent=body&&post("/dialogue/result",sequence,body,(unsigned char*)result,sizeof(result))>=0;free(body);
   ESP_LOGI("dialogue","Command result ok=%d error=%s ack=%d",ok,ok?"":error,sent);
   if(!sent)break;
  }
- free(output);free(observed);return success&&live(sequence);
+ free(output);return success&&live(sequence);
 }

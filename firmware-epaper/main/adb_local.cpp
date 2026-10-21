@@ -134,19 +134,7 @@ static bool shell_probe(unsigned char *data){
  }
  return false;
 }
-// The transport owner executes one fixed/typed shell service at a time.
-static const char observation_command[]=
- "printf 'FOCUS '; dumpsys activity activities | sed -n 's/.*topResumedActivity.* u[0-9]* \\([^ ]*\\).*/\\1/p' | head -n 1; "
- "policy=$(dumpsys window policy) || exit 31; printf 'LOCKED '; if printf '%s' \"$policy\" | grep -q 'showing=true'; then echo true; elif printf '%s' \"$policy\" | grep -q 'showing=false'; then echo false; else exit 32; fi; "
- "printf 'SIZE '; wm size | tail -n 1 | sed 's/.*: //'; "
- "printf 'LAUNCHER '; cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tail -n 1; "
- "echo APPS_BEGIN; cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER | sed 's/^[[:space:]]*//' | grep -E '^[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+$' | head -n 128; echo APPS_END; "
- "umask 077; ui=$(mktemp \"${TMPDIR:-/data/local/tmp}/controller-ui.XXXXXX\") || exit 36; "
- "trap 'rm -f \"$ui\"' EXIT HUP INT TERM; "
- "uiautomator dump --compressed \"$ui\" >/dev/null || exit 33; "
- "test -s \"$ui\" && cat \"$ui\" || exit 33; "
- "printf '\\nEND_FOCUS '; dumpsys activity activities | sed -n 's/.*topResumedActivity.* u[0-9]* \\([^ ]*\\).*/\\1/p' | head -n 1; "
- "policy=$(dumpsys window policy) || exit 34; printf 'END_LOCKED '; if printf '%s' \"$policy\" | grep -q 'showing=true'; then echo true; elif printf '%s' \"$policy\" | grep -q 'showing=false'; then echo false; else exit 35; fi";
+// ADB is restricted to the approved ADB Keyboard text injection. It cannot observe UI, capture screenshots, launch apps, or synthesize touch input.
 static bool shell_command(const char *command,char *out,unsigned capacity,unsigned char *data){
  char service[4096];int n=snprintf(service,sizeof(service),"shell:%s; echo __PC_EXIT_$?__",command);
  if(n<=0||n>=(int)sizeof(service))return false;
@@ -177,21 +165,10 @@ static bool shell_command(const char *command,char *out,unsigned capacity,unsign
 }
 static bool execute_queued(unsigned char *data){
  command_transport_broken=false;
- if(!live()||!command_output||!command_expected){command_error="adb_unavailable";return false;}
+ if(!live()||!command_output){command_error="adb_unavailable";return false;}
  command_output[0]=0;
- if(queued_command.op==AdbOp::SCREENSHOT){char c[64];adb_command(queued_command,c,sizeof(c));bool ok=shell_command(c,command_output,786433,data);if(!ok)command_error="observe_failed";return ok;}
- if(queued_command.op==AdbOp::OBSERVE){bool ok=shell_command(observation_command,command_output,48001,data);if(!ok)command_error="observe_failed";return ok;}
- // Read again immediately before input. No network/model call occurs between them.
- if(!shell_command(observation_command,command_output,48001,data)){command_error="observe_failed";return false;}
- if(strcmp(command_output,command_expected)){command_error="screen_changed";return false;}
- if(!live()||command_ticket!=active_epoch){command_error="cancelled";return false;}
- if(queued_command.op==AdbOp::LAUNCH){
-  char entry[164];snprintf(entry,sizeof(entry),"\n%s\n",queued_command.component);
-  const char *begin=strstr(command_output,"APPS_BEGIN\n"),*end=strstr(command_output,"APPS_END\n");
-  const char *match=begin?strstr(begin,entry):nullptr;
-  if(!match||!end||match>=end){command_error="app_unavailable";return false;}
- }
- char command[2048];if(!adb_command(queued_command,command,sizeof(command))){command_error="invalid_command";return false;}
+ if(queued_command.op!=AdbOp::TYPE_TEXT){command_error="invalid_command";return false;}
+ char command[4096];if(!adb_command(queued_command,command,sizeof(command))){command_error="invalid_command";return false;}
  bool ok=shell_command(command,command_output,48001,data);if(!ok)command_error="input_failed";return ok;
 }
 bool controller_adb_execute(const AdbCommand &command,const char *expected,char *out,unsigned capacity,uint32_t ticket,const char **error){
@@ -201,8 +178,8 @@ bool controller_adb_execute(const AdbCommand &command,const char *expected,char 
  if(xSemaphoreTake(command_mutex,pdMS_TO_TICKS(100))!=pdTRUE)return fail("busy");
  if(command_state!=0||controller_adb_stage()!=3){xSemaphoreGive(command_mutex);return fail("adb_unavailable");}
  size_t size=expected?strlen(expected):0;
- if(size>48000||(command.op!=AdbOp::OBSERVE&&command.op!=AdbOp::SCREENSHOT&&size==0)){xSemaphoreGive(command_mutex);return fail("invalid_command");}
- memcpy(command_expected,expected?expected:"",size+1);command_output[0]=0;queued_command=command;command_ticket=ticket;command_ok=false;command_error="";command_state=1;
+ if(command.op!=AdbOp::TYPE_TEXT||size!=0){xSemaphoreGive(command_mutex);return fail("invalid_command");}
+ command_expected[0]=0;command_output[0]=0;queued_command=command;command_ticket=ticket;command_ok=false;command_error="";command_state=1;
  // The storage belongs to this module, so cancellation cannot leave a stack pointer queued.
  while(command_state==1&&gate.active(ticket))vTaskDelay(pdMS_TO_TICKS(20));
  bool ok=command_state==2&&command_ok&&gate.active(ticket);
