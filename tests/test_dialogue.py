@@ -41,3 +41,5 @@ class DialogueTests(unittest.TestCase):
   raw=XML.replace('com.android.settings/.Settings','com.miui.home/.launcher.Launcher').replace('package="com.android.settings"','package="com.miui.home"').replace('SIZE 1080x2400','SIZE 1080x2400\nLAUNCHER com.miui.home/.launcher.Launcher')
   obs=dialogue.parse_observation(raw)
   self.assertFalse(dialogue.verify_done('打开相册',{'evidence':'设置'},obs))
+  obs['nodes'][0]['label']='阿柴记账'
+  self.assertEqual(dialogue.action_command({'action':'tap','node':0},obs)['op'],'tap')

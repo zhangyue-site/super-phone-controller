@@ -35,7 +35,7 @@ def action_command(d,obs):
  if not n['enabled'] or not n['clickable' if action=='tap' else 'scrollable'] or DENY.search(n['label']):raise ValueError('node rejected')
  x1,y1,x2,y2=n['bounds'];x=(x1+x2)//2
  if action=='tap':
-  if not NAV.search(n['label']):raise ValueError('only navigation controls allowed')
+  if not n['label'].strip() or (not NAV.search(n['label']) and not obs['launcher']):raise ValueError('only navigation controls or launcher app icons allowed')
   return {'op':'tap','x':x,'y':(y1+y2)//2}
  direction=d.get('direction','up')
  if direction not in ('up','down'):raise ValueError('scroll direction')
