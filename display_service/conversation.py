@@ -50,7 +50,9 @@ class Conversation:
     final=reply[:120];state='done'
    elif action=='home' and os.environ.get('EPAPER_AI_HID_HOME')=='1' and re.search(r'(回到|返回|回).*桌面|手机首页',text) and not re.search(r'微信|联系人|找到|发送|不要|别|停止|取消',text):
     self.status(j.device,'running','正在请求板端HID返回桌面')
+    print('AI_HID_HOME dispatch device=%s sequence=%d'%(j.device,j.sequence),flush=True)
     result=self.mailbox.execute(j,{'op':'hid_home'})
+    print('AI_HID_HOME receipt device=%s sequence=%d report_sent=%s'%(j.device,j.sequence,result=='HID_HOME_REPORT_SENT'),flush=True)
     if result!='HID_HOME_REPORT_SENT':raise ValueError('invalid HID receipt')
     final='板子已发出回桌面按键，请确认手机是否回到桌面；当前没有画面回传。';state='waiting'
    elif action=='stop':
