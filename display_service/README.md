@@ -7,9 +7,9 @@
 - `GET /status`：本设备交互与额度摘要。
 - `GET /screen.bin?page=0|1`：200×200，逐行 MSB-first，白色位为1，共5000字节。
 - `GET /screen.png?page=0|1`：同一渲染器的验收预览。
-- `POST /stop`：记录本设备停止请求。响应明确 `actuatorConnected:false`，不宣称手机动作已停止。
+- `POST /stop`：取消本设备匹配回合；本地ADB由板端立即撤销。响应不声称能撤回已送达手机的动作。
 
-所有接口要求 `Authorization: Bearer <设备令牌>`。当前没有手机控制执行器，不应发布虚假的 running/done 状态。
+所有接口要求 `Authorization: Bearer <设备令牌>`。新固件的本地ADB执行协议见下文；running/done必须以本轮实际执行与新界面验证为依据。
 
 服务器发起状态更新：
 
