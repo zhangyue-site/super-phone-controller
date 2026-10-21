@@ -30,3 +30,5 @@
 云端源码/测试工作区106:/opt/phone-controller-workspace，分支feat/epaper-interaction-audio；在线服务正常。现场脚本及日志在Mac/private/tmp（等价/tmp）：controller-ble-upgrade.log、controller-ble-stop-test.log、controller-ci54-boot.log、controller-ci54-prepare.log、controller-voice-chat-live.log。Mac诊断桥controller-adb-relay.py与controller-ota-relay.py只用于联调，结束须停止并移除本轮adb forward tcp:15555，不影响其他设备。
 
 本轮滴答checkpoint按super-phone-controller键只读定位返回结果未知错误，未执行正文写入；交接已保存仓库，不宣称同步成功。后续有唯一任务ID后再按现有技能对账同步。
+
+收尾复核：目标USB仍为0，手机仍showing=true。已停止本轮Mac5555/18843诊断桥，并精确移除目标手机tcp:15555转发；不影响其他ADB设备。Mac静音保持原值true。下一步须先确认用户实际接线/解锁，若恢复Mac中间联调再重建本轮限定桥；测试结束恢复板子原有静音true。
