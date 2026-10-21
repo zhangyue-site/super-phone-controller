@@ -9,7 +9,8 @@ def read_chunks(stream, on_chunk=lambda size: None):
         if not line.endswith(b'\r\n') or len(line)>16:raise ValueError('invalid chunk header')
         try:size=int(line.strip(),16)
         except ValueError:raise ValueError('invalid chunk size')
-        if size<0 or size>32768 or len(raw)+size>320000:raise ValueError('audio too large')
+        # Reverse proxies may merge the board's 3200-byte writes into one larger chunk.
+        if size<0 or size>320000 or len(raw)+size>320000:raise ValueError('audio too large')
         if size==0:
             if stream.read(2)!=b'\r\n':raise ValueError('trailers unsupported')
             break
