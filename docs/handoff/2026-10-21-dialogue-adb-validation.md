@@ -12,7 +12,7 @@
 ## 已通过
 
 - 15组固件主机回归，含ADB分包/窗口、命令白名单/坐标/退出标记、停止代数、执行和播报停止后可重启。
-- 58项Python回归，含真正运行固件中的观察shell脚本（模拟Android命令）、未知锁屏拒绝、前后台改变拒绝、节点导航限制、命令仅交付一次、重复ACK拒绝、跨设备隔离、停止旧回合、TTS失败不续听、语音上传/任务创建锁回归。
+- 61项Python回归，含真正运行固件中的观察shell脚本（模拟Android命令）、未知锁屏拒绝、前后台改变拒绝、节点导航限制、命令仅交付一次、重复ACK拒绝、跨设备隔离、停止旧回合、TTS失败不续听、语音上传/任务创建锁回归。
 - ESP-IDF 5.5.2本地固件 `2026.10.21-dialogue` 编译通过；IDF6改用条件cJSON依赖。
 - 106隔离服务实际调用现有模型与小米TTS：两轮姓名记忆成功，生成实际16kHz单声道PCM和5000字节位图。
 - 106实际模型+模拟UI：打开设置经过observe/observe/tap/observe，收到新设置界面后才报告完成。模拟手机，未实际点击手机。
@@ -33,6 +33,10 @@
 
 依据：[Android ADB Wi-Fi架构](https://android.googlesource.com/platform/packages/modules/adb/+/HEAD/docs/dev/adb_wifi.md)、[ADB协议](https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/docs/dev/protocol.md)、[MiMo TTS](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/audio/speech-synthesis-v2.5)、[IDF6 cJSON迁移](https://docs.espressif.com/projects/esp-idf/en/v6.0/esp32c3/migration-guides/release-6.x/6.0/protocols.html)。
 
-打开App使用手机实际启动Activity白名单，不点击任意桌面小组件。观察元数据只从XML外头尾读取，UI文字不能伪造LOCKED/LAUNCHER。启动后导航仍核对目标包，桌面图标不算已打开。IDF6的75be999/12afd3e构建通过，最终launch增强版本另行运行CI。
+打开App使用手机实际启动Activity白名单，不点击任意桌面小组件。观察元数据只从XML外头尾读取，UI文字不能伪造LOCKED/LAUNCHER。启动后导航仍核对目标包，桌面图标不算已打开。IDF6的75be999/12afd3e构建通过，最终launch增强固件f090054的IDF6构建39544498478也已通过。
 
 模型结构输出异常会在本回合8次决策预算内修正：空reply不播报；done必须提供最新UI原文，修正证据不重放输入。模型若跳过首次观察，执行器强制先只读观察并要求重新规划，不执行猜测的启动入口。新增回归覆盖这些真实106联调问题。
+
+正式Nginx流式验收发现并修复：代理把3200字节小块合并成超过32768字节的块，旧解析器返回422。现在按整段320000字节上限校验，接受合法合并块，仍拒绝超总量、截断和非法帧。正式TLS `/voice/stream` 上传52714字节测试音频返回200，ASR→聊天→TTS成功，返回143360字节PCM及5000字节位图；停止后poll返回409。新增三项代理合块/总量/截断回归。
+
+最终：61项Python、15组主机逻辑、5项Flutter测试与Dart分析通过；IDF5.5及IDF6构建通过。61项Python在本地运行，IDF6构建对应固件源码f090054；后续提交只修改服务器、测试和验证记录。独立审查未发现阻塞问题。

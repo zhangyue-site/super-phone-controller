@@ -171,7 +171,10 @@ class Handler(BaseHTTPRequestHandler):
                         CONVERSATION.start(device,session,sequence,text)
                     else:write_interaction(device,'waiting',text+'（仅识别模式）')
                 return self.reply(200,b'{"recognized":true,"actuatorConnected":false}')
-            except (ValueError,OSError,TimeoutError,KeyError,RuntimeError,subprocess.SubprocessError):
+            except (ValueError,OSError,TimeoutError,KeyError,RuntimeError,subprocess.SubprocessError) as error:
+                intake_errors={'chunked required','ambiguous length','recording timed out','invalid chunk header','invalid chunk size','audio too large','trailers unsupported','truncated audio','invalid length'}
+                reason=str(error) if isinstance(error,ValueError) and str(error) in intake_errors else type(error).__name__
+                print('VOICE failure='+reason,flush=True)
                 with LOCK:
                     if generation==VOICE_GENERATION.get(device,0):write_interaction(device,'error','语音识别失败，请靠近麦克风重试')
                 return self.reply(422,b'{"recognized":false}')
