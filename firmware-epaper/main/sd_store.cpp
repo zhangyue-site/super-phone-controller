@@ -1,4 +1,5 @@
 #include "sd_store.h"
+#include "diagnostics.h"
 #include "storage_policy.h"
 #include "usb.h"
 #include "esp_vfs_fat.h"
@@ -8,11 +9,17 @@
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_random.h"
+#include "mbedtls/version.h"
+#if MBEDTLS_VERSION_MAJOR >= 4
 #include "psa/crypto.h"
+#else
+#include "mbedtls/sha256.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <atomic>
+#include <stdlib.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -38,18 +45,45 @@ static bool append(const char *line){
  if(fclose(f)!=0)ok=false;
  return ok;
 }
+static bool append_event(const char *line){
+ const char *path="/sdcard/SPASSIST/EVENTS.LOG",*old="/sdcard/SPASSIST/EVENTS.OLD";
+ struct stat st={};
+ if(stat(path,&st)==0&&st.st_size+(long)strlen(line)>65536){
+  if(remove(old)!=0&&errno!=ENOENT)return false;
+  if(rename(path,old)!=0)return false;
+ }
+ FILE *f=fopen(path,"a");if(!f)return false;
+ bool ok=fputs(line,f)>=0&&fflush(f)==0;
+ if(ok)ok=fsync(fileno(f))==0;
+ if(fclose(f)!=0)ok=false;
+ return ok;
+}
 static bool verify_skill(const char *path,const char *expected){
  FILE *f=fopen(path,"rb");if(!f)return false;
- /* ESP-IDF 6.0 ships mbedTLS with the PSA backend and no mbedtls/sha256.h. */
- psa_hash_operation_t op=PSA_HASH_OPERATION_INIT;
- bool ok=psa_hash_setup(&op,PSA_ALG_SHA_256)==PSA_SUCCESS;
+#if MBEDTLS_VERSION_MAJOR >= 4
+ psa_hash_operation_t ctx=PSA_HASH_OPERATION_INIT;
+ bool ok=psa_crypto_init()==PSA_SUCCESS&&psa_hash_setup(&ctx,PSA_ALG_SHA_256)==PSA_SUCCESS;
+#else
+ mbedtls_sha256_context ctx;mbedtls_sha256_init(&ctx);bool ok=mbedtls_sha256_starts(&ctx,0)==0;
+#endif
  unsigned char buffer[256],digest[32];size_t total=0,n;
- while(ok && (n=fread(buffer,1,sizeof(buffer),f))){total+=n;if(total>32768){ok=false;break;}ok=psa_hash_update(&op,buffer,n)==PSA_SUCCESS;}
+ while(ok && (n=fread(buffer,1,sizeof(buffer),f))){total+=n;if(total>32768){ok=false;break;}
+#if MBEDTLS_VERSION_MAJOR >= 4
+ ok=psa_hash_update(&ctx,buffer,n)==PSA_SUCCESS;
+#else
+ ok=mbedtls_sha256_update(&ctx,buffer,n)==0;
+#endif
+}
  if(ferror(f))ok=false;
  fclose(f);
- size_t digest_len=0;
- if(ok)ok=psa_hash_finish(&op,digest,sizeof(digest),&digest_len)==PSA_SUCCESS && digest_len==32;
- else psa_hash_abort(&op);
+#if MBEDTLS_VERSION_MAJOR >= 4
+ size_t digest_size=0;
+ if(ok)ok=psa_hash_finish(&ctx,digest,sizeof(digest),&digest_size)==PSA_SUCCESS&&digest_size==32;
+ psa_hash_abort(&ctx);
+#else
+ if(ok)ok=mbedtls_sha256_finish(&ctx,digest)==0;
+ mbedtls_sha256_free(&ctx);
+#endif
  if(!ok)return false;
  char hex[65];for(int i=0;i<32;++i)snprintf(hex+i*2,3,"%02x",digest[i]);
  return strcmp(hex,expected)==0;
@@ -87,6 +121,7 @@ static void run(void*){
   ESP_LOGW("storage","TF logging disabled: insufficient space or directory unavailable");vTaskDelete(nullptr);return;
  }
  cache_skill();logging=true;
+ uint32_t last_event_seq=0;
  uint32_t boot=esp_random();char last[384]={};int64_t last_saved=-15000;
  for(;;){
   char state[384]={};controller_diagnostic_state(state,sizeof(state));int64_t now=esp_timer_get_time()/1000;
@@ -96,10 +131,25 @@ static void run(void*){
    if(!ok){logging=false;ESP_LOGW("storage","TF write failed; in-memory diagnostics remain available");vTaskDelete(nullptr);return;}
    snprintf(last,sizeof(last),"%s",state);last_saved=now;
   }
+  char event_buffer[4097];controller_events_snapshot(event_buffer,sizeof(event_buffer));
+  char *cursor=event_buffer;
+  while(*cursor){
+   char *end=strchr(cursor,'\n');if(!end)break;
+   char *field=strstr(cursor,"\"seq\":");
+   if(field&&field<end){
+    unsigned seq=strtoul(field+6,nullptr,10);
+    if(seq>last_event_seq){
+     char saved=end[1];end[1]=0;xSemaphoreTake(lock,portMAX_DELAY);bool ok=append_event(cursor);xSemaphoreGive(lock);end[1]=saved;
+     if(!ok){ESP_LOGW("storage","TF operation log write failed");break;}
+     last_event_seq=seq;
+    }
+   }
+   cursor=end+1;
+  }
   vTaskDelay(pdMS_TO_TICKS(1000));
  }
 }
-void controller_storage_start(){lock=xSemaphoreCreateMutex();if(lock)xTaskCreate(run,"tf_diagnostics",6144,nullptr,1,nullptr);}
+void controller_storage_start(){lock=xSemaphoreCreateMutex();if(lock)xTaskCreate(run,"tf_diagnostics",10240,nullptr,1,nullptr);}
 void controller_storage_status(){
  char out[160];snprintf(out,sizeof(out),"STORAGE tf=%d logging=%d total_mib=%llu free_mib=%llu skill_written=%d\r\n",mounted.load(),logging.load(),total/1048576,free_bytes/1048576,skill_cached.load());controller_usb_write(out);
 }
@@ -114,5 +164,19 @@ void controller_storage_dump(){
   while(remaining){size_t n=fread(buffer,1,remaining<255?remaining:255,f);if(!n)break;buffer[n]=0;controller_usb_write(buffer);remaining-=n;}
   fclose(f);controller_usb_write("\r\n--- TF DIAGNOSTICS END ---\r\n");
  }else controller_usb_write("No persisted diagnostics yet\r\n");
+ xSemaphoreGive(lock);
+}
+
+void controller_storage_events_dump(){
+ if(!mounted||!lock){controller_usb_write("TF unavailable\r\n");return;}
+ xSemaphoreTake(lock,portMAX_DELAY);
+ FILE *f=fopen("/sdcard/SPASSIST/EVENTS.LOG","r");
+ if(f){
+  fseek(f,0,SEEK_END);long end=ftell(f);
+  if(end>8192){fseek(f,end-8192,SEEK_SET);int c;while((c=fgetc(f))!=EOF&&c!='\n'){};}else rewind(f);
+  controller_usb_write("--- EVENTS TF BEGIN ---\r\n");
+  char line[256];while(fgets(line,sizeof(line),f))controller_usb_write(line);
+  fclose(f);controller_usb_write("--- EVENTS TF END ---\r\n");
+ }else controller_usb_write("No persisted operation events\r\n");
  xSemaphoreGive(lock);
 }

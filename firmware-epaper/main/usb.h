@@ -11,3 +11,6 @@ void controller_usb_write(const char *text);
 void controller_usb_prepare_reset(bool download);
 void controller_release(void);
 bool controller_usb_ready(void);
+
+bool controller_usb_mouse(int dx,int dy,bool click);
+bool controller_usb_phone_key(bool home);

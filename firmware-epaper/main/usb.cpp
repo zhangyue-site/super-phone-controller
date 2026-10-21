@@ -1,4 +1,5 @@
 #include "usb.h"
+#include "diagnostics.h"
 #include "usb_network.h"
 #include <atomic>
 #include <stdio.h>
@@ -16,9 +17,21 @@
 static std::atomic<bool> enabled(controller::hid_on_boot()), requested(false), release_pending(false);
 static const uint8_t report_descriptor[]={
  TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(1)),
- TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(2))
+ TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(2)),
+ TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(3))
 };
 static char serial_number[13],network_mac[13];
+static std::atomic<int> mouse_command(0);
+static bool mouse_down=false,consumer_down=false;
+bool controller_usb_phone_key(bool home){
+ if(!enabled||!requested||!tud_mounted())return false;
+ int empty=0;return mouse_command.compare_exchange_strong(empty,home?6:7);
+}
+bool controller_usb_mouse(int dx,int dy,bool click){
+ if(!enabled||!requested||!tud_mounted()||dx < -64||dx > 64||dy < -64||dy > 64)return false;
+ int value=click?1:dx<0?2:dx>0?3:dy<0?4:dy>0?5:0;
+ int empty=0;return value&&mouse_command.compare_exchange_strong(empty,value);
+}
 static std::atomic<bool> switching(false);
 #if CONFIG_TINYUSB_NET_MODE_NCM
 #define NETWORK_INTERFACES 2
@@ -60,13 +73,15 @@ bool controller_usb_hid_enabled(){return enabled.load();}
 void controller_release(){release_pending=true;}
 void controller_usb_request_mode(bool value){requested=value;}
 static void release_reports(){
+ mouse_command=0;mouse_down=false;consumer_down=false;
  if(!enabled)return;
  uint8_t keys[6]={};
- for(int report=1;report<=2;++report){
+ for(int report=1;report<=3;++report){
   for(int wait=0;wait<5&&!tud_hid_ready();++wait)vTaskDelay(pdMS_TO_TICKS(10));
   if(tud_hid_ready()){
    if(report==1)tud_hid_keyboard_report(1,0,keys);
-   else tud_hid_mouse_report(2,0,0,0,0,0);
+   else if(report==2)tud_hid_mouse_report(2,0,0,0,0,0);
+   else {uint16_t usage=0;tud_hid_report(3,&usage,sizeof(usage));}
   }
  }
 }
@@ -109,7 +124,22 @@ void controller_usb_service(){
  controller_usb_net_service();
  if(release_pending.exchange(false))release_reports();
  bool target=requested.load();
- if(target==enabled.load())return;
+ if(target==enabled.load()){
+  if(enabled&&tud_mounted()&&tud_hid_ready()){
+   if(consumer_down){uint16_t usage=0;tud_hid_report(3,&usage,sizeof(usage));consumer_down=false;}
+   else if(mouse_down){tud_hid_mouse_report(2,0,0,0,0,0);mouse_down=false;}
+   else{
+    int command=mouse_command.exchange(0);
+    if(command&&requested.load()){
+     bool sent;
+     if(command>=6){uint16_t usage=command==6?0x0223:0x0224;sent=tud_hid_report(3,&usage,sizeof(usage));consumer_down=sent;}
+     else sent=tud_hid_mouse_report(2,command==1?1:0,command==2?-24:command==3?24:0,command==4?-24:command==5?24:0,0,0);
+     mouse_down=sent&&command==1;controller_event("mouse",-1,command,0,sent?1:0);
+    }
+   }
+  }
+  return;
+ }
  release_reports();
  switching=true;controller_usb_net_begin_detach();
  tud_disconnect();
@@ -128,7 +158,7 @@ void controller_usb_service(){
   ESP_ERROR_CHECK(tinyusb_cdcacm_deinit(TINYUSB_CDC_ACM_0));
   enabled=false;install(false);
  }
- switching=false;
+ switching=false;controller_event("hid",-1,enabled.load(),0,1);
 }
 size_t controller_usb_read(uint8_t *data,size_t size){
  size_t count=0;

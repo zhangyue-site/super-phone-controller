@@ -37,3 +37,7 @@ firmware-epaper/sdkconfig.usb-local.old
 firmware-epaper/main/device_adb_keys.h
 
 /firmware-epaper/main/device_skill_cache.h
+
+# 板载 ADB 私钥，绝不入库（由 CI secret / 本地文件注入）
+firmware-epaper/main/device_adb_keys.h
+firmware-epaper/main/device_config.h
