@@ -35,3 +35,27 @@ class RunnerTests(unittest.TestCase):
   now=[0];m=Mailbox(clock=lambda:now[0]);j=m.create('d','a'*16,1);c=Conversation(m,status=lambda *a,**kw:None)
   now[0]=10;c.expire();self.assertFalse(j.cancelled)
   now[0]=46;c.expire();self.assertTrue(j.cancelled)
+
+class AiHidHomeTests(unittest.TestCase):
+ def run_home(self,text,enabled='1',receipt='HID_HOME_REPORT_SENT',failure=False):
+  m=Mailbox();j=m.create('d','b'*16,1);calls=[]
+  def execute(job,command):
+   calls.append(command)
+   if failure:raise TimeoutError('no acknowledgement')
+   return receipt
+  m.execute=execute
+  with patch.dict('os.environ',{'EPAPER_AI_HID_HOME':enabled}):
+   Conversation(m,lambda messages:{'action':'home'},lambda text:b'\1\0'*100,lambda *a,**kw:None).run(j,text)
+  return j,calls
+ def test_explicit_home_dispatches_only_hid_and_waits_for_human_verification(self):
+  j,calls=self.run_home('回到手机桌面')
+  self.assertEqual(calls,[{'op':'hid_home'}]);self.assertEqual(j.state,'waiting')
+  self.assertIn('没有画面回传',j.reply);self.assertNotIn('已回到桌面',j.reply)
+ def test_feature_off_never_dispatches(self):
+  j,calls=self.run_home('回到手机桌面',enabled='0');self.assertFalse(calls);self.assertEqual(j.state,'error')
+ def test_model_home_does_not_convert_wechat_task_to_blind_navigation(self):
+  j,calls=self.run_home('打开微信找到李阳');self.assertFalse(calls);self.assertEqual(j.state,'error')
+ def test_missing_or_invalid_receipt_never_claims_report_sent(self):
+  for kwargs in ({'failure':True},{'receipt':'queued'}):
+   j,calls=self.run_home('返回手机桌面',**kwargs)
+   self.assertEqual(j.state,'error');self.assertNotIn('已发出',j.reply);self.assertEqual(len(calls),1)

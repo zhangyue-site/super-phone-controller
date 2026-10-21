@@ -1,5 +1,6 @@
 #include "dialogue.h"
 #include "voice.h"
+#include "usb.h"
 #include "adb_local.h"
 #include "device_config.h"
 #include "esp_http_client.h"
@@ -51,6 +52,18 @@ bool controller_dialogue_run(unsigned sequence){
     if(pcm){int size=post("/dialogue/audio",sequence,nullptr,pcm,960001);if(size>0&&size<=960000&&!(size%2)&&live(sequence)){if(!controller_audio_play_pcm(pcm,size))success=false;}else success=false;free(pcm);}else success=false;
    }
    break;
+  }
+  if(!strcmp(op,"hid_home")){
+   const char *id=str(j,"id");bool valid=strlen(id)==32;
+   bool ok=valid&&live(sequence)&&controller_usb_ai_home(live,sequence);
+   cJSON *ack=cJSON_CreateObject();cJSON_AddStringToObject(ack,"id",id);cJSON_AddBoolToObject(ack,"ok",ok);
+   cJSON_AddStringToObject(ack,"output",ok?"HID_HOME_REPORT_SENT":"");
+   if(!ok)cJSON_AddStringToObject(ack,"error",live(sequence)?"input_failed":"cancelled");
+   char *body=cJSON_PrintUnformatted(ack);cJSON_Delete(ack);cJSON_Delete(j);
+   char result[128];bool sent=body&&post("/dialogue/result",sequence,body,(unsigned char*)result,sizeof(result))>=0;free(body);
+   ESP_LOGI("dialogue","AI HID home report_sent=%d ack=%d",ok,sent);
+   if(!sent)break;
+   continue;
   }
   controller::AdbCommand cmd{};bool valid=!strcmp(op,"type_text");
   if(valid){const char *v=str(j,"text_b64");valid=strlen(v)>0&&strlen(v)<sizeof(cmd.text_b64);if(valid)strcpy(cmd.text_b64,v);}
