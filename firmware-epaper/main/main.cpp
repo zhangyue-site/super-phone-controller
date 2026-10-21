@@ -459,11 +459,14 @@ static void input_task(void*){
    bool in_confirm=page==2 || touch_voicing || key_voicing || key_confirming;
    switch(swipe){
    case controller::Gesture::SwipeUp:
-    if(!in_confirm)go_page(controller::next_page(page.load(),HOME_PAGE));break;
+    if(!in_confirm){go_page(controller::next_page(page.load(),HOME_PAGE));}
+    break;
    case controller::Gesture::SwipeDown:
-    if(!in_confirm)go_page(page.load()<=HOME_PAGE?PAGE_COUNT-1:page.load()-1);break;
+    if(!in_confirm){go_page(page.load()<=HOME_PAGE?PAGE_COUNT-1:page.load()-1);}
+    break;
    case controller::Gesture::DoubleTap:
-    if(!in_confirm){screen_dirty=true;xTaskNotifyGive(screen_task_handle);}break;
+    if(!in_confirm){screen_dirty=true;xTaskNotifyGive(screen_task_handle);}
+    break;
    case controller::Gesture::LongPress:
     // 长按与既有"按住说话"共用入口；确认页/录音中不抢。
     if(!in_confirm && page==HOME_PAGE){go_page(PAGE_COUNT-1);touch_voice_epoch=screen_epoch.load();
