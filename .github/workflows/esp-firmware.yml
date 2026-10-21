@@ -125,6 +125,11 @@ jobs:
                 -B build reconfigure build
             '
 
+      - name: Verify TLS buffers use PSRAM
+        run: |
+          grep -qx 'CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y' "$FIRMWARE_DIR/sdkconfig.usb-local"
+          test "$(grep -c '^CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y' "$FIRMWARE_DIR/sdkconfig.usb-local" || true)" = 0
+
       - name: Verify version is embedded
         env:
           VERSION: ${{ steps.ver.outputs.version }}
