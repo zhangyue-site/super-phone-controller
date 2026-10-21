@@ -37,3 +37,6 @@ void controller_audio_toggle_mute();
 
 void controller_voice_conversation();
 bool controller_voice_conversing();
+
+// End only this recording; keep the conversation and ADB task permission.
+bool controller_voice_finish();

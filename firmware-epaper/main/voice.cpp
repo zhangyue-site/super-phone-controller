@@ -28,7 +28,7 @@ static controller::VoiceLifecycle lifecycle;
 static auto &conversation_epoch=lifecycle.epoch;
 static auto &stage=lifecycle.stage;
 static std::atomic<uint32_t> adb_consent(0);
-static std::atomic<bool> diagnostic(false),prepare_only(false);
+static std::atomic<bool> diagnostic(false),prepare_only(false),manual_submit(false);
 static TaskHandle_t worker,stream_worker;
 static VoiceStream stream;
 static void upload_run(void*){
@@ -270,13 +270,14 @@ static void run(void*){
    ESP_LOGI("voice","MIC TEST samples=%u rms=%.1f peak=%d; audio discarded, no upload",count,count?sqrt(squares/count):0,peak);
    state(ok?0:5);continue;
   }
-  stream.finished_at=esp_timer_get_time();stream.abort=cancelled||!ok||count<6400||(continuous&&!vad.send());stream.done=true;
+  bool submitted=manual_submit.exchange(false);
+  stream.finished_at=esp_timer_get_time();stream.abort=cancelled||!ok||count<6400||(continuous&&!vad.send(submitted));stream.done=true;
   if(!stream.abort)state(2);
   while(stream.result==0){if(cancelled)stream.abort=true;vTaskDelay(pdMS_TO_TICKS(10));}
   if(cancelled){state(0);continue;}
   if(!lifecycle.current(turn_epoch))continue;
   held=false;
-  if(continuous&&!vad.send()){conversation=false;state(0);controller_audio_prompt(controller::SpeechPrompt::STOPPED);continue;}
+  if(continuous&&!vad.send(submitted)){conversation=false;state(0);controller_audio_prompt(controller::SpeechPrompt::STOPPED);continue;}
   bool uploaded=stream.result==1;
   if(uploaded)uploaded=controller_dialogue_run(sequence);
   if(!lifecycle.current(turn_epoch)||cancelled)continue;
@@ -286,7 +287,7 @@ static void run(void*){
   if(continuous&&uploaded&&conversation&&lifecycle.current(turn_epoch)&&++conversation_turns<12){
    // Spoken reply has completed; keep a short acoustic guard before reopening RX.
    vTaskDelay(pdMS_TO_TICKS(400));
-   if(conversation&&!cancelled&&lifecycle.current(turn_epoch)){record_sequence=next_sequence.fetch_add(1);held=true;xTaskNotifyGive(worker);}
+   if(conversation&&!cancelled&&lifecycle.current(turn_epoch)){record_sequence=next_sequence.fetch_add(1);manual_submit=false;held=true;xTaskNotifyGive(worker);}
   }else{conversation=false;if(!uploaded)controller_audio_prompt(controller::SpeechPrompt::FAILED);}
  }
 }
@@ -296,7 +297,7 @@ void controller_voice_init(){
 static void begin_voice_request(){
  if(!click_playing&&pending_prompt!=(int)controller::SpeechPrompt::CLICK)controller_audio_interrupt();
  controller_dialogue_screen(nullptr);
- adb_consent=controller_adb_ticket();record_sequence=next_sequence.fetch_add(1);cancelled=false;held=true;xTaskNotifyGive(worker);
+ manual_submit=false;adb_consent=controller_adb_ticket();record_sequence=next_sequence.fetch_add(1);cancelled=false;held=true;xTaskNotifyGive(worker);
 }
 void controller_voice_prepare(){
  if(!lifecycle.can_start())return;
@@ -306,6 +307,10 @@ void controller_voice_hold(bool value){
  if(!value){held=false;return;}
  if(!lifecycle.can_start())return;
  conversation=false;conversation_epoch.fetch_add(1);prepare_only=false;begin_voice_request();
+}
+bool controller_voice_finish(){
+ if(stage.load()!=1||!held.load()||cancelled)return false;
+ manual_submit=true;held=false;state(2);return true;
 }
 void controller_voice_cancel(){if(conversation||lifecycle.busy)controller_adb_cancel();lifecycle.cancel();controller_voice_changed(false);conversation=false;if(!click_playing&&pending_prompt!=(int)controller::SpeechPrompt::CLICK)controller_audio_interrupt();cancel_sequence=next_sequence.fetch_add(1);cancelled=true;held=false;}
 int controller_voice_stage(){

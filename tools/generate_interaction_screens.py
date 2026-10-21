@@ -2,7 +2,8 @@
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 ROOT=Path(__file__).resolve().parents[1]
-FONT='/System/Library/Fonts/STHeiti Medium.ttc'
+FONT='/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc'
+if not Path(FONT).exists(): FONT='/System/Library/Fonts/STHeiti Medium.ttc'
 if not Path(FONT).exists(): FONT='/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'
 assets=[]
 def text(im,xy,label,size=16,center=False):
@@ -68,8 +69,8 @@ for hint in ['等待手机发送固件','正在接收，请保持靠近','正在
 emit('interaction_ble',ble,'interaction-ble')
 voice=[]
 for title,hint,detail in [
-    ('语音待命','点此开始对话','点一下 · 说完自动发送'),
-    ('正在听','说完停顿即可发送','点此结束对话'),
+    ('语音待命','点此开始对话','说完点发送 · 可连续聊'),
+    ('正在听','说完了，开始处理','停顿也可自动发送'),
     ('正在识别','请稍等','点此结束对话'),
     ('本轮完成','播报后继续听','点此结束对话'),
     ('准备麦克风','请稍等','点击大区域结束'),

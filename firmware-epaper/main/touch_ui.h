@@ -3,7 +3,7 @@
 namespace controller {
 inline int next_page(int current,int home){return (current+1)%(home+7);}
 inline int previous_page(int current,int home){return (current+home+6)%(home+7);}
-enum class TouchTarget {NONE,START,QUOTA,CONTROL,HOME,STOP,CONFIRM,UP,DOWN,LEFT,RIGHT,CLICK,PHONE_HOME,PHONE_BACK,UPDATE,VOLUME_DOWN,VOLUME_UP,MUTE,SOUND_TEST,SOUND_SETTINGS};
+enum class TouchTarget {NONE,START,QUOTA,CONTROL,HOME,STOP,CONFIRM,UP,DOWN,LEFT,RIGHT,CLICK,PHONE_HOME,PHONE_BACK,UPDATE,VOLUME_DOWN,VOLUME_UP,MUTE,SOUND_TEST,SOUND_SETTINGS,FINISH};
 inline TouchTarget touch_target(int page,int x,int y,int home=5){
  if(x<8||x>=192||y<0||y>=188)return TouchTarget::NONE;
  if(page==home&&y<45)return TouchTarget::SOUND_SETTINGS;
@@ -23,6 +23,13 @@ inline TouchTarget touch_target(int page,int x,int y,int home=5){
  if(page==home+4)return top?TouchTarget::CLICK:bottom?TouchTarget::STOP:TouchTarget::NONE;
  if(page==home-1&&y>=45&&y<155)return TouchTarget::START;
  return TouchTarget::NONE;
+}
+// Recording submission is distinct from cancellation; footer STOP always wins.
+inline TouchTarget voice_touch_target(int x,int y,int stage,bool conversing,bool result){
+ auto base=touch_target(4,x,y);
+ if(base!=TouchTarget::START)return base;
+ if(stage==1)return TouchTarget::FINISH;
+ return conversing||stage==10||stage==11||result?TouchTarget::STOP:base;
 }
 enum class TouchEdge {NONE,DOWN,UP};
 struct TouchContact {

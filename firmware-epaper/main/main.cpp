@@ -502,10 +502,15 @@ static void input_task(void*){
   if(edge==controller::TouchEdge::DOWN)controller_event("touch_down",page.load(),tx,ty,(int)target);
   if(edge==controller::TouchEdge::UP)controller_event("touch_up",page.load(),(int)(now-gesture.began),(int)gesture.target,screen_failed?3:screen_painting?2:0);
   // Stop is acted on at contact-down, including during display refresh and OTA.
-  if((controller_voice_conversing()||controller_voice_stage()==10||controller_voice_stage()==11||dialogue_frame_valid.load())&&page==PAGE_COUNT-1&&contact==1&&ty>=45&&ty<155)target=controller::TouchTarget::STOP;
+  if(page==PAGE_COUNT-1&&contact==1)target=controller::voice_touch_target(tx,ty,controller_voice_stage(),controller_voice_conversing(),dialogue_frame_valid.load());
   if(edge==controller::TouchEdge::DOWN&&target!=controller::TouchTarget::STOP)controller_audio_prompt(controller::SpeechPrompt::CLICK);
   if(edge==controller::TouchEdge::DOWN&&target==controller::TouchTarget::STOP){
    stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();
+  }
+  if(edge==controller::TouchEdge::DOWN&&target==controller::TouchTarget::FINISH){
+   bool accepted=controller_voice_finish();controller_event("voice_finish",page.load(),0,0,accepted?1:0);
+   gesture.cancel();swipes.reset();swipe_contact=false;
+   vTaskDelay(pdMS_TO_TICKS(20));continue;
   }
   auto control_event=control_key.update(control_down,now);
   bool ota_busy=controller_ota_busy()||ble_ota_busy();
@@ -624,6 +629,7 @@ static void console_command(char *line){
  else if(strcmp(line,"VOICE PREPARE")==0){stopped=false;go_page(PAGE_COUNT-1);controller_voice_prepare();controller_usb_write("Voice connection check requested\r\n");}
  else if(strcmp(line,"VOICE START")==0){stopped=false;go_page(PAGE_COUNT-1);controller_voice_conversation();controller_usb_write("Continuous voice requested\r\n");}
  else if(strcmp(line,"VOICE DOWN")==0){stopped=false;go_page(PAGE_COUNT-1);controller_voice_hold(true);controller_usb_write("Voice hold requested\r\n");}
+ else if(strcmp(line,"VOICE FINISH")==0){controller_usb_write(controller_voice_finish()?"Voice submitted\r\n":"Not recording\r\n");}
  else if(strcmp(line,"VOICE UP")==0){controller_voice_hold(false);controller_usb_write("Voice hold released\r\n");}
  else if(strcmp(line,"MIC TEST")==0){controller_voice_test();controller_usb_write("Microphone diagnostic: one second; samples discarded\r\n");}
  else if(strcmp(line,"PAGE")==0)go_page(controller::next_page(page.load(),HOME_PAGE));
