@@ -3,11 +3,11 @@ from display_service.dialogue import Mailbox
 from display_service.conversation import Conversation
 from test_dialogue import XML
 class RunnerTests(unittest.TestCase):
- def run_turn(self,decisions,outputs):
+ def run_turn(self,decisions,outputs,task="打开设置"):
   m=Mailbox();j=m.create('d','a'*16,1);seen=[]
   def model(messages):seen.append(messages);return decisions.pop(0)
   c=Conversation(m,model,lambda text:b'\1\0'*16000,lambda *a,**kw:None)
-  t=threading.Thread(target=c.run,args=(j,'打开设置'));t.start()
+  t=threading.Thread(target=c.run,args=(j,task));t.start()
   while t.is_alive():
    cmd=m.poll('d','a'*16,1)
    if cmd['op'] not in ('wait','done'):m.ack('d','a'*16,1,cmd['id'],True,outputs.pop(0))
@@ -27,3 +27,10 @@ class RunnerTests(unittest.TestCase):
   def failed(text):raise RuntimeError('tts unavailable')
   Conversation(m,lambda m:{'action':'reply','reply':'测试结果'},failed,lambda *a,**kw:None).run(j,'你好')
   self.assertEqual(j.state,'error');self.assertTrue(j.speech_error);self.assertEqual(j.reply,'测试结果')
+
+ def test_launched_app_must_remain_foreground_after_navigation(self):
+  initial=XML.replace('SIZE 1080x2400','SIZE 1080x2400\nAPPS_BEGIN\ncom.example.app/.MainActivity\nAPPS_END')
+  current=XML.replace('com.android.settings','com.example.app').replace('text="设置"','text="账单"')
+  foreign=current.replace('com.example.app','com.unexpected.app')
+  j,_=self.run_turn([{'action':'observe'},{'action':'launch','component':'com.example.app/.MainActivity'},{'action':'tap','node':0},{'action':'done','reply':'已完成','evidence':'账单'}],[initial,initial,'ok',current,current,'ok',foreign],task='打开账单应用')
+  self.assertEqual(j.state,'error')

@@ -24,11 +24,18 @@ def parse_observation(raw):
   if not label and a.get('clickable')!='true' and a.get('scrollable')!='true':continue
   nodes.append({'id':len(nodes),'label':label,'bounds':bounds,'clickable':a.get('clickable')=='true','scrollable':a.get('scrollable')=='true','enabled':a.get('enabled','true')=='true'})
  if not nodes:raise ValueError('no UI nodes')
- return {'package':focus[1],'activity':focus[2],'launcher':bool(re.search(r'^LAUNCHER '+re.escape(focus[1])+r'/',header,re.M)),'nodes':nodes}
+ apps=[]
+ block=re.search(r'^APPS_BEGIN\n(.*?)^APPS_END$',header,re.M|re.S)
+ if block:apps=re.findall(r'^([A-Za-z0-9_.]+/[A-Za-z0-9_.$]+)$',block[1],re.M)[:128]
+ return {'apps':apps,'package':focus[1],'activity':focus[2],'launcher':bool(re.search(r'^LAUNCHER '+re.escape(focus[1])+r'/',header,re.M)),'nodes':nodes}
 
 def action_command(d,obs):
  action=d.get('action')
  if action in ('home','back','open_settings'):return {'op':action}
+ if action=='launch':
+  component=d.get('component')
+  if not isinstance(component,str) or component not in obs.get('apps',[]) or len(component)>159:raise ValueError('unobserved launcher activity')
+  return {'op':'launch','component':component}
  if action not in ('tap','scroll'):raise ValueError('unsupported action')
  i=d.get('node')
  if type(i)!=int or not 0<=i<len(obs['nodes']):raise ValueError('unknown node')
@@ -36,7 +43,7 @@ def action_command(d,obs):
  if not n['enabled'] or not n['clickable' if action=='tap' else 'scrollable'] or DENY.search(n['label']):raise ValueError('node rejected')
  x1,y1,x2,y2=n['bounds'];x=(x1+x2)//2
  if action=='tap':
-  if not n['label'].strip() or (not NAV.search(n['label']) and not obs['launcher']):raise ValueError('only navigation controls or launcher app icons allowed')
+  if not NAV.search(n['label']):raise ValueError('only navigation controls allowed')
   return {'op':'tap','x':x,'y':(y1+y2)//2}
  direction=d.get('direction','up')
  if direction not in ('up','down'):raise ValueError('scroll direction')

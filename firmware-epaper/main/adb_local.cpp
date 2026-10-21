@@ -138,6 +138,7 @@ static const char observation_command[]=
  "policy=$(dumpsys window policy) || exit 31; printf 'LOCKED '; if printf '%s' \"$policy\" | grep -q 'showing=true'; then echo true; elif printf '%s' \"$policy\" | grep -q 'showing=false'; then echo false; else exit 32; fi; "
  "printf 'SIZE '; wm size | tail -n 1 | sed 's/.*: //'; "
  "printf 'LAUNCHER '; cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tail -n 1; "
+ "echo APPS_BEGIN; cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER | sed 's/^[[:space:]]*//' | head -n 128; echo APPS_END; "
  "uiautomator dump /proc/self/fd/1 || exit 33; "
  "printf '\\nEND_FOCUS '; dumpsys activity activities | sed -n 's/.*topResumedActivity.* u[0-9]* \\([^ ]*\\).*/\\1/p' | head -n 1; "
  "policy=$(dumpsys window policy) || exit 34; printf 'END_LOCKED '; if printf '%s' \"$policy\" | grep -q 'showing=true'; then echo true; elif printf '%s' \"$policy\" | grep -q 'showing=false'; then echo false; else exit 35; fi";
@@ -174,7 +175,13 @@ static bool execute_queued(unsigned char *data){
  // Read again immediately before input. No network/model call occurs between them.
  if(!shell_command(observation_command,command_output,48001,data)||strcmp(command_output,command_expected))return false;
  if(!live()||command_ticket!=active_epoch)return false;
- char command[160];if(!adb_command(queued_command,command,sizeof(command)))return false;
+ if(queued_command.op==AdbOp::LAUNCH){
+  char entry[164];snprintf(entry,sizeof(entry),"\n%s\n",queued_command.component);
+  const char *begin=strstr(command_output,"APPS_BEGIN\n"),*end=strstr(command_output,"APPS_END\n");
+  const char *match=begin?strstr(begin,entry):nullptr;
+  if(!match||!end||match>=end)return false;
+ }
+ char command[320];if(!adb_command(queued_command,command,sizeof(command)))return false;
  return shell_command(command,command_output,48001,data);
 }
 bool controller_adb_execute(const AdbCommand &command,const char *expected,char *out,unsigned capacity,uint32_t ticket){
