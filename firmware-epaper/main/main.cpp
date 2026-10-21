@@ -357,7 +357,7 @@ static void screen_task(void*){
   }else if(current_page==PAGE_COUNT-1){
    int voice=controller_voice_stage();
 #if CONFIG_CONTROLLER_USB_LOCAL
-   if(voice>=7 || voice==0 || voice==6)preparation(frame);
+   if(voice>=7 || voice==0 || voice==6){if(controller_voice_prepared())memcpy(frame,interaction_voice[0],5000);else preparation(frame);}
    else memcpy(frame,interaction_voice[(voice>=0&&voice<10)?voice:5],5000);
 #else
    memcpy(frame,interaction_voice[(voice>=0&&voice<10)?voice:5],5000);
@@ -426,12 +426,11 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
  case TouchTarget::SOUND_TEST:controller_audio_prompt(controller::SpeechPrompt::TEST);break;
  case TouchTarget::UPDATE:controller_ota_start();screen_dirty=true;break;
  case TouchTarget::START:
+  if(controller_voice_conversing()){stop_now();go_page(HOME_PAGE);break;}
   go_page(PAGE_COUNT-1);
-#if CONFIG_CONTROLLER_USB_LOCAL
-  stopped=false;controller_voice_prepare();
-#endif
+  stopped=false;controller_voice_conversation();
   break;
- case TouchTarget::HOME:controller_voice_hold(false);go_page(HOME_PAGE);break;
+ case TouchTarget::HOME:controller_voice_cancel();go_page(HOME_PAGE);break;
  case TouchTarget::QUOTA:go_page(0);break;
  case TouchTarget::CONTROL:go_page(controller_usb_hid_enabled()?HOME_PAGE+1:2);break;
  case TouchTarget::PHONE_HOME:case TouchTarget::PHONE_BACK:{
@@ -480,6 +479,7 @@ static void input_task(void*){
   int tx=0,ty=0;int contact=controller_touch_read(tx,ty);auto edge=contact_state.update(contact);
   auto target=contact==1?controller::touch_target(page.load(),tx,ty,HOME_PAGE):controller::TouchTarget::NONE;
   // Stop is acted on at contact-down, including during display refresh and OTA.
+  if(controller_voice_conversing()&&page==PAGE_COUNT-1&&contact==1&&ty>=45&&ty<155)target=controller::TouchTarget::STOP;
   if(edge==controller::TouchEdge::DOWN&&target==controller::TouchTarget::STOP){
    stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();
   }
@@ -529,9 +529,9 @@ static void input_task(void*){
    if(swipe!=controller::Gesture::None){
     gesture.cancel();
     switch(swipe){
-    case controller::Gesture::SwipeUp:go_page(controller::next_page(page.load(),HOME_PAGE));break;
-    case controller::Gesture::SwipeDown:go_page(controller::previous_page(page.load(),HOME_PAGE));break;
-    case controller::Gesture::DoubleTap:go_page(HOME_PAGE);break;
+    case controller::Gesture::SwipeUp:controller_voice_cancel();go_page(controller::next_page(page.load(),HOME_PAGE));break;
+    case controller::Gesture::SwipeDown:controller_voice_cancel();go_page(controller::previous_page(page.load(),HOME_PAGE));break;
+    case controller::Gesture::DoubleTap:controller_voice_cancel();go_page(HOME_PAGE);break;
     default:break; // Hold-to-talk starts while held; never start it after release.
     }
    }else if(contact==1){
@@ -539,11 +539,6 @@ static void input_task(void*){
      touch_page=page.load();
      if(!screen_failed&&!screen_painting)gesture.begin(screen_epoch.load(),painted_epoch.load(),target,now);
     }else if(screen_painting||page!=touch_page||target!=gesture.target)gesture.cancel();
-    // No re-arming after sliding out or a display/page change: a fresh down is required.
-    if(!key_voicing&&gesture.active&&gesture.target==controller::TouchTarget::START&&now-gesture.began>=600){
-     gesture.cancel();swipes.reset();go_page(PAGE_COUNT-1);touch_voice_epoch=screen_epoch.load();
-     touch_voicing=true;stopped=false;controller_voice_hold(true);
-    }
    }else if(edge==controller::TouchEdge::UP){
     auto action=gesture.target;int64_t began=gesture.began;
     if(!screen_failed&&!screen_painting&&gesture.release(screen_epoch.load(),now))touch_action(action,began,now);

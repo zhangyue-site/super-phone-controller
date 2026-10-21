@@ -1,4 +1,5 @@
 #include "voice.h"
+#include "conversation_policy.h"
 #include "touch.h"
 #include "adb_local.h"
 #include "sdkconfig.h"
@@ -17,7 +18,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-static std::atomic<bool> held(false),cancelled(false);
+static std::atomic<bool> held(false),cancelled(false),conversation(false);
+static std::atomic<unsigned> conversation_turns(0),conversation_epoch(0);
 static std::atomic<int> stage(0);
 static std::atomic<uint32_t> adb_consent(0);
 static std::atomic<bool> diagnostic(false),prepare_only(false);
@@ -107,6 +109,7 @@ static void run(void*){
   ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
   int prompt=pending_prompt.exchange(0);
   if(prompt && !held){play_prompt(prompt);continue;}
+  unsigned turn_epoch=conversation_epoch.load();
   bool test=diagnostic.exchange(false);
   bool prepare=prepare_only.exchange(false);
   if((!held || cancelled) && !test)continue;
@@ -116,17 +119,21 @@ static void run(void*){
    if(cancelled)continue;
    state(7);bool ready=controller_adb_activate(consent);
    if(ready && !cancelled && controller_voice_online())ready=controller_preflight_probe();
-   if(!cancelled && cancel_sequence.load()==cancel_at_start){state(ready?8:9);held=false;if(ready&&controller_voice_prepared())controller_audio_prompt(controller::SpeechPrompt::READY);}
+   if(!cancelled && cancel_sequence.load()==cancel_at_start){state(ready?8:9);held=false;if(ready&&controller_voice_prepared()){controller_audio_prompt(controller::SpeechPrompt::READY);}}
+   if(ready&&controller_voice_prepared()&&conversation&&!cancelled&&turn_epoch==conversation_epoch.load()){
+    pending_prompt=0;play_prompt((int)controller::SpeechPrompt::READY);vTaskDelay(pdMS_TO_TICKS(400));
+    if(conversation&&!cancelled&&turn_epoch==conversation_epoch.load()){held=true;xTaskNotifyGive(worker);}
+   }else if(turn_epoch==conversation_epoch.load())conversation=false;
    continue;
   }
 #endif
   if(!test && prepare){state(6);held=false;continue;}
-  if(!test && !controller_voice_online()){state(6);continue;}
-  if(!pcm || !init_mic()){state(5);continue;}
+  if(!test && !controller_voice_online()){conversation=false;held=false;state(6);continue;}
+  if(!pcm || !init_mic()){conversation=false;held=false;state(5);continue;}
   unsigned sequence=record_sequence.load();
   state(4);unsigned count=0;int16_t stereo[512];
   esp_codec_dev_sample_info_t fs={};fs.sample_rate=16000;fs.channel=2;fs.bits_per_sample=16;
-  if(esp_codec_dev_open(mic,&fs)!=ESP_CODEC_DEV_OK){state(5);continue;}
+  if(esp_codec_dev_open(mic,&fs)!=ESP_CODEC_DEV_OK){conversation=false;held=false;state(5);continue;}
   esp_codec_dev_set_out_mute(mic,true);
   esp_codec_dev_set_in_gain(mic,30.0);
   if(!test){
@@ -140,12 +147,15 @@ static void run(void*){
    if(esp_codec_dev_read(mic,stereo,sizeof(stereo))!=ESP_CODEC_DEV_OK){warmed=false;break;}
   }
   state(1);
+  controller::ConversationVad vad;
+  bool continuous=conversation.load();
   bool ok=warmed;
   while(ok && (test || held) && !cancelled && count<(test?16000u:160000u)){
    if(esp_codec_dev_read(mic,stereo,sizeof(stereo))!=ESP_CODEC_DEV_OK){ok=false;break;}
    if(cancelled || (!test && !held))break;
    for(unsigned i=0;i<256 && count<(test?16000u:160000u);++i)pcm[count++]=stereo[i*2];
    if(!test){stream.bytes=count*2;if(stream.result<0){ok=false;break;}}
+   if(continuous){uint64_t energy=0;for(unsigned i=0;i<256;i++){int v=stereo[i*2];energy+=(int64_t)v*v;}if(vad.feed(256,(unsigned)sqrt((double)energy/256)))break;}
   }
   esp_codec_dev_close(mic);
   if(test){
@@ -153,13 +163,20 @@ static void run(void*){
    ESP_LOGI("voice","MIC TEST samples=%u rms=%.1f peak=%d; audio discarded, no upload",count,count?sqrt(squares/count):0,peak);
    state(ok?0:5);continue;
   }
-  stream.finished_at=esp_timer_get_time();stream.abort=cancelled||!ok||count<6400;stream.done=true;
+  stream.finished_at=esp_timer_get_time();stream.abort=cancelled||!ok||count<6400||(continuous&&!vad.send());stream.done=true;
   if(!stream.abort)state(2);
   while(stream.result==0){if(cancelled)stream.abort=true;vTaskDelay(pdMS_TO_TICKS(10));}
   if(cancelled){state(0);continue;}
+  if(turn_epoch!=conversation_epoch.load())continue;
+  held=false;
+  if(continuous&&!vad.send()){conversation=false;state(0);controller_audio_prompt(controller::SpeechPrompt::STOPPED);continue;}
   bool uploaded=stream.result==1;
   state(uploaded?3:5);if(uploaded)controller_voice_changed(true);
-  controller_audio_prompt(uploaded?controller::SpeechPrompt::RECOGNIZED:controller::SpeechPrompt::FAILED);
+  if(continuous&&uploaded&&conversation&&turn_epoch==conversation_epoch.load()&&++conversation_turns<12){
+   play_prompt((int)controller::SpeechPrompt::RECOGNIZED);
+   vTaskDelay(pdMS_TO_TICKS(400));
+   if(conversation&&!cancelled&&turn_epoch==conversation_epoch.load()){record_sequence=next_sequence.fetch_add(1);held=true;xTaskNotifyGive(worker);}
+  }else{conversation=false;controller_audio_prompt(continuous&&uploaded?controller::SpeechPrompt::STOPPED:uploaded?controller::SpeechPrompt::RECOGNIZED:controller::SpeechPrompt::FAILED);}
  }
 }
 void controller_voice_init(){
@@ -176,9 +193,9 @@ void controller_voice_prepare(){
 void controller_voice_hold(bool value){
  if(!value){held=false;return;}
  if(stage==1 || stage==2 || stage==4 || stage==7)return;
- prepare_only=false;begin_voice_request();
+ conversation=false;conversation_epoch.fetch_add(1);prepare_only=false;begin_voice_request();
 }
-void controller_voice_cancel(){controller_audio_interrupt();cancel_sequence=next_sequence.fetch_add(1);cancelled=true;held=false;}
+void controller_voice_cancel(){conversation_epoch.fetch_add(1);conversation=false;controller_audio_interrupt();cancel_sequence=next_sequence.fetch_add(1);cancelled=true;held=false;}
 int controller_voice_stage(){
 #if CONFIG_CONTROLLER_USB_LOCAL
  if(stage>=7){int adb=controller_adb_stage();return adb==3?8:(adb==1||adb==2)?7:(adb==0?0:9);}
@@ -190,3 +207,10 @@ void controller_voice_test(){if(stage==1||stage==2||stage==4)return;controller_a
 
 const char *controller_voice_session(){return session;}
 unsigned controller_voice_cancel_sequence(){return cancel_sequence.load();}
+
+bool controller_voice_conversing(){return conversation.load();}
+void controller_voice_conversation(){
+ if(stage==1||stage==2||stage==4||stage==7)return;
+ if(conversation)return;
+ conversation_epoch.fetch_add(1);conversation_turns=0;conversation=true;prepare_only=false;begin_voice_request();
+}

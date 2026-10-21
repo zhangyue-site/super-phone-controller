@@ -64,3 +64,7 @@ https://github.com/onehumanbeing/esp32-iphone-agent
 可选外接两个常开干接点：GPIO1—按键A—GND，GPIO2—按键B—GND。默认关闭外接输入，外接版增加 `sdkconfig.external-keys.defaults`。具体映射与接线见 [验证与接线记录](docs/handoff/2026-10-21-interaction-audio-validation.md)。
 
 ![实体键为主的1.54英寸界面](previews/interaction-overview.png)
+
+### 屏幕与连续语音输入
+
+1.54 英寸屏幕点击开始，连接准备完成后自动收音；说完停顿后提交识别，提示后继续听。语音页中部大区域结束对话，首页及翻页也结束收音。10 秒无声或最多 12 轮后退出，声音页支持音量、静音和试听。当前为连续 ASR 提示，尚无聊天回答/手机执行器，不支持常驻唤醒词。

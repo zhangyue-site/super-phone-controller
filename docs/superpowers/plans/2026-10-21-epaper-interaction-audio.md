@@ -13,3 +13,7 @@
 - [x] Run host/Python/Flutter tests and firmware build, inspect artifacts, review diff; record limits and hardware acceptance steps.
 
 Verification record: docs/handoff/2026-10-21-interaction-audio-validation.md. Native Android packaging and physical-board validation are reported separately from host tests.
+
+## 最终交互更新
+
+用户最终选择屏幕与语音。屏幕单击开始连续输入、自动静音分句、识别播报后继续听；大区域停止，离开语音页取消；10 秒无声退出，最多 12 轮。现有实体键仅兼容。实际能力为 ASR 与提示，聊天回答和手机执行器尚未接入。
