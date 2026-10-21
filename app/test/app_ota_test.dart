@@ -60,7 +60,8 @@ void main() {
               }),
               200);
         case '/app-ota/image':
-          expect(request.headers['Authorization'], 'Bearer NaN');
+          expect(request.headers['Authorization'],
+              'Bearer ttttttttttttttttttttttttttttttttttttttttttt');
           expect(request.url.query, isEmpty);
           return http.Response.bytes(data, 200);
       }

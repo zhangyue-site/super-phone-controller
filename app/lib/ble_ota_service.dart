@@ -384,6 +384,7 @@ class BleOtaService {
     final session = _transfer;
     if (session == null) return;
     session.cancel();
+    ++_connectionEpoch;
     try {
       await _ctrl?.write([0x04],
           withoutResponse: false).timeout(const Duration(seconds: 2));
