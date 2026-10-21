@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'transfer_session.dart';
 import 'firmware_image.dart';
+import 'board_info.dart';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -86,6 +87,8 @@ class BleOtaService {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _ctrl;
   BluetoothCharacteristic? _stat;
+  BluetoothCharacteristic? _info;
+  BluetoothCharacteristic? _auth;
   bool _busy = false;
   TransferSession? _transfer;
   int _connectionEpoch = 0;
@@ -138,6 +141,12 @@ class BleOtaService {
       }
 
       _device = device;
+      _info = svc.characteristics
+          .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000004'))
+          .firstOrNull;
+      _auth = svc.characteristics
+          .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000005'))
+          .firstOrNull;
 
       // 协商失败时 mtu 仍是 23，减去 3 字节 ATT 头和 1 字节命令码 = 19。
       final mtu = device.mtuNow;
@@ -164,6 +173,54 @@ class BleOtaService {
     }
   }
 
+  Future<BoardInfo?> readInfo() async {
+    final info = _info;
+    if (info == null) return null;
+    return BoardInfo.parse(
+        await info.read().timeout(const Duration(seconds: 5)));
+  }
+
+  Future<List<int>> signDownloadChallenge(List<int> nonce) async {
+    final auth = _auth;
+    if (auth == null || nonce.length != 32 || _busy) {
+      throw StateError('控制板暂不支持下载授权或正在升级');
+    }
+    await auth
+        .write(nonce, withoutResponse: false)
+        .timeout(const Duration(seconds: 5));
+    return auth.read().timeout(const Duration(seconds: 5));
+  }
+
+  Future<void> _confirmReboot(BluetoothDevice device, BoardInfo before,
+      FirmwareImage target, TransferSession session) async {
+    if (device.isConnected) {
+      await device.connectionState
+          .firstWhere((s) => s == BluetoothConnectionState.disconnected)
+          .timeout(const Duration(seconds: 15));
+    }
+    final elapsed = Stopwatch()..start();
+    while (elapsed.elapsed < const Duration(seconds: 75)) {
+      if (session.cancelled) throw StateError('已停止等待启动确认');
+      try {
+        await connect(device);
+        final current = await readInfo();
+        if (session.cancelled) throw StateError('已停止等待启动确认');
+        if (current != null &&
+            current.confirms(before, target.version, target.elfSha256)) return;
+        if (current != null && current.device != before.device) {
+          throw StateError('重连设备身份不符');
+        }
+      } catch (_) {
+        if (session.cancelled) rethrow;
+      }
+      try {
+        await device.disconnect();
+      } catch (_) {}
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
+    throw StateError('未确认新版本启动，可能发生回滚或连接中断；请保持供电后重新检查版本');
+  }
+
   /// 订阅状态通知，返回原始 4 字节状态流。
   Stream<List<int>> statusStream() =>
       _stat?.onValueReceived ?? const Stream.empty();
@@ -174,8 +231,9 @@ class BleOtaService {
       yield const PushProgress(done: true, success: false, log: '已有推送在进行');
       return;
     }
+    late final FirmwareImage target;
     try {
-      FirmwareImage.parse(data);
+      target = FirmwareImage.parse(data);
     } on FormatException catch (error) {
       yield PushProgress(done: true, success: false, log: error.message);
       return;
@@ -201,8 +259,13 @@ class BleOtaService {
 
     final total = data.length;
     var verified = false;
+    final device = _device;
 
     try {
+      final before = await readInfo();
+      if (before == null || device == null)
+        throw StateError('请先更新控制板基础固件以支持重启确认');
+      checkActive();
       yield const PushProgress(step: '连接设备', log: '设备连接就绪');
 
       final digest = sha256.convert(data).bytes;
@@ -274,10 +337,16 @@ class BleOtaService {
         verified = true;
         yield const PushProgress(
           percent: 100,
-          step: '切换启动槽',
+          step: '等待重启确认',
+          log: '写入校验通过，等待同一控制板重启并完成自检',
+        );
+        await _confirmReboot(device, before, target, session);
+        yield PushProgress(
+          percent: 100,
+          step: '升级完成',
           done: true,
           success: true,
-          log: '校验通过，启动槽已切换，板子即将重启',
+          log: '已确认新版本 ' + target.version + ' 启动、自检通过',
         );
       } else {
         yield PushProgress(
@@ -287,7 +356,10 @@ class BleOtaService {
         );
       }
     } on TimeoutException {
-      yield const PushProgress(done: true, success: false, log: '等待板子校验超时，请重试');
+      yield const PushProgress(
+          done: true,
+          success: false,
+          log: verified ? '固件已写入，但重启确认超时，请检查控制板版本' : '等待板子校验超时，请重试');
     } catch (e) {
       yield PushProgress(done: true, success: false, log: '传输失败：$e');
     } finally {
@@ -325,6 +397,8 @@ class BleOtaService {
     await cancelPush();
     _ctrl = null;
     _stat = null;
+    _info = null;
+    _auth = null;
     try {
       await device?.disconnect();
     } catch (_) {}

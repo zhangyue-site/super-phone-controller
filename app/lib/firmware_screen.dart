@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:http/http.dart' as http;
+import 'app_ota_client.dart';
 
 import 'ble_ota_service.dart';
 import 'firmware_image.dart';
@@ -71,7 +71,9 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         await widget.service.disconnect();
         return;
       }
+      final info = await widget.service.readInfo();
       setState(() {
+        _deviceVersion = info?.version ?? _deviceVersion;
         _chunkSize = chunk;
         _connected = true;
         _busy = false;
@@ -125,21 +127,24 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       _error = null;
     });
     try {
-      // Device credentials are not shipped in the phone app.
-      final res = await http
-          .get(Uri.parse('$otaBase/firmware/image'))
-          .timeout(const Duration(seconds: 30));
-      if (res.statusCode != 200) {
-        throw Exception(res.statusCode == 401 || res.statusCode == 403
-            ? '服务器尚未开放手机端下载，请选择已下载的 app.bin'
-            : '服务器暂不可用（${res.statusCode}）');
+      final board = await widget.service.readInfo();
+      if (board == null) throw StateError('控制板需先更新一次基础固件以支持自动下载授权');
+      final client = AppOtaClient(Uri.parse(otaBase));
+      try {
+        final result = await client.download(
+            board.device, widget.service.signDownloadChallenge);
+        final image = FirmwareImage.parse(result.bytes);
+        if (image.version != result.version)
+          throw const FormatException('下载版本与固件不符');
+        await _loadBytes(result.bytes, 'app.bin');
+      } finally {
+        client.close();
       }
-      await _loadBytes(res.bodyBytes, 'app.bin');
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = '从服务器获取失败：$e\n可以改用本地文件。';
+        _error = '下载失败：$e';
       });
     }
   }
@@ -246,8 +251,8 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
           const SizedBox(height: 10),
           _SourceCard(
             icon: Icons.cloud_download_outlined,
-            title: '从服务器获取固件',
-            subtitle: '服务器需开放手机端下载',
+            title: '下载最新固件',
+            subtitle: '通过已连接的控制板自动授权，无需选择文件',
             onTap: _busy ? null : _fetchFromServer,
           ),
           if (_busy) ...[
