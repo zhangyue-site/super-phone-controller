@@ -1,0 +1,6 @@
+# Official Open-AutoGLM planner revision; server-only dependency.
+openai>=2.9.0
+Pillow>=12.0.0
+requests>=2.31.0
+# Install upstream pinned source from zai-org/Open-AutoGLM revision 86f55382982fb054e8fc98ca80609dff8a2cdc3c with --no-deps.
+git+https://github.com/zai-org/Open-AutoGLM.git@86f55382982fb054e8fc98ca80609dff8a2cdc3c

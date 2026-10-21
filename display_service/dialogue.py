@@ -28,12 +28,12 @@ def parse_observation(raw):
   if a.get('package') and a['package']!=focus[1]:raise ValueError('mixed foreground UI')
   label=' '.join((c.get('text','')+' '+c.get('content-desc','')).strip() for c in n.iter('node') if c.get('password')!='true')[:1000]
   if not label and a.get('clickable')!='true' and a.get('scrollable')!='true':continue
-  nodes.append({'id':len(nodes),'label':label,'bounds':bounds,'clickable':a.get('clickable')=='true','scrollable':a.get('scrollable')=='true','enabled':a.get('enabled','true')=='true'})
+  nodes.append({'id':len(nodes),'own_label':(a.get('text','')+' '+a.get('content-desc','')).strip(),'class':a.get('class',''),'resource_id':a.get('resource-id',''),'label':label,'bounds':bounds,'clickable':a.get('clickable')=='true','scrollable':a.get('scrollable')=='true','enabled':a.get('enabled','true')=='true','editable':a.get('class','').endswith('EditText'),'focused':a.get('focused')=='true','password':a.get('password')=='true'})
  if not nodes:raise ValueError('no UI nodes')
  apps=[]
  block=re.search(r'^APPS_BEGIN\n(.*?)^APPS_END$',header,re.M|re.S)
  if block:apps=re.findall(r'^([A-Za-z0-9_.]+/[A-Za-z0-9_.$]+)$',block[1],re.M)[:128]
- return {'apps':apps,'package':focus[1],'activity':focus[2],'launcher':bool(re.search(r'^LAUNCHER '+re.escape(focus[1])+r'/',header,re.M)),'nodes':nodes}
+ return {'size':[int(size[1]),int(size[2])],'apps':apps,'package':focus[1],'activity':focus[2],'launcher':bool(re.search(r'^LAUNCHER '+re.escape(focus[1])+r'/',header,re.M)),'nodes':nodes}
 
 def action_command(d,obs):
  action=d.get('action')
@@ -85,7 +85,7 @@ class Job:
 class Mailbox:
  def __init__(self,clock=time.monotonic):self.clock=clock;self.lock=threading.RLock();self.jobs={};self.high={}
  def _live(self,j):
-  if j.cancelled or self.clock()-j.created>180 or self.clock()-j.touched>15:
+  if j.cancelled or self.clock()-j.created>180 or self.clock()-j.touched>45:
    j.cancelled=True;j.event.set();raise ValueError('turn cancelled or expired')
  def _job(self,device,session,seq):
   j=self.jobs.get(device)
@@ -116,6 +116,7 @@ class Mailbox:
   with self.lock:
    j=self._job(device,session,seq)
    if not j.command or not j.delivered or ident!=j.command['id']:raise ValueError('stale acknowledgement')
+   if not isinstance(output,str) or len(output.encode())>(786432 if j.command['op']=='screenshot' else 48000):raise ValueError('command output size')
    j.result=(ok,output,error);j.command=None;j.touched=self.clock();j.event.set()
  def execute(self,j,command):
   self.offer(j,command)

@@ -29,7 +29,8 @@ class Conversation:
   with self.mailbox.lock:
    now=self.mailbox.clock()
    for j in self.mailbox.jobs.values():
-    if now-j.touched>(60 if j.done else 15) or now-j.created>180:
+    if now-j.touched>(60 if j.done else 45) or now-j.created>180:
+     if not j.cancelled and not j.done:self.status(j.device,'error','设备执行连接已中断，本次任务未完成；请检查连接后重试。')
      j.cancelled=True;j.audio=b'';j.event.set()
   with self.history_lock:
    for key,stamp in list(self.history_times.items()):
@@ -46,6 +47,9 @@ class Conversation:
     self.mailbox._live(j)
     d=self.model(messages);self.mailbox._live(j)
     action=d.get('action');reply=d.get('reply','')
+    if action not in ('reply','stop') and os.environ.get('EPAPER_PHONE_BACKEND')=='autoglm':
+     from .autoglm_adapter import run as run_phone
+     phone_requested=True;final,state=run_phone(self.mailbox,j,text,self.status);break
     if action in ('reply','done','stop') and (not isinstance(reply,str) or (action=='reply' and not reply.strip())):
      messages.append({'role':'user','content':'返回格式有误：请完成上一条用户请求，reply必须是非空中文字符串，不能为null。不要虚构操作。'})
      continue

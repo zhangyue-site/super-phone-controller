@@ -34,7 +34,8 @@ class DialogueTests(unittest.TestCase):
  def test_expired_or_duplicate_turn_cannot_start(self):
   now=[0];m=dialogue.Mailbox(clock=lambda:now[0]);j=m.create('one','a'*16,1)
   with self.assertRaises(ValueError):m.create('one','a'*16,1)
-  now[0]=16
+  now[0]=20;m._live(j) # screenshot/HTTP round trips have a 45-second lease
+  now[0]=46
   with self.assertRaises(ValueError):m.offer(j,{'op':'home'})
  def test_completion_requires_current_evidence(self):
   obs=dialogue.parse_observation(XML)
