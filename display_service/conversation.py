@@ -49,6 +49,8 @@ class Conversation:
     self.mailbox._live(j)
     d=self.model(messages);self.mailbox._live(j)
     action=d.get('action');reply=d.get('reply','')
+    if action not in ('reply','stop') and os.environ.get('EPAPER_PHONE_BACKEND')=='hid_pending':
+     phone_requested=True;final='截图和鼠标控制通路正在接入，当前未执行手机操作。';state='error';break
     if action not in ('reply','stop') and os.environ.get('EPAPER_PHONE_BACKEND')=='autoglm':
      from .autoglm_adapter import run as run_phone
      phone_requested=True;final,state=run_phone(self.mailbox,j,text,self.status);break

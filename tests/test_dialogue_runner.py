@@ -65,3 +65,12 @@ class RunnerTests(unittest.TestCase):
   c=Conversation(m,status=lambda *a,**kw:None)
   now[0]=10;c.expire();self.assertFalse(j.cancelled)
   now[0]=46;c.expire();self.assertTrue(j.cancelled)
+
+ def test_hid_pending_does_not_fall_back_to_adb_actions(self):
+  from unittest.mock import patch
+  m=Mailbox();j=m.create('d','a'*16,1)
+  def forbidden(*a):raise AssertionError('must not execute ADB phone action')
+  m.execute=forbidden
+  with patch.dict('os.environ',{'EPAPER_PHONE_BACKEND':'hid_pending'}):
+   Conversation(m,lambda messages:{'action':'observe'},lambda text:b'\1\0'*100,lambda *a,**kw:None).run(j,'打开微信找到测试联系人')
+  self.assertEqual(j.state,'error');self.assertIn('未执行',j.reply)
