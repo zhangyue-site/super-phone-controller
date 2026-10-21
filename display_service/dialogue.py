@@ -77,6 +77,11 @@ class Job:
  result:tuple|None=None
  audio:bytes=b''
  reply:str=''
+ video:bytes=b''
+ video_sequence:int=0
+ video_received:float=0
+ video_width:int=0
+ video_height:int=0
  speech_error:bool=False
  state:str='thinking'
  done:bool=False
@@ -86,7 +91,7 @@ class Mailbox:
  def __init__(self,clock=time.monotonic):self.clock=clock;self.lock=threading.RLock();self.jobs={};self.high={}
  def _live(self,j):
   if j.cancelled or self.clock()-j.created>180 or self.clock()-j.touched>45:
-   j.cancelled=True;j.event.set();raise ValueError('turn cancelled or expired')
+   j.cancelled=True;j.video=b'';j.event.set();raise ValueError('turn cancelled or expired')
  def _job(self,device,session,seq):
   j=self.jobs.get(device)
   if not j or (j.session,j.sequence)!=(session,seq):raise ValueError('unknown turn')
@@ -97,7 +102,7 @@ class Mailbox:
    if seq<=self.high.get(key,0):raise ValueError('duplicate turn')
    old=self.jobs.get(device)
    if old and not old.done and not old.cancelled and self.clock()-old.touched<=15:raise ValueError('turn busy')
-   if old:old.cancelled=True;old.event.set()
+   if old:old.cancelled=True;old.video=b'';old.event.set()
    self.high[key]=seq
    if len(self.high)>256:self.high.pop(next(iter(self.high)))
    now=self.clock();j=Job(device,session,seq,now,now);self.jobs[device]=j;return j
@@ -134,6 +139,23 @@ class Mailbox:
   with self.lock:
    j=self.jobs.get(device)
    if j and (session is None or (j.session==session and j.sequence<=sequence)):
-    j.cancelled=True;j.audio=b'';j.event.set()
+    j.cancelled=True;j.audio=b'';j.video=b'';j.event.set()
+ def ingest_video(self,device,session,seq,frame_sequence,payload,codec,decoder=None):
+  from .bridge_video import decode
+  if type(frame_sequence)!=int or not 1<=frame_sequence<=2147483647:raise ValueError('frame sequence')
+  with self.lock:
+   j=self._job(device,session,seq)
+   if j.done or frame_sequence<=j.video_sequence:raise ValueError('stale video')
+   j.video_sequence=frame_sequence;j.video=b'';received=self.clock()
+  jpeg,width,height=(decoder or decode)(payload,codec)
+  with self.lock:
+   if self._job(device,session,seq) is not j or j.done or j.video_sequence!=frame_sequence or self.clock()-received>8:raise ValueError('video superseded')
+   j.video=jpeg;j.video_width=width;j.video_height=height;j.video_received=received;j.touched=self.clock()
+   return dict(accepted=True,frame=frame_sequence,width=width,height=height,source='bridge_declared',phone_execution=False)
+ def latest_video(self,j,max_age=2):
+  with self.lock:
+   self._live(j)
+   if j.done or not j.video or self.clock()-j.video_received>max_age:raise ValueError('fresh video required')
+   return j.video,j.video_sequence,j.video_width,j.video_height
  def audio(self,device,session,seq):
   with self.lock:return self._job(device,session,seq).audio
