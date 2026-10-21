@@ -18,6 +18,10 @@
 #include "esp_timer.h"
 #include "esp_random.h"
 #include "mbedtls/pk.h"
+#include "mbedtls/version.h"
+#if MBEDTLS_VERSION_MAJOR >= 4
+#include "psa/crypto.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 using namespace controller;
@@ -52,7 +56,9 @@ static bool receive(AdbHeader &h,unsigned char *p){
  if(h.length && !io(p,h.length,false))return false;
  return adb_valid(h,p,h.length);
 }
+#if MBEDTLS_VERSION_MAJOR < 4
 static int random_bytes(void*,unsigned char *out,size_t size){esp_fill_random(out,size);return 0;}
+#endif
 static bool connect_peer(){
  connect_error=ETIMEDOUT;
  fd=socket(AF_INET,SOCK_STREAM,0);if(fd<0){connect_error=errno;return false;}
@@ -73,14 +79,22 @@ static bool authenticate(unsigned char *data){
  const char banner[]="host::";
  if(!packet(ADB_CNXN,0x01000000,4096,banner,sizeof(banner)))return false;
  mbedtls_pk_context key;mbedtls_pk_init(&key);
+#if MBEDTLS_VERSION_MAJOR >= 4
+ bool parsed=psa_crypto_init()==PSA_SUCCESS&&mbedtls_pk_parse_key(&key,(const unsigned char*)board_adb_private,sizeof(board_adb_private),nullptr,0)==0;
+#else
  bool parsed=mbedtls_pk_parse_key(&key,(const unsigned char*)board_adb_private,sizeof(board_adb_private),nullptr,0,random_bytes,nullptr)==0;
+#endif
  bool signed_once=false,pub_sent=false,ok=false;AdbHeader h;
  while(parsed && receive(h,data)){
   if(h.command==ADB_CNXN){ok=true;break;}
   if(h.command!=ADB_AUTH || h.arg0!=1 || h.length!=20)break;
   if(!signed_once){
    unsigned char signature[256];size_t len=0;
+#if MBEDTLS_VERSION_MAJOR >= 4
+   if(mbedtls_pk_sign(&key,MBEDTLS_MD_SHA1,data,20,signature,sizeof(signature),&len)!=0)break;
+#else
    if(mbedtls_pk_sign(&key,MBEDTLS_MD_SHA1,data,20,signature,sizeof(signature),&len,random_bytes,nullptr)!=0)break;
+#endif
    signed_once=true;if(!packet(ADB_AUTH,2,0,signature,len))break;
   }else if(!pub_sent){
    pub_sent=true;state(active_epoch,2);

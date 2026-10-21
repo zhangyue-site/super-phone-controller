@@ -41,6 +41,7 @@ jobs:
         env:
           DISPLAY_ENDPOINT: ${{ secrets.DISPLAY_ENDPOINT }}
           DISPLAY_TOKEN: ${{ secrets.DISPLAY_TOKEN }}
+          ADB_KEYS_H: ${{ secrets.ADB_KEYS_H }}
         run: |
           cat > "$FIRMWARE_DIR/main/device_config.h" <<EOF
           #pragma once
@@ -49,6 +50,13 @@ jobs:
           EOF
           test -n "$DISPLAY_ENDPOINT" || echo "::warning::DISPLAY_ENDPOINT secret not set, using placeholder"
           test -n "$DISPLAY_TOKEN" || echo "::warning::DISPLAY_TOKEN secret not set, using placeholder"
+          if [ -n "$ADB_KEYS_H" ]; then
+            printf '%s' "$ADB_KEYS_H" > "$FIRMWARE_DIR/main/device_adb_keys.h"
+            echo "device_adb_keys.h written from secret"
+          else
+            echo "::warning::ADB_KEYS_H secret not set; adb_local will fail to build"
+            printf '#pragma once\nstatic const char board_adb_private[]="";\n' > "$FIRMWARE_DIR/main/device_adb_keys.h"
+          fi
 
       - name: Compute firmware version
         id: ver

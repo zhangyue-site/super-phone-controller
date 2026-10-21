@@ -6,6 +6,7 @@
 #include <string.h>
 #include <math.h>
 #include "esp_random.h"
+#include "esp_timer.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
 #include "driver/i2c_master.h"
@@ -18,7 +19,11 @@ static std::atomic<bool> held(false),cancelled(false);
 static std::atomic<int> stage(0);
 static std::atomic<uint32_t> adb_consent(0);
 static std::atomic<bool> diagnostic(false),prepare_only(false);
-static TaskHandle_t worker;
+static TaskHandle_t worker,stream_worker;
+static VoiceStream stream;
+static void upload_run(void*){
+ for(;;){ulTaskNotifyTake(pdTRUE,portMAX_DELAY);bool ok=controller_voice_stream_upload(stream);stream.result=ok?1:-1;}
+}
 static esp_codec_dev_handle_t mic;
 static bool attempted=false;
 static char session[17];
@@ -75,10 +80,14 @@ static void run(void*){
   esp_codec_dev_sample_info_t fs={};fs.sample_rate=16000;fs.channel=2;fs.bits_per_sample=16;
   if(esp_codec_dev_open(mic,&fs)!=ESP_CODEC_DEV_OK){state(5);continue;}
   esp_codec_dev_set_in_gain(mic,30.0);
+  if(!test){
+   stream.pcm=(unsigned char*)pcm;stream.bytes=0;stream.done=false;stream.abort=false;stream.result=0;stream.finished_at=0;stream.sequence=sequence;
+   xTaskNotifyGive(stream_worker);
+  }
   // Every open restarts RX and resets its DMA queue; no pre-hold audio survives.
   // Discard codec startup transients while the local recording indicator prepares.
   bool warmed=true;
-  for(int i=0;i<64 && !cancelled && (test || held);++i){
+  for(int i=0;i<8 && !cancelled && (test || held);++i){
    if(esp_codec_dev_read(mic,stereo,sizeof(stereo))!=ESP_CODEC_DEV_OK){warmed=false;break;}
   }
   state(1);
@@ -87,6 +96,7 @@ static void run(void*){
    if(esp_codec_dev_read(mic,stereo,sizeof(stereo))!=ESP_CODEC_DEV_OK){ok=false;break;}
    if(cancelled || (!test && !held))break;
    for(unsigned i=0;i<256 && count<(test?16000u:160000u);++i)pcm[count++]=stereo[i*2];
+   if(!test){stream.bytes=count*2;if(stream.result<0){ok=false;break;}}
   }
   esp_codec_dev_close(mic);
   if(test){
@@ -94,15 +104,15 @@ static void run(void*){
    ESP_LOGI("voice","MIC TEST samples=%u rms=%.1f peak=%d; audio discarded, no upload",count,count?sqrt(squares/count):0,peak);
    state(ok?0:5);continue;
   }
+  stream.finished_at=esp_timer_get_time();stream.abort=cancelled||!ok||count<6400;stream.done=true;
+  if(!stream.abort)state(2);
+  while(stream.result==0){if(cancelled)stream.abort=true;vTaskDelay(pdMS_TO_TICKS(10));}
   if(cancelled){state(0);continue;}
-  if(!ok || count<6400){state(5);continue;}
-  state(2);
-  bool uploaded=controller_voice_upload((unsigned char*)pcm,count*2,sequence);
-  if(cancelled){state(0);continue;}
+  bool uploaded=stream.result==1;
   state(uploaded?3:5);if(uploaded)controller_voice_changed(true);
  }
 }
-void controller_voice_init(){snprintf(session,sizeof(session),"%08x%08x",(unsigned)esp_random(),(unsigned)esp_random());xTaskCreate(run,"voice",6144,nullptr,4,&worker);}
+void controller_voice_init(){snprintf(session,sizeof(session),"%08x%08x",(unsigned)esp_random(),(unsigned)esp_random());xTaskCreate(upload_run,"voice_stream",8192,nullptr,3,&stream_worker);xTaskCreate(run,"voice",6144,nullptr,4,&worker);}
 static void begin_voice_request(){
  adb_consent=controller_adb_ticket();record_sequence=next_sequence.fetch_add(1);cancelled=false;held=true;xTaskNotifyGive(worker);
 }
