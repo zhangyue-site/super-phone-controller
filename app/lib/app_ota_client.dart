@@ -24,7 +24,7 @@ class AppOtaClient {
   }
 
   Uri _uri(String path) => Uri.parse(
-      base.toString().replaceFirst(RegExp(r'/$'), '') + '/app-ota/' + path);
+      "${base.toString().replaceFirst(RegExp(r'/$'), '')}/app-ota/$path");
   Future<Map<String, dynamic>> _post(
       String path, Map<String, dynamic> body) async {
     final response = await _client
@@ -33,11 +33,11 @@ class AppOtaClient {
             body: jsonEncode(body))
         .timeout(const Duration(seconds: 25));
     if (response.statusCode != 200) {
-      throw Exception(
-          '升级授权失败或已过期，请重新连接后重试（' + response.statusCode.toString() + '）');
+      throw Exception('升级授权失败或已过期，请重新连接后重试（${response.statusCode}）');
     }
-    if (response.bodyBytes.length > 4096)
+    if (response.bodyBytes.length > 4096) {
       throw const FormatException('升级服务响应过大');
+    }
     final dynamic obj = jsonDecode(response.body);
     if (obj is! Map<String, dynamic>) throw const FormatException('升级服务响应无效');
     return obj;
@@ -75,12 +75,13 @@ class AppOtaClient {
       throw const FormatException('固件下载凭证无效');
     }
     final request = http.Request('GET', _uri('image'));
-    request.headers['Authorization'] = 'Bearer ' + ticket;
+    request.headers['Authorization'] = 'Bearer $ticket';
     final response =
         await _client.send(request).timeout(const Duration(seconds: 25));
     if (response.statusCode != 200) throw Exception('固件下载失败，请重试');
-    if (response.contentLength != null && response.contentLength != size)
+    if (response.contentLength != null && response.contentLength != size) {
       throw const FormatException('固件下载长度不符');
+    }
     final builder = BytesBuilder(copy: false);
     var received = 0;
     await for (final chunk

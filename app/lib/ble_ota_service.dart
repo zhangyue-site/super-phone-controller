@@ -206,7 +206,9 @@ class BleOtaService {
         final current = await readInfo();
         if (session.cancelled) throw StateError('已停止等待启动确认');
         if (current != null &&
-            current.confirms(before, target.version, target.elfSha256)) return;
+            current.confirms(before, target.version, target.elfSha256)) {
+          return;
+        }
         if (current != null && current.device != before.device) {
           throw StateError('重连设备身份不符');
         }
@@ -263,8 +265,9 @@ class BleOtaService {
 
     try {
       final before = await readInfo();
-      if (before == null || device == null)
+      if (before == null || device == null) {
         throw StateError('请先更新控制板基础固件以支持重启确认');
+      }
       checkActive();
       yield const PushProgress(step: '连接设备', log: '设备连接就绪');
 
@@ -346,7 +349,7 @@ class BleOtaService {
           step: '升级完成',
           done: true,
           success: true,
-          log: '已确认新版本 ' + target.version + ' 启动、自检通过',
+          log: '已确认新版本 ${target.version} 启动、自检通过',
         );
       } else {
         yield PushProgress(
@@ -356,7 +359,7 @@ class BleOtaService {
         );
       }
     } on TimeoutException {
-      yield const PushProgress(
+      yield PushProgress(
           done: true,
           success: false,
           log: verified ? '固件已写入，但重启确认超时，请检查控制板版本' : '等待板子校验超时，请重试');

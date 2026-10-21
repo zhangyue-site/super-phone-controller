@@ -134,8 +134,9 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         final result = await client.download(
             board.device, widget.service.signDownloadChallenge);
         final image = FirmwareImage.parse(result.bytes);
-        if (image.version != result.version)
+        if (image.version != result.version) {
           throw const FormatException('下载版本与固件不符');
+        }
         await _loadBytes(result.bytes, 'app.bin');
       } finally {
         client.close();
