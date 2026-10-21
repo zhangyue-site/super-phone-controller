@@ -20,7 +20,7 @@ class RunnerTests(unittest.TestCase):
   j,seen=self.run_turn([{'action':'observe'},{'action':'open_settings'},{'action':'done','reply':'系统设置已打开','evidence':'设置'}],[XML,XML,XML,XML])
   self.assertEqual(j.state,'done');self.assertIn('已打开',j.reply)
  def test_unverified_completion_not_success(self):
-  j,_=self.run_turn([{'action':'done','reply':'完成','evidence':'伪造'}],[])
+  j,_=self.run_turn([{'action':'done','reply':'完成','evidence':'伪造'}],[XML])
   self.assertEqual(j.state,'error');self.assertNotEqual(j.reply,'完成')
  def test_speech_failure_does_not_claim_spoken_completion(self):
   m=Mailbox();j=m.create('d','a'*16,1)
@@ -34,3 +34,15 @@ class RunnerTests(unittest.TestCase):
   foreign=current.replace('com.example.app','com.unexpected.app')
   j,_=self.run_turn([{'action':'observe'},{'action':'launch','component':'com.example.app/.MainActivity'},{'action':'tap','node':0},{'action':'done','reply':'已完成','evidence':'账单'}],[initial,initial,'ok',current,current,'ok',foreign],task='打开账单应用')
   self.assertEqual(j.state,'error')
+ def test_incorrect_completion_quote_can_be_corrected_without_replaying_input(self):
+  j,seen=self.run_turn([{'action':'observe'},{'action':'open_settings'},{'action':'done','reply':'已打开','evidence':'系统设置'},{'action':'done','reply':'已打开','evidence':'设置'}],[XML,XML,'ok',XML])
+  self.assertEqual(j.state,'done');self.assertEqual(len(seen),4)
+ def test_null_reply_is_rejected_and_repaired_before_speaking(self):
+  j,seen=self.run_turn([{'action':'reply','reply':None},{'action':'reply','reply':'你叫小乐'}],[])
+  self.assertEqual(j.state,'done');self.assertEqual(j.reply,'你叫小乐');self.assertEqual(len(seen),2)
+
+ def test_phone_command_without_observation_first_reads_and_replans(self):
+  initial=XML.replace('SIZE 1080x2400','SIZE 1080x2400\nAPPS_BEGIN\ncom.example.app/.MainActivity\nAPPS_END')
+  current=XML.replace('com.android.settings','com.example.app').replace('text="设置"','text="账单"')
+  j,_=self.run_turn([{'action':'launch','component':'com.guessed/.Wrong'},{'action':'launch','component':'com.example.app/.MainActivity'},{'action':'done','reply':'已打开','evidence':'账单'}],[initial,initial,'ok',current],task='打开账单应用')
+  self.assertEqual(j.state,'done')
