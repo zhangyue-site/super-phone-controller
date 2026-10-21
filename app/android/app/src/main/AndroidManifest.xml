@@ -1,5 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
     <!-- Android 12+ 需要显式声明蓝牙权限；neverForLocation 表示不靠蓝牙推断位置，
          这样可以完全不申请定位权限，用户看到的风险提示也更少。 -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
@@ -17,6 +19,7 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher">
+        <service android:name=".ScreenShareService" android:exported="false" android:foregroundServiceType="mediaProjection" android:stopWithTask="true"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

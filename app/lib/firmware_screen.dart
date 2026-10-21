@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'app_ota_client.dart';
+import 'screen_share.dart';
 
 import 'ble_ota_service.dart';
 import 'firmware_image.dart';
@@ -40,6 +41,8 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
   String? _error;
   String _deviceVersion = '';
   bool _connected = false;
+  String _screenStatus = '未共享';
+  Timer? _screenTimer;
   StreamSubscription? _connectionSub;
 
   @override
@@ -50,6 +53,9 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       if (mounted && state != BluetoothConnectionState.connected) {
         setState(() => _connected = false);
       }
+    });
+    _screenTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      try { final status = await ScreenShare.status(); if (mounted) setState(() => _screenStatus = status); } catch (_) { }
     });
     _prepare();
   }
@@ -90,9 +96,23 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
 
   @override
   void dispose() {
+    _screenTimer?.cancel();
     _connectionSub?.cancel();
     widget.service.disconnect();
     super.dispose();
+  }
+
+  Future<void> _shareScreen() async {
+    if (_busy || !_connected) return;
+    final accepted = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('共享屏幕给你的 AI'),
+      content: const Text('当前手机画面将传给云端 AI。操作由控制板 HID 完成，App 只提供画面。请选择共享整个屏幕，才能在桌面和微信之间导航。你可随时从系统投屏入口或通知停止；一次共享约 4 分钟。'),
+      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('继续系统确认'))]));
+    if (accepted != true || !mounted) return;
+    setState(() { _busy = true; _error = null; });
+    try { await ScreenShare.start(widget.service); if (mounted) setState(() => _screenStatus = '正在启动共享'); }
+    catch (e) { if (mounted) setState(() => _error = '屏幕共享：$e'); }
+    finally { if (mounted) setState(() => _busy = false); }
   }
 
   Future<void> _pickLocal() async {
@@ -240,6 +260,13 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
                 label: const Text('重新连接控制板')),
             const SizedBox(height: 16),
           ],
+          Card(child: Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('AI 手机画面', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text(_screenStatus),
+            FilledButton.icon(onPressed: _busy || !_connected ? null : _shareScreen, icon: const Icon(Icons.screen_share_outlined), label: const Text('共享屏幕给 AI')),
+            TextButton(onPressed: () async { await ScreenShare.stop(); if (mounted) setState(() => _screenStatus = '已停止共享'); }, child: const Text('停止共享')),
+          ]))),
+          const SizedBox(height: 12),
           const InfoBanner(
               icon: Icons.info_outline, text: '第 2 步：选择固件。传输时请保持手机靠近控制板，避免断电。'),
           const SizedBox(height: 16),
