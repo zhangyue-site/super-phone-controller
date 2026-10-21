@@ -5,7 +5,7 @@ import hashlib,hmac,io,json,os,threading,time,subprocess
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse,parse_qs
-from . import events,firmware
+from . import events,firmware,app_ota
 from .conversation import CONVERSATION
 from .audio_stream import read_chunks
 from .model import quota_rows
@@ -51,6 +51,7 @@ class Handler(BaseHTTPRequestHandler):
         return None
     def do_GET(self):
         self.connection.settimeout(10)
+        if app_ota.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         parsed=urlparse(self.path)
@@ -75,6 +76,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply(200,im.tobytes(),'application/octet-stream')
     def do_POST(self):
         self.connection.settimeout(10)
+        if app_ota.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         if self.path=='/firmware/report':

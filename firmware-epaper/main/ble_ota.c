@@ -1,4 +1,8 @@
 #include "ble_ota.h"
+#include "device_config.h"
+#ifndef DISPLAY_DEVICE_ID
+#define DISPLAY_DEVICE_ID "epaper-01"
+#endif
 #include "ota_generation.h"
 #include <string.h>
 #include <stdbool.h>
@@ -11,6 +15,7 @@
 #include "esp_app_format.h"
 #include "esp_partition.h"
 #include "esp_system.h"
+#include "esp_random.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -39,6 +44,9 @@ static bool s_sha_live = false;
 
 static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_status_handle = 0;
+static uint8_t s_auth_proof[32];
+static bool s_auth_ready;
+static char s_boot_nonce[33];
 
 // 手机写入的片不进回调直接处理：回调里写 flash 会卡住 NimBLE host 任务，
 // 导致连接超时。统一塞进队列，由 writer 任务串行处理。
@@ -240,6 +248,47 @@ static const ble_uuid128_t SVC_UUID = BLE_UUID128_INIT(0x01,0,0,0,0,0,0,0,0x61,0
 static const ble_uuid128_t CTRL_UUID = BLE_UUID128_INIT(0x02,0,0,0,0,0,0,0,0x61,0x74,0x6f,0x2d,0x61,0x74,0x6f,0x6f);
 static const ble_uuid128_t STAT_UUID = BLE_UUID128_INIT(0x03,0,0,0,0,0,0,0,0x61,0x74,0x6f,0x2d,0x61,0x74,0x6f,0x6f);
 
+static const ble_uuid128_t INFO_UUID = BLE_UUID128_INIT(0x04,0,0,0,0,0,0,0,0x61,0x74,0x6f,0x2d,0x61,0x74,0x6f,0x6f);
+static const ble_uuid128_t AUTH_UUID = BLE_UUID128_INIT(0x05,0,0,0,0,0,0,0,0x61,0x74,0x6f,0x2d,0x61,0x74,0x6f,0x6f);
+static void hex_string(const uint8_t *data, size_t len, char *out) {
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i=0;i<len;i++) { out[i*2]=hex[data[i]>>4]; out[i*2+1]=hex[data[i]&15]; }
+    out[len*2]=0;
+}
+static int info_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    if(ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR)return BLE_ATT_ERR_UNLIKELY;
+    const esp_app_desc_t *desc=esp_app_get_description();
+    esp_ota_img_states_t state=ESP_OTA_IMG_UNDEFINED;
+    esp_ota_get_state_partition(esp_ota_get_running_partition(),&state);
+    char elf[65],buf[384];hex_string(desc->app_elf_sha256,32,elf);
+    int n=snprintf(buf,sizeof(buf),"{\"protocol\":1,\"device\":\"%s\",\"version\":\"%s\",\"elfSha256\":\"%s\",\"boot\":\"%s\",\"imageState\":%d}",DISPLAY_DEVICE_ID,desc->version,elf,s_boot_nonce,(int)state);
+    if(n<0 || n>=(int)sizeof(buf))return BLE_ATT_ERR_INSUFFICIENT_RES;
+    return os_mbuf_append(ctxt->om,buf,n)==0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+static int auth_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    if(ctxt->op==BLE_GATT_ACCESS_OP_READ_CHR) {
+        if(!s_auth_ready)return BLE_ATT_ERR_UNLIKELY;
+        return os_mbuf_append(ctxt->om,s_auth_proof,32)==0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    if(ctxt->op!=BLE_GATT_ACCESS_OP_WRITE_CHR || OS_MBUF_PKTLEN(ctxt->om)!=32)return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    s_auth_ready=false;memset(s_auth_proof,0,sizeof(s_auth_proof));
+    uint8_t message[128];const char *prefix="PCFLASH1\n" DISPLAY_DEVICE_ID "\n";
+    size_t n=strlen(prefix);if(n+32>sizeof(message))return BLE_ATT_ERR_UNLIKELY;
+    memcpy(message,prefix,n);ble_hs_mbuf_to_flat(ctxt->om,message+n,32,NULL);
+    psa_key_attributes_t attributes=PSA_KEY_ATTRIBUTES_INIT;psa_key_id_t key=0;
+    psa_set_key_usage_flags(&attributes,PSA_KEY_USAGE_SIGN_MESSAGE);
+    psa_set_key_algorithm(&attributes,PSA_ALG_HMAC(PSA_ALG_SHA_256));
+    psa_set_key_type(&attributes,PSA_KEY_TYPE_HMAC);
+    psa_status_t result=psa_import_key(&attributes,(const uint8_t *)DISPLAY_TOKEN,strlen(DISPLAY_TOKEN),&key);
+    psa_reset_key_attributes(&attributes);size_t length=0;
+    if(result==PSA_SUCCESS) {
+        result=psa_mac_compute(key,PSA_ALG_HMAC(PSA_ALG_SHA_256),message,n+32,s_auth_proof,32,&length);
+        psa_destroy_key(key);
+    }
+    s_auth_ready=result==PSA_SUCCESS && length==32;
+    return s_auth_ready ? 0 : BLE_ATT_ERR_UNLIKELY;
+}
+
 static void notify_status(void) {
     if (s_conn == BLE_HS_CONN_HANDLE_NONE || !s_status_handle) return;
     uint8_t buf[4] = {(uint8_t)atomic_load(&s_state), (uint8_t)atomic_load(&s_progress),
@@ -294,6 +343,8 @@ static const struct ble_gatt_svc_def GATT_SVCS[] = {
                 .val_handle = &s_status_handle,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
             },
+            { .uuid=&INFO_UUID.u, .access_cb=info_access, .flags=BLE_GATT_CHR_F_READ },
+            { .uuid=&AUTH_UUID.u, .access_cb=auth_access, .flags=BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE },
             {0},
         },
     },
@@ -321,6 +372,7 @@ static int gap_event(struct ble_gap_event *event, void *) {
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnected reason=%d", event->disconnect.reason);
         s_conn = BLE_HS_CONN_HANDLE_NONE;
+        s_auth_ready=false;memset(s_auth_proof,0,sizeof(s_auth_proof));
         // 连接断了但传输没完成：不能继续写，必须回滚，否则槽位被半包固件占着。
         ble_ota_cancel();
         advertise();
@@ -385,6 +437,7 @@ int ble_ota_start(void) {
     static bool started = false;
     if (started) return 0;
     started = true;
+    uint8_t nonce[16];esp_fill_random(nonce,sizeof(nonce));hex_string(nonce,sizeof(nonce),s_boot_nonce);
 
     s_queue = xQueueCreate(48, sizeof(chunk_t));
     if (!s_queue) return -1;
