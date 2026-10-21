@@ -1,5 +1,6 @@
 #include "voice.h"
 #include "audio_feedback.h"
+#include "audio_output_policy.h"
 #include "conversation_policy.h"
 #include "dialogue.h"
 #include "voice_lifecycle.h"
@@ -72,7 +73,7 @@ static bool init_mic(){
  if(i2c_master_probe(bus,0x18,100)!=ESP_OK){ESP_LOGW("voice","ES8311 not responding");return false;}
  i2s_chan_handle_t tx,rx;
  i2s_chan_config_t channel=I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0,I2S_ROLE_MASTER);
- channel.dma_desc_num=4;channel.dma_frame_num=128;
+ channel.dma_desc_num=controller::audio_dma_descriptors;channel.dma_frame_num=controller::audio_dma_frames;
  if(i2s_new_channel(&channel,&tx,&rx)!=ESP_OK)return false;
  i2s_std_config_t cfg={};cfg.clk_cfg=I2S_STD_CLK_DEFAULT_CONFIG(16000);
  cfg.slot_cfg=I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,I2S_SLOT_MODE_STEREO);
@@ -98,16 +99,33 @@ static bool play_pcm(const unsigned char *data,unsigned size,bool before_recordi
  esp_codec_dev_sample_info_t fs={};fs.sample_rate=16000;fs.channel=2;fs.bits_per_sample=16;
  if(esp_codec_dev_open(mic,&fs)!=ESP_CODEC_DEV_OK)return false;
  esp_codec_dev_set_out_mute(mic,false);
- int16_t stereo[512];unsigned used=0;bool ok=true;
- while(used<size&&(!held||before_recording)&&!output_muted&&epoch==playback_epoch.load()){
+ int16_t stereo[512];unsigned used=0;bool ok=true,io_ok=true;
+ auto active=[&](){return (!held||before_recording)&&!output_muted&&output_volume>0&&epoch==playback_epoch.load();};
+ auto silence=[&](unsigned frames){
+  memset(stereo,0,sizeof(stereo));
+  while(frames&&active()){
+   unsigned count=frames>256?256:frames;
+   if(esp_codec_dev_write(mic,stereo,count*4)!=ESP_CODEC_DEV_OK){io_ok=false;return false;}
+   frames-=count;
+  }
+  return !frames;
+ };
+ esp_codec_dev_set_out_vol(mic,output_volume.load());
+ ok=silence(controller::audio_warmup_frames);
+ while(ok&&used<size&&active()){
   unsigned n=(size-used)/2;if(n>256)n=256;
   for(unsigned i=0;i<n;i++){int16_t v=(int16_t)(data[used+2*i]|(data[used+2*i+1]<<8));stereo[2*i]=v;stereo[2*i+1]=v;}
   esp_codec_dev_set_out_vol(mic,output_volume.load());
-  if(esp_codec_dev_write(mic,stereo,n*4)!=ESP_CODEC_DEV_OK){ok=false;break;}
+  if(esp_codec_dev_write(mic,stereo,n*4)!=ESP_CODEC_DEV_OK){ok=false;io_ok=false;break;}
   used+=n*2;
  }
+ // write() queues DMA; it does not wait for the last sample to reach the DAC.
+ // Clock silence through the entire ring before muting/closing. Cancellation
+ // bypasses the drain so STOP never waits for the tail.
+ if(ok&&used==size&&active())ok=silence(controller::audio_tail_frames);
+ ESP_LOGI("voice","OUTPUT bytes=%u/%u drained=%d interrupted=%d",used,size,ok&&used==size,!active());
  esp_codec_dev_set_out_mute(mic,true);esp_codec_dev_close(mic);
- return ok&&(!held||before_recording)&&(output_muted||epoch==playback_epoch.load());
+ return io_ok&&(!held||before_recording)&&(output_muted||output_volume==0||epoch==playback_epoch.load());
 }
 bool controller_audio_play_pcm(const unsigned char *data,unsigned size){return play_pcm(data,size);}
 static void play_feedback(controller::Feedback cue,bool before_recording=false){
