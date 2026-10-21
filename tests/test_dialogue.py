@@ -50,3 +50,21 @@ class DialogueTests(unittest.TestCase):
   obs['apps']=['com.example.app/.MainActivity']
   self.assertEqual(dialogue.action_command({'action':'launch','component':'com.example.app/.MainActivity'},obs)['op'],'launch')
   with self.assertRaises(ValueError):dialogue.action_command({'action':'launch','component':'com.unlisted/.MainActivity'},obs)
+
+ def test_command_failure_preserves_known_reason_without_replay(self):
+  import threading,time
+  m=dialogue.Mailbox();j=m.create('one','a'*16,1);errors=[]
+  def worker():
+   try:m.execute(j,{'op':'observe'})
+   except dialogue.PhoneCommandError as error:errors.append(error.code)
+  t=threading.Thread(target=worker);t.start()
+  until=time.monotonic()+2
+  while time.monotonic()<until:
+   c=m.poll('one','a'*16,1)
+   if c['op']=='observe':break
+   time.sleep(.005)
+  m.ack('one','a'*16,1,c['id'],False,'',error='screen_changed');t.join(2)
+  self.assertEqual(errors,['screen_changed'])
+  self.assertEqual(m.poll('one','a'*16,1)['op'],'wait')
+ def test_untrusted_command_error_is_not_spoken(self):
+  with self.assertRaises(ValueError):dialogue.PhoneCommandError('arbitrary user UI text')

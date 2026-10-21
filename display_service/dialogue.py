@@ -4,6 +4,12 @@ from dataclasses import dataclass,field
 DENY=re.compile(r'发送|支付|付款|转账|购买|充值|删除|清空|授权|权限|登录|退出|保存|提交|开启|关闭|修改|重置|卸载|安装|send|pay|buy|delete|remove|confirm|allow|permission|sign.?in|save|submit|install|reset',re.I)
 NAV=re.compile(r'打开|进入|查看|返回|列表|详情|账单|设置|菜单|分类|首页|明细|记录|关于|帮助|搜索|home|settings|menu|details|list|back|help',re.I)
 
+COMMAND_ERRORS=frozenset(('adb_unavailable','cancelled','busy','invalid_command','observe_failed','screen_changed','app_unavailable','input_failed'))
+class PhoneCommandError(ValueError):
+ def __init__(self,code):
+  if code not in COMMAND_ERRORS:raise ValueError('unknown phone command error')
+  self.code=code;super().__init__(code)
+
 def parse_observation(raw):
  if not isinstance(raw,str) or len(raw.encode())>48000:raise ValueError('observation size')
  start=raw.find('<?xml');start=start if start>=0 else raw.find('<hierarchy');end=raw.rfind('</hierarchy>')
@@ -105,11 +111,12 @@ class Mailbox:
    j=self._job(device,session,seq);j.touched=self.clock()
    if j.command and not j.delivered:j.delivered=True;return dict(j.command)
    return {'op':'done' if j.done else 'wait','state':j.state,'reply':j.reply,'audio':bool(j.audio),'speechError':j.speech_error}
- def ack(self,device,session,seq,ident,ok,output):
+ def ack(self,device,session,seq,ident,ok,output,error=''):
+  if error and error not in COMMAND_ERRORS:raise ValueError('unknown phone command error')
   with self.lock:
    j=self._job(device,session,seq)
    if not j.command or not j.delivered or ident!=j.command['id']:raise ValueError('stale acknowledgement')
-   j.result=(ok,output);j.command=None;j.touched=self.clock();j.event.set()
+   j.result=(ok,output,error);j.command=None;j.touched=self.clock();j.event.set()
  def execute(self,j,command):
   self.offer(j,command)
   until=self.clock()+35
@@ -118,8 +125,8 @@ class Mailbox:
    with self.lock:
     self._live(j)
     if j.result is not None:
-     ok,out=j.result;j.result=None
-     if not ok:raise ValueError('phone command failed; not retried')
+     ok,out,error=j.result;j.result=None
+     if not ok:raise PhoneCommandError(error or 'input_failed')
      return out
   raise TimeoutError('phone acknowledgement timeout; not retried')
  def cancel(self,device,session=None,sequence=None):
