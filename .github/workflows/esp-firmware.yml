@@ -10,7 +10,9 @@ on:
     paths:
       - 'firmware-epaper/**'
       - 'firmware/**'
-      - '.github/workflows/esp-idf.yml'
+      - 'tests/**'
+      - 'tools/test_host.py'
+      - '.github/workflows/esp-firmware.yml'
 permissions:
   contents: read
 env:
@@ -31,6 +33,18 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        run: python -m pip install Pillow
+
+      - name: Host interaction regressions
+        run: |
+          python3 tools/test_host.py
+          python3 -m unittest discover -s tests -v
 
       - name: Free disk
         run: |

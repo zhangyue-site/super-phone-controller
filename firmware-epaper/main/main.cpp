@@ -40,6 +40,7 @@
 #include "ota.h"
 #include "ble_ota.h"
 #include "gesture.h"
+#include "interaction_screens.h"
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
 #include "soc/soc.h"
@@ -189,7 +190,7 @@ static bool paint(epaper_driver_display &display,const uint8_t *frame,bool full)
  return display.healthy();
 }
 // Clock uses UTC+8 explicitly; never display a fabricated time before SNTP sync.
-static void draw_footer(uint8_t *frame,int mode){
+[[maybe_unused]] static void draw_footer(uint8_t *frame,int mode){
  memset(frame+176*25,255,24*25);
  time_t utc=time(nullptr);
  if(utc>=1704067200){
@@ -329,19 +330,27 @@ static void screen_task(void*){
   const int current_page=page.load();
   const bool hid=controller_usb_hid_enabled();
   bool success=false;
-  if(current_page==HOME_PAGE+5){
-   const unsigned char *states[]={ota_state_0,ota_state_1,ota_state_2,ota_state_3,ota_state_4,ota_state_5};
-   memcpy(frame,states[controller_ota_stage()],5000);
+  ble_ota_state_t ble_state;uint8_t ble_progress,ble_error;
+  ble_ota_status(&ble_state,&ble_progress,&ble_error);
+  if(ble_ota_busy()||ble_state==BLE_OTA_READY){
+   memcpy(frame,interaction_ble[(int)ble_state],5000);
+   for(int y=143;y<151;++y)for(int x=8;x<192;++x)
+    if(y==143||y==150||x==8||x==191||x<8+184*ble_progress/100)frame[y*25+x/8]&=~(0x80>>(x%8));
+  }else if(current_page==HOME_PAGE+5){
+   memcpy(frame,interaction_ota[controller_ota_stage()],5000);
   }else if(current_page==HOME_PAGE){
-   memcpy(frame,touch_home_screen,5000);
+   int status=stopped?3:controller_voice_prepared()?2:online?1:0;
+   memcpy(frame,interaction_home[status],5000);
   }else if(current_page==HOME_PAGE+1){
-   memcpy(frame,manual_control_screen,5000);
+   memcpy(frame,interaction_manual[0],5000);
   }else if(current_page==HOME_PAGE+2){
-   memcpy(frame,manual_control_screen_2,5000);
+   memcpy(frame,interaction_manual[1],5000);
   }else if(current_page==HOME_PAGE+3){
-   memcpy(frame,manual_control_screen_3,5000);
+   memcpy(frame,interaction_manual[2],5000);
   }else if(current_page==HOME_PAGE+4){
-   memcpy(frame,manual_control_screen_4,5000);
+   memcpy(frame,interaction_manual[3],5000);
+  }else if(current_page==HOME_PAGE+6){
+   memcpy(frame,interaction_sound[(controller_audio_muted()?6:0)+controller_audio_volume()/20],5000);
   }else if(current_page==2){
    memcpy(frame,hid?mode_enabled_screen:mode_disabled_screen,5000);
   }else if(current_page==PAGE_COUNT-1){
@@ -361,7 +370,7 @@ static void screen_task(void*){
    taskEXIT_CRITICAL(&cache_mux);
    if(!success)memcpy(frame,selected?loading_screen_1:loading_screen_0,5000);
   }
-  if(current_page<=HOME_PAGE)draw_footer(frame,current_page==PAGE_COUNT-1?1:0);
+  memcpy(frame+162*25,interaction_footer,sizeof(interaction_footer));
   if(current_page==HOME_PAGE+5&&controller_ota_stage()==2){
    // Progress is local, drawn without any network round-trip.
    memset(frame+29*25,255,12*25);int percent=controller_ota_progress();
@@ -399,15 +408,21 @@ static void screen_task(void*){
 static void stop_now(){
  controller_event("stop",page.load());
  taskENTER_CRITICAL(&consent_mux);
- controller_adb_cancel();controller_voice_cancel();stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
+ ble_ota_cancel();controller_ota_cancel();controller_adb_cancel();controller_voice_cancel();stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
  taskEXIT_CRITICAL(&consent_mux);
  if(screen_task_handle)xTaskNotifyGive(screen_task_handle);
+ controller_audio_prompt(controller::SpeechPrompt::STOPPED);
  ESP_LOGI(TAG,"Local stop latched; no actuator enabled");
 }
 static void touch_action(controller::TouchTarget target,int64_t began,int64_t now){
  using controller::TouchTarget;
  controller_event("action",page.load(),(int)target);
  switch(target){
+ case TouchTarget::SOUND_SETTINGS:go_page(HOME_PAGE+6);break;
+ case TouchTarget::VOLUME_DOWN:controller_audio_adjust(-20);controller_ota_changed();break;
+ case TouchTarget::VOLUME_UP:controller_audio_adjust(20);controller_ota_changed();break;
+ case TouchTarget::MUTE:controller_audio_toggle_mute();controller_ota_changed();break;
+ case TouchTarget::SOUND_TEST:controller_audio_prompt(controller::SpeechPrompt::TEST);break;
  case TouchTarget::UPDATE:controller_ota_start();screen_dirty=true;break;
  case TouchTarget::START:
   go_page(PAGE_COUNT-1);
@@ -442,89 +457,88 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
 }
 static void input_task(void*){
  controller::TouchGesture gesture;controller::TouchContact contact_state;int touch_page=-1;
- controller::ButtonGesture side_key;bool touch_voicing=false,key_voicing=false,key_confirming=false;int64_t key_began=0;unsigned key_epoch=0;unsigned touch_voice_epoch=0;
- controller::GestureDetector swipes;int64_t swipe_fired_ms=-100000;
-
+ controller::ButtonGesture side_key;controller::GestureDetector swipes;
+ unsigned swipe_epoch=0;bool swipe_contact=false;
+ bool touch_voicing=false,key_voicing=false,key_confirming=false;
+ int64_t key_began=0;unsigned key_epoch=0,touch_voice_epoch=0;
+ bool updating=false;
  bool power_held=false,power_done=false;int64_t power_began=0;
  for(;;){
-  bool down=gpio_get_level(GPIO_NUM_0)==0;
-  int64_t now=esp_timer_get_time()/1000;
-  int tx=0,ty=0;int contact=controller_touch_read(tx,ty);
-  auto edge=contact_state.update(contact);
-  // 轨迹手势（滑动/双击/长按）：只在这一处喂点，抬手时最多吐一次结果。
-  auto swipe=swipes.feed(contact==1,tx,ty,now);
-  if(swipe!=controller::Gesture::None){
-   swipe_fired_ms=now;
-   controller_event("swipe",page.load(),(int)swipe);
-   bool in_confirm=page==2 || touch_voicing || key_voicing || key_confirming;
-   switch(swipe){
-   case controller::Gesture::SwipeUp:
-    if(!in_confirm){go_page(controller::next_page(page.load(),HOME_PAGE));}
-    break;
-   case controller::Gesture::SwipeDown:
-    if(!in_confirm){go_page(page.load()<=HOME_PAGE?PAGE_COUNT-1:page.load()-1);}
-    break;
-   case controller::Gesture::DoubleTap:
-    if(!in_confirm){screen_dirty=true;xTaskNotifyGive(screen_task_handle);}
-    break;
-   case controller::Gesture::LongPress:
-    // 长按与既有"按住说话"共用入口；确认页/录音中不抢。
-    if(!in_confirm && page==HOME_PAGE){go_page(PAGE_COUNT-1);touch_voice_epoch=screen_epoch.load();
-     touch_voicing=true;stopped=false;controller_voice_hold(true);}
-    break;
-   default:break;
+  bool down=gpio_get_level(GPIO_NUM_0)==0;int64_t now=esp_timer_get_time()/1000;
+  int tx=0,ty=0;int contact=controller_touch_read(tx,ty);auto edge=contact_state.update(contact);
+  auto target=contact==1?controller::touch_target(page.load(),tx,ty,HOME_PAGE):controller::TouchTarget::NONE;
+  // Stop is acted on at contact-down, including during display refresh and OTA.
+  if(edge==controller::TouchEdge::DOWN&&target==controller::TouchTarget::STOP){
+   stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=key_confirming=false;gesture.cancel();swipes.reset();
+  }
+  if(controller_ota_busy()||ble_ota_busy()){
+   if(!updating){controller_voice_cancel();touch_voicing=key_voicing=key_confirming=false;}
+   updating=true;
+   if(gpio_get_level(GPIO_NUM_18)==0)stop_now();
+   gesture.cancel();swipes.reset();vTaskDelay(pdMS_TO_TICKS(20));continue;
+  }
+  updating=false;
+  // Recording release always wins over long-press/double-tap classification.
+  if(touch_voicing){
+   auto voice_contact=controller::voice_contact(contact,tx,ty,screen_epoch.load()==touch_voice_epoch);
+   if(voice_contact==controller::VoiceContact::SEND){touch_voicing=false;controller_voice_hold(false);gesture.cancel();swipes.reset();}
+   else if(voice_contact==controller::VoiceContact::CANCEL){
+    controller_voice_cancel();touch_voicing=false;gesture.cancel();swipes.reset();
+   }
+  }else if(contact<0){gesture.cancel();swipes.reset();}
+  else{
+   auto swipe=controller::Gesture::None;
+   if(edge==controller::TouchEdge::DOWN){swipe_epoch=screen_epoch.load();swipe_contact=true;}
+   if(!screen_painting&&!screen_failed&&page!=2&&!key_voicing&&!key_confirming&&swipe_contact&&swipe_epoch==screen_epoch.load())
+    swipe=swipes.feed(contact==1,tx,ty,now);
+   else {swipes.reset();swipe_contact=false;}
+   if(contact==0)swipe_contact=false;
+   if(swipe!=controller::Gesture::None){
+    gesture.cancel();
+    switch(swipe){
+    case controller::Gesture::SwipeUp:go_page(controller::next_page(page.load(),HOME_PAGE));break;
+    case controller::Gesture::SwipeDown:go_page(controller::previous_page(page.load(),HOME_PAGE));break;
+    case controller::Gesture::DoubleTap:go_page(HOME_PAGE);break;
+    default:break; // Hold-to-talk starts while held; never start it after release.
+    }
+   }else if(contact==1){
+    if(edge==controller::TouchEdge::DOWN){
+     touch_page=page.load();
+     if(!screen_failed&&!screen_painting)gesture.begin(screen_epoch.load(),painted_epoch.load(),target,now);
+    }else if(screen_painting||page!=touch_page||target!=gesture.target)gesture.cancel();
+    // No re-arming after sliding out or a display/page change: a fresh down is required.
+    if(!key_voicing&&gesture.active&&gesture.target==controller::TouchTarget::START&&now-gesture.began>=600){
+     gesture.cancel();swipes.reset();go_page(PAGE_COUNT-1);touch_voice_epoch=screen_epoch.load();
+     touch_voicing=true;stopped=false;controller_voice_hold(true);
+    }
+   }else if(edge==controller::TouchEdge::UP){
+    auto action=gesture.target;int64_t began=gesture.began;
+    if(!screen_failed&&!screen_painting&&gesture.release(screen_epoch.load(),now))touch_action(action,began,now);
    }
   }
-  if(controller_ota_busy()){if(gpio_get_level(GPIO_NUM_18)==0)controller_ota_cancel();gesture.cancel();swipes.reset();vTaskDelay(pdMS_TO_TICKS(20));continue;}
-  if(contact==1){
-   auto target=controller::touch_target(page.load(),tx,ty,HOME_PAGE);
-   if(touch_voicing){
-    if(screen_epoch.load()!=touch_voice_epoch || target!=controller::TouchTarget::START){controller_voice_cancel();touch_voicing=false;}
-   }else if(edge==controller::TouchEdge::DOWN){
-    touch_page=page.load();
-    if(!screen_failed && !screen_painting)gesture.begin(screen_epoch.load(),painted_epoch.load(),target,now);
-    ESP_LOGI(TAG,"Touch down x=%d y=%d page=%d",tx,ty,touch_page);
-    controller_event("touch",touch_page,tx,ty);
-   }else if(screen_painting || page!=touch_page || target!=gesture.target)gesture.cancel();
-   if(!gesture.active&&!touch_voicing&&!key_voicing&&target==controller::TouchTarget::START&&!screen_painting&&!screen_failed)
-    gesture.begin(screen_epoch.load(),painted_epoch.load(),target,now);
-   if(!touch_voicing && !key_voicing && gesture.active && gesture.target==controller::TouchTarget::START && now-gesture.began>=600){
-    gesture.cancel();go_page(PAGE_COUNT-1);touch_voice_epoch=screen_epoch.load();
-    touch_voicing=true;stopped=false;controller_voice_hold(true);
-   }
-  }else if(contact==0 && edge==controller::TouchEdge::UP){
-   // 刚判定过滑动/双击/长按的抬手不再当按钮点按，防一次滑动+按钮双触发。
-   if(swipe_fired_ms==now){/* consumed by gesture */}
-   else if(touch_voicing){touch_voicing=false;controller_voice_hold(false);gesture.cancel();}
-   else{auto target=gesture.target;int64_t start=gesture.began;
-    if(!screen_failed && !screen_painting && gesture.release(screen_epoch.load(),now))touch_action(target,start,now);
-   }
-  }else if(contact<0){
-   gesture.cancel();if(touch_voicing){touch_voicing=false;controller_voice_cancel();}
-  }
-  switch(side_key.update(down,esp_timer_get_time()/1000)){
-  case controller::ButtonEvent::NEXT:controller_event("button",page.load(),1);go_page(controller::next_page(page.load(),HOME_PAGE));break;
-  case controller::ButtonEvent::HOME:controller_event("button",page.load(),2);controller_voice_cancel();go_page(HOME_PAGE);break;
-  case controller::ButtonEvent::VOICE_DOWN:controller_event("button",page.load(),3);
+  switch(side_key.update(down,now)){
+  case controller::ButtonEvent::NEXT:
+   controller_voice_cancel();touch_voicing=key_voicing=key_confirming=false;gesture.cancel();swipes.reset();
+   go_page(controller::next_page(page.load(),HOME_PAGE));break;
+  case controller::ButtonEvent::HOME:
+   controller_voice_cancel();touch_voicing=key_voicing=key_confirming=false;gesture.cancel();swipes.reset();go_page(HOME_PAGE);break;
+  case controller::ButtonEvent::VOICE_DOWN:
    if(page==HOME_PAGE+5){controller_ota_start();}
    else if(page==2){key_confirming=true;key_began=side_key.pressed;key_epoch=screen_epoch.load();}
-   else if(page>HOME_PAGE){bool ok=controller_usb_phone_key(true);controller_event("action",page.load(),(int)controller::TouchTarget::PHONE_HOME,1,ok);}
-   else if(!touch_voicing){key_voicing=true;go_page(PAGE_COUNT-1);stopped=false;controller_voice_hold(true);}
+   else if(page>HOME_PAGE&&page<=HOME_PAGE+4){controller_usb_phone_key(true);}
+   else if(page<=HOME_PAGE&&!touch_voicing){key_voicing=true;go_page(PAGE_COUNT-1);stopped=false;controller_voice_hold(true);}
    break;
-  case controller::ButtonEvent::VOICE_UP:controller_event("button",page.load(),4);if(key_confirming){key_confirming=false;if(key_epoch==screen_epoch.load())touch_action(controller::TouchTarget::CONFIRM,key_began,now);}
+  case controller::ButtonEvent::VOICE_UP:
+   if(key_confirming){key_confirming=false;if(key_epoch==screen_epoch.load())touch_action(controller::TouchTarget::CONFIRM,key_began,now);}
    else if(key_voicing){key_voicing=false;controller_voice_hold(false);}
    break;
   default:break;
   }
-  if(page==2 && consent_visible_at>0 && now-consent_visible_at.load()>=15000)go_page(HOME_PAGE);
+  if(page==2&&consent_visible_at>0&&now-consent_visible_at.load()>=15000)go_page(HOME_PAGE);
   bool power_down=gpio_get_level(GPIO_NUM_18)==0;
-  if(power_down&&!power_held){power_held=true;power_done=false;power_began=now;controller_event("button",page.load(),5);}
-  if(!power_down&&power_held){controller_event("button",page.load(),6);power_held=false;}
-  if(power_down&&power_held&&!power_done&&now-power_began>=1500){
-   power_done=true;stop_now();
-   ESP_LOGI(TAG,"PWR long press: disabling battery power latch; USB may still supply power");
-   gpio_set_level(GPIO_NUM_17,0);
-  }
+  if(power_down&&!power_held){power_held=true;power_done=false;power_began=now;}
+  if(!power_down&&power_held)power_held=false;
+  if(power_down&&power_held&&!power_done&&now-power_began>=1500){power_done=true;stop_now();gpio_set_level(GPIO_NUM_17,0);}
   vTaskDelay(pdMS_TO_TICKS(20));
  }
 }

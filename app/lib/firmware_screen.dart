@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -6,7 +6,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 
 import 'ble_ota_service.dart';
 import 'push_screen.dart';
@@ -40,11 +39,18 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
   bool _busy = false;
   String? _error;
   String _deviceVersion = '';
+  bool _connected = false;
+  StreamSubscription? _connectionSub;
 
   @override
   void initState() {
     super.initState();
     _deviceVersion = _parseVersion(widget.device.platformName);
+    _connectionSub = widget.device.connectionState.listen((state) {
+      if (mounted && state != BluetoothConnectionState.connected) {
+        setState(() => _connected = false);
+      }
+    });
     _prepare();
   }
 
@@ -54,12 +60,20 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
   }
 
   Future<void> _prepare() async {
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _error = null;
+      _connected = false;
+    });
     try {
       final chunk = await widget.service.connect(widget.device);
-      if (!mounted) return;
+      if (!mounted) {
+        await widget.service.disconnect();
+        return;
+      }
       setState(() {
         _chunkSize = chunk;
+        _connected = true;
         _busy = false;
       });
     } catch (e) {
@@ -71,14 +85,38 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     }
   }
 
+  @override
+  void dispose() {
+    _connectionSub?.cancel();
+    widget.service.disconnect();
+    super.dispose();
+  }
+
   Future<void> _pickLocal() async {
-    final res = await FilePicker.pickFiles(
-      type: FileType.any,
-      withData: true,
-    );
-    final f = res?.files.single;
-    if (f == null || f.bytes == null) return;
-    await _loadBytes(f.bytes!, f.name);
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final res =
+          await FilePicker.pickFiles(type: FileType.any, withData: true);
+      if (!mounted) return;
+      final f = res?.files.single;
+      if (f == null) {
+        setState(() => _busy = false);
+        return;
+      }
+      if (f.bytes == null) throw StateError('无法读取文件，请重新选择');
+      await _loadBytes(f.bytes!, f.name);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = '无法读取固件，请重新选择 app.bin';
+        });
+      }
+    }
   }
 
   Future<void> _fetchFromServer() async {
@@ -87,13 +125,14 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       _error = null;
     });
     try {
-      // 服务器需要设备 token；客户端只做公开预览不可行，这里提示用户。
-      // 实际部署时把 token 内嵌或让用户在设置里填。
+      // Device credentials are not shipped in the phone app.
       final res = await http
           .get(Uri.parse('$otaBase/firmware/image'))
           .timeout(const Duration(seconds: 30));
       if (res.statusCode != 200) {
-        throw Exception('服务器返回 ${res.statusCode}（需要设备 token）');
+        throw Exception(res.statusCode == 401 || res.statusCode == 403
+            ? '服务器尚未开放手机端下载，请选择已下载的 app.bin'
+            : '服务器暂不可用（${res.statusCode}）');
       }
       await _loadBytes(res.bodyBytes, 'app.bin');
     } catch (e) {
@@ -107,6 +146,11 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
 
   Future<void> _loadBytes(Uint8List bytes, String name) async {
     if (!mounted) return;
+    setState(() {
+      _info = null;
+      _bytes = null;
+      _error = null;
+    });
     if (bytes.length < 4096) {
       setState(() {
         _busy = false;
@@ -143,10 +187,6 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       version = version.replaceAll(RegExp(r'[^\x20-\x7E]'), '').trim();
     }
 
-    final dir = await getTemporaryDirectory();
-    final f = File('${dir.path}/$name');
-    await f.writeAsBytes(bytes);
-
     setState(() {
       _bytes = bytes;
       _info = FirmwareInfo(
@@ -160,9 +200,9 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     });
   }
 
-  void _start() {
-    if (_bytes == null || _info == null) return;
-    Navigator.of(context).push(MaterialPageRoute(
+  Future<void> _start() async {
+    if (_bytes == null || _info == null || !_connected || _busy) return;
+    await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => PushScreen(
         service: widget.service,
         device: widget.device,
@@ -171,10 +211,13 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         chunkSize: _chunkSize,
       ),
     ));
+    if (mounted && !_connected) await _prepare();
   }
 
   bool get _sameVersion =>
-      _info != null && _deviceVersion.isNotEmpty && _info!.version == _deviceVersion;
+      _info != null &&
+      _deviceVersion.isNotEmpty &&
+      _info!.version == _deviceVersion;
 
   @override
   Widget build(BuildContext context) {
@@ -202,22 +245,35 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           if (_error != null) ...[
-            InfoBanner(icon: Icons.error_outline, color: AppTheme.danger, text: _error!),
+            InfoBanner(
+                icon: Icons.error_outline,
+                color: AppTheme.danger,
+                text: _error!),
             const SizedBox(height: 16),
           ],
+          if (!_connected && !_busy) ...[
+            FilledButton.icon(
+                onPressed: _prepare,
+                icon: const Icon(Icons.bluetooth_connected),
+                label: const Text('重新连接控制板')),
+            const SizedBox(height: 16),
+          ],
+          const InfoBanner(
+              icon: Icons.info_outline, text: '第 2 步：选择固件。传输时请保持手机靠近控制板，避免断电。'),
+          const SizedBox(height: 16),
           _SourceCard(
-            icon: Icons.cloud_download_outlined,
-            title: '从服务器获取最新',
-            subtitle: 'erweima.zhangyue.site',
+            icon: Icons.folder_open_outlined,
+            title: '选择已下载的固件',
+            subtitle: '选择 app.bin，不要选择整片备份文件',
             primary: true,
-            onTap: _busy ? null : _fetchFromServer,
+            onTap: _busy ? null : _pickLocal,
           ),
           const SizedBox(height: 10),
           _SourceCard(
-            icon: Icons.folder_open_outlined,
-            title: '选择本地固件文件',
-            subtitle: '从下载目录里挑 app.bin',
-            onTap: _busy ? null : _pickLocal,
+            icon: Icons.cloud_download_outlined,
+            title: '从服务器获取固件',
+            subtitle: '服务器需开放手机端下载',
+            onTap: _busy ? null : _fetchFromServer,
           ),
           if (_busy) ...[
             const SizedBox(height: 20),
@@ -254,8 +310,16 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: FilledButton(
-            onPressed: (_info != null && !_busy && _error == null) ? _start : null,
-            child: Text(_info == null ? '先选择一个固件' : '开始推送'),
+            onPressed: (_info != null && _connected && !_busy && _error == null)
+                ? _start
+                : null,
+            child: Text(_busy
+                ? '正在准备…'
+                : !_connected
+                    ? '请先连接控制板'
+                    : _info == null
+                        ? '先选择一个固件'
+                        : '下一步：传输固件'),
           ),
         ),
       ),
@@ -282,7 +346,8 @@ class _SourceCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final accent = primary ? AppTheme.accent : AppTheme.text;
     return Material(
-      color: primary ? AppTheme.accent.withOpacity(0.07) : AppTheme.surface,
+      color:
+          primary ? AppTheme.accent.withValues(alpha: 0.07) : AppTheme.surface,
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         onTap: onTap,
@@ -292,7 +357,9 @@ class _SourceCard extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-                color: primary ? AppTheme.accent.withOpacity(0.45) : AppTheme.border),
+                color: primary
+                    ? AppTheme.accent.withValues(alpha: 0.45)
+                    : AppTheme.border),
           ),
           child: Row(
             children: [
@@ -315,7 +382,8 @@ class _SourceCard extends StatelessWidget {
                 ),
               ),
               if (onTap != null)
-                const Icon(Icons.chevron_right, color: AppTheme.textDim, size: 20),
+                const Icon(Icons.chevron_right,
+                    color: AppTheme.textDim, size: 20),
             ],
           ),
         ),

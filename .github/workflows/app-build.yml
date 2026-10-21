@@ -32,7 +32,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.44.0'
           channel: stable
           cache: true
 
@@ -41,6 +41,9 @@ jobs:
 
       - name: Analyze
         run: flutter analyze
+
+      - name: Regression tests
+        run: flutter test
 
       - name: Build APK
         run: flutter build apk --release
@@ -64,7 +67,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.44.0'
           channel: stable
           cache: true
 

@@ -26,3 +26,11 @@ struct VoiceStream {
  unsigned sequence=0;
 };
 bool controller_voice_stream_upload(VoiceStream &stream);
+
+#include "audio_policy.h"
+void controller_audio_prompt(controller::SpeechPrompt prompt);
+void controller_audio_interrupt();
+int controller_audio_volume();
+bool controller_audio_muted();
+void controller_audio_adjust(int delta);
+void controller_audio_toggle_mute();
