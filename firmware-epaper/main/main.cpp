@@ -499,9 +499,11 @@ static void input_task(void*){
   if(voice_pressed||power_pressed||external_pressed)controller_audio_prompt(controller::SpeechPrompt::CLICK);
   int tx=0,ty=0;int contact=controller_touch_read(tx,ty);auto edge=contact_state.update(contact);
   auto target=contact==1?controller::touch_target(page.load(),tx,ty,HOME_PAGE):controller::TouchTarget::NONE;
+  if(edge==controller::TouchEdge::DOWN)controller_event("touch_down",page.load(),tx,ty,(int)target);
+  if(edge==controller::TouchEdge::UP)controller_event("touch_up",page.load(),(int)(now-gesture.began),(int)gesture.target,screen_failed?3:screen_painting?2:0);
   // Stop is acted on at contact-down, including during display refresh and OTA.
   if((controller_voice_conversing()||controller_voice_stage()==10||controller_voice_stage()==11||dialogue_frame_valid.load())&&page==PAGE_COUNT-1&&contact==1&&ty>=45&&ty<155)target=controller::TouchTarget::STOP;
-  if(edge==controller::TouchEdge::DOWN&&target!=controller::TouchTarget::NONE&&target!=controller::TouchTarget::STOP&&!screen_painting&&!screen_failed&&screen_epoch.load()==painted_epoch.load())controller_audio_prompt(controller::SpeechPrompt::CLICK);
+  if(edge==controller::TouchEdge::DOWN&&target!=controller::TouchTarget::STOP)controller_audio_prompt(controller::SpeechPrompt::CLICK);
   if(edge==controller::TouchEdge::DOWN&&target==controller::TouchTarget::STOP){
    stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();
   }
@@ -617,6 +619,7 @@ static void console_command(char *line){
  else if(strcmp(line,"AUDIO DOWN")==0){controller_audio_adjust(-20);controller_ota_changed();}
  else if(strcmp(line,"AUDIO MUTE")==0){controller_audio_toggle_mute();controller_ota_changed();}
  else if(strcmp(line,"AUDIO TEST")==0){controller_audio_prompt(controller::SpeechPrompt::TEST);}
+ else if(strcmp(line,"AUDIO AUDIT")==0){controller_audio_prompt(controller::SpeechPrompt::AUDIT);}
  else if(strcmp(line,"AUDIO CLICK")==0){controller_audio_prompt(controller::SpeechPrompt::CLICK);}
  else if(strcmp(line,"MIC TEST")==0){controller_voice_test();controller_usb_write("Microphone diagnostic: one second; samples discarded\r\n");}
  else if(strcmp(line,"PAGE")==0)go_page(controller::next_page(page.load(),HOME_PAGE));

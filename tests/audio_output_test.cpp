@@ -2,6 +2,7 @@
 #include <cassert>
 int main(){
  using namespace controller;
+ assert(audio_volume_ceiling_db-audio_pa_gain_db<=0.0f);
  // A write can return with an entire DMA ring still queued. Closing then loses
  // a short clip or its ending. Silent tail must push every real sample out.
  int queued=audio_dma_descriptors*audio_dma_frames;
