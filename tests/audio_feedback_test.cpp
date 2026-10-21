@@ -8,7 +8,7 @@ int main(){
   int n=feedback_samples(cue);assert(n>0&&n<=4800);
   assert(feedback_sample(cue,0)==0);assert(feedback_sample(cue,n-1)==0);
   int peak=0;for(int i=0;i<n;i++){int v=std::abs((int)feedback_sample(cue,i));if(v>peak)peak=v;}
-  assert(peak>1000&&peak<=6000);
+  assert(peak>12000&&peak<=16000);
  }
  assert(feedback_samples(Feedback::CLICK)<1600);
  assert(feedback_allowed(60,false,false));

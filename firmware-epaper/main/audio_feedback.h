@@ -19,6 +19,6 @@ inline int16_t feedback_sample(Feedback cue,int index){
    cue==Feedback::LISTEN?(index<1920?700:1100):
    cue==Feedback::SUCCESS?(index<1920?900:1300):(index<1920?600:350);
  double ramp=std::fmin(1.0,std::fmin(local/80.0,(length-1-local)/80.0));
- return (int16_t)(5000*ramp*std::sin(6.283185307179586*hz*local/16000));
+ return (int16_t)(16000*ramp*std::sin(6.283185307179586*hz*local/16000));
 }
 }
