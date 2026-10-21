@@ -1,4 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Android 12+ 需要显式声明蓝牙权限；neverForLocation 表示不靠蓝牙推断位置，
          这样可以完全不申请定位权限，用户看到的风险提示也更少。 -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
@@ -12,7 +13,7 @@
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true"/>
 
     <application
-        android:label="PhoneCtl Flash"
+        android:label="控制板升级助手"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
