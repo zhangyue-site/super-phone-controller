@@ -83,7 +83,13 @@ jobs:
             bash -c '
               set -e
               . $IDF_PATH/export.sh
-              idf.py -DIDF_TARGET=esp32s3 -DPROJECT_VER="$VERSION" -B build reconfigure build
+              # 与 124 产线一致：USB_LOCAL 打开，OTA/语音走板子在手机上开的
+              # 18843 本地 ADB 隧道，不依赖 WiFi。只加 defaults 不加 usb-local
+              # 会让 endpoint 回落到 DISPLAY_ENDPOINT，没 WiFi 的板子必然失败。
+              idf.py -DIDF_TARGET=esp32s3 -DPROJECT_VER="$VERSION" \
+                -DSDKCONFIG=sdkconfig.usb-local \
+                -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usb-local.defaults" \
+                -B build reconfigure build
             '
 
       - name: Verify version is embedded
