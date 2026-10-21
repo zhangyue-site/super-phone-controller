@@ -35,6 +35,8 @@ async def main(args):
    data=await asyncio.to_thread(http,"image",None,grant["ticket"])
    assert len(data)==grant["size"] and hashlib.sha256(data).hexdigest()==grant["sha256"]
    print("REAL_BOARD_AUTH_DOWNLOAD_PASS",grant["version"],len(data),flush=True)
+  if args.download_only:
+   print("DOWNLOAD_ONLY_NO_FLASH",flush=True);return
   version,elf=target(data)
   state=[0,0,0,0];ready=asyncio.Event();receiving=asyncio.Event()
   def notify(_,raw):
@@ -75,5 +77,5 @@ async def main(args):
    print("WAIT_REBOOT",attempt,type(error).__name__,flush=True)
  raise RuntimeError("Reboot confirmation timed out")
 if __name__=="__main__":
- p=argparse.ArgumentParser();p.add_argument("--address",required=True);p.add_argument("--image")
+ p=argparse.ArgumentParser();p.add_argument("--address",required=True);p.add_argument("--image");p.add_argument("--download-only",action="store_true")
  asyncio.run(main(p.parse_args()))
