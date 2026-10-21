@@ -1,4 +1,5 @@
 #include "voice.h"
+#include "audio_feedback.h"
 #include "conversation_policy.h"
 #include "dialogue.h"
 #include "voice_lifecycle.h"
@@ -49,10 +50,11 @@ static void save_audio(){
 void controller_audio_interrupt(){playback_epoch.fetch_add(1);pending_prompt=0;}
 int controller_audio_volume(){return output_volume.load();}
 bool controller_audio_muted(){return output_muted.load();}
-void controller_audio_adjust(int delta){output_volume=controller::clamp_volume(output_volume.load()+delta);save_audio();}
-void controller_audio_toggle_mute(){output_muted=!output_muted.load();controller_audio_interrupt();save_audio();}
+void controller_audio_adjust(int delta){output_volume=controller::clamp_volume(output_volume.load()+delta);save_audio();controller_audio_prompt(controller::SpeechPrompt::CLICK);}
+void controller_audio_toggle_mute(){output_muted=!output_muted.load();controller_audio_interrupt();save_audio();if(!output_muted)controller_audio_prompt(controller::SpeechPrompt::CLICK);}
 void controller_audio_prompt(controller::SpeechPrompt value){
- if(output_muted || output_volume==0 || held)return;
+ if(!controller::feedback_allowed(output_volume,output_muted,held))return;
+ if(lifecycle.busy && (value==controller::SpeechPrompt::CLICK||value==controller::SpeechPrompt::TEST))return;
  pending_prompt=(int)value;if(worker)xTaskNotifyGive(worker);
 }
 
@@ -88,15 +90,15 @@ static bool init_mic(){
  mic=esp_codec_dev_new(&dev);if(!mic)return false;
  ESP_LOGI("voice","ES8311 driver initialized; ADC remains closed until hold");return true;
 }
-bool controller_audio_play_pcm(const unsigned char *data,unsigned size){
- if(!data||!size||(size%2)||size>960000||held||!init_mic())return false;
+static bool play_pcm(const unsigned char *data,unsigned size,bool before_recording=false){
+ if(!data||!size||(size%2)||size>960000||(held&&!before_recording)||!init_mic())return false;
  if(output_muted||output_volume==0)return true;
  unsigned epoch=playback_epoch.load();
  esp_codec_dev_sample_info_t fs={};fs.sample_rate=16000;fs.channel=2;fs.bits_per_sample=16;
  if(esp_codec_dev_open(mic,&fs)!=ESP_CODEC_DEV_OK)return false;
  esp_codec_dev_set_out_mute(mic,false);
  int16_t stereo[512];unsigned used=0;bool ok=true;
- while(used<size&&!held&&!output_muted&&epoch==playback_epoch.load()){
+ while(used<size&&(!held||before_recording)&&!output_muted&&epoch==playback_epoch.load()){
   unsigned n=(size-used)/2;if(n>256)n=256;
   for(unsigned i=0;i<n;i++){int16_t v=(int16_t)(data[used+2*i]|(data[used+2*i+1]<<8));stereo[2*i]=v;stereo[2*i+1]=v;}
   esp_codec_dev_set_out_vol(mic,output_volume.load());
@@ -104,9 +106,21 @@ bool controller_audio_play_pcm(const unsigned char *data,unsigned size){
   used+=n*2;
  }
  esp_codec_dev_set_out_mute(mic,true);esp_codec_dev_close(mic);
- return ok&&!held&&(output_muted||epoch==playback_epoch.load());
+ return ok&&(!held||before_recording)&&(output_muted||epoch==playback_epoch.load());
+}
+bool controller_audio_play_pcm(const unsigned char *data,unsigned size){return play_pcm(data,size);}
+static void play_feedback(controller::Feedback cue,bool before_recording=false){
+ static int16_t pcm[4800];int count=controller::feedback_samples(cue);
+ for(int i=0;i<count;i++)pcm[i]=controller::feedback_sample(cue,i);
+ play_pcm((const unsigned char*)pcm,count*2,before_recording);
 }
 static void play_prompt(int prompt){
+ using controller::SpeechPrompt;using controller::Feedback;
+ if(prompt==(int)SpeechPrompt::CLICK){play_feedback(Feedback::CLICK);return;}
+ if(prompt==(int)SpeechPrompt::LISTEN){play_feedback(Feedback::LISTEN);return;}
+ if(prompt==(int)SpeechPrompt::SUCCESS){play_feedback(Feedback::SUCCESS);return;}
+ if(prompt==(int)SpeechPrompt::STOPPED){play_feedback(Feedback::STOP);return;}
+ if(prompt==(int)SpeechPrompt::FAILED){play_feedback(Feedback::FAILURE);return;}
  const uint8_t *starts[]={nullptr,ready_start,recognized_start,failed_start,stopped_start,test_start};
  const uint8_t *ends[]={nullptr,ready_end,recognized_end,failed_end,stopped_end,test_end};
  if(prompt>=1&&prompt<=5)controller_audio_play_pcm(starts[prompt],ends[prompt]-starts[prompt]);
@@ -123,6 +137,8 @@ static void run(void*){
   bool prepare=prepare_only.exchange(false);
   if((!held || cancelled) && !test)continue;
   controller::VoiceLifecycle::Lease lease(lifecycle);
+  if(!test)play_feedback(controller::Feedback::CLICK,true);
+  if(cancelled||!lifecycle.current(turn_epoch))continue;
 #if CONFIG_CONTROLLER_USB_LOCAL
   if(!test && (prepare || !controller_voice_prepared())){
    unsigned cancel_at_start=cancel_sequence.load();uint32_t consent=adb_consent.load();
@@ -140,6 +156,10 @@ static void run(void*){
   if(!test && prepare){state(6);held=false;continue;}
   if(!test && !controller_voice_online()){conversation=false;held=false;state(6);continue;}
   if(!pcm || !init_mic()){conversation=false;held=false;state(5);continue;}
+  if(!test){
+   play_feedback(controller::Feedback::LISTEN,true);
+   if(cancelled||!held||!lifecycle.current(turn_epoch))continue;
+  }
   unsigned sequence=record_sequence.load();
   state(4);unsigned count=0;int16_t stereo[512];
   esp_codec_dev_sample_info_t fs={};fs.sample_rate=16000;fs.channel=2;fs.bits_per_sample=16;
@@ -184,11 +204,13 @@ static void run(void*){
   if(uploaded)uploaded=controller_dialogue_run(sequence);
   if(!lifecycle.current(turn_epoch)||cancelled)continue;
   state(uploaded?3:5);if(uploaded)controller_voice_changed(true);
+  if(uploaded)play_feedback(controller::Feedback::SUCCESS);
+  if(!lifecycle.current(turn_epoch)||cancelled)continue;
   if(continuous&&uploaded&&conversation&&lifecycle.current(turn_epoch)&&++conversation_turns<12){
    // Spoken reply has completed; keep a short acoustic guard before reopening RX.
    vTaskDelay(pdMS_TO_TICKS(400));
    if(conversation&&!cancelled&&lifecycle.current(turn_epoch)){record_sequence=next_sequence.fetch_add(1);held=true;xTaskNotifyGive(worker);}
-  }else{conversation=false;controller_audio_prompt(continuous&&uploaded?controller::SpeechPrompt::STOPPED:uploaded?controller::SpeechPrompt::STOPPED:controller::SpeechPrompt::FAILED);}
+  }else{conversation=false;if(!uploaded)controller_audio_prompt(controller::SpeechPrompt::FAILED);}
  }
 }
 void controller_voice_init(){
