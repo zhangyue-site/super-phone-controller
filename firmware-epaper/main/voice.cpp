@@ -55,7 +55,7 @@ void controller_audio_adjust(int delta){int previous=output_volume.load();output
 void controller_audio_toggle_mute(){output_muted=!output_muted.load();controller_audio_interrupt();save_audio();if(!output_muted)controller_audio_prompt(controller::SpeechPrompt::CLICK);}
 void controller_audio_prompt(controller::SpeechPrompt value){
  if(!controller::feedback_allowed(output_volume,output_muted,held))return;
- if(lifecycle.busy && (value==controller::SpeechPrompt::CLICK||value==controller::SpeechPrompt::TEST))return;
+ if(lifecycle.busy && (value==controller::SpeechPrompt::CLICK||value==controller::SpeechPrompt::TEST||value==controller::SpeechPrompt::AUDIT))return;
  pending_prompt=(int)value;if(worker)xTaskNotifyGive(worker);
 }
 
@@ -83,7 +83,7 @@ static bool init_mic(){
  audio_codec_i2c_cfg_t ctrlcfg={};ctrlcfg.port=0;ctrlcfg.addr=ES8311_CODEC_DEFAULT_ADDR;ctrlcfg.bus_handle=bus;
  auto ctrl=audio_codec_new_i2c_ctrl(&ctrlcfg);
  es8311_codec_cfg_t codec={};codec.ctrl_if=ctrl;codec.gpio_if=audio_codec_new_gpio();codec.codec_mode=ESP_CODEC_DEV_WORK_MODE_BOTH;
- codec.pa_pin=46;codec.hw_gain.pa_gain=6.0;codec.hw_gain.pa_voltage=3.3;codec.hw_gain.codec_dac_voltage=3.3;codec.use_mclk=true;
+ codec.pa_pin=46;codec.hw_gain.pa_gain=controller::audio_pa_gain_db;codec.hw_gain.pa_voltage=3.3;codec.hw_gain.codec_dac_voltage=3.3;codec.use_mclk=true;
  auto cif=es8311_codec_new(&codec);
  audio_codec_i2s_cfg_t datacfg={};datacfg.port=0;datacfg.rx_handle=rx;datacfg.tx_handle=tx;
  auto data=audio_codec_new_i2s_data(&datacfg);
@@ -92,13 +92,32 @@ static bool init_mic(){
  mic=esp_codec_dev_new(&dev);if(!mic)return false;
  ESP_LOGI("voice","ES8311 driver initialized; ADC remains closed until hold");return true;
 }
+static void audio_snapshot(const char *phase){
+ int fmt=-1,mute=-1,volume=-1,power=-1,clock=-1;
+ int rf=esp_codec_dev_read_reg(mic,0x09,&fmt),rm=esp_codec_dev_read_reg(mic,0x31,&mute);
+ int rv=esp_codec_dev_read_reg(mic,0x32,&volume),rp=esp_codec_dev_read_reg(mic,0x12,&power),rc=esp_codec_dev_read_reg(mic,0x01,&clock);
+ // Input-enable preserves the output driver and allows digital pad readback.
+ int gp=gpio_input_enable(GPIO_NUM_46),ge=gpio_input_enable(GPIO_NUM_42);
+ ESP_LOGI("voice","AUDIO HW %s power_en_n=%d pa_ctrl=%d gpio_rc=%d/%d fmt09=%02x dac31=%02x vol32=%02x power12=%02x clk01=%02x read_rc=%d/%d/%d/%d/%d",phase,gpio_get_level(GPIO_NUM_42),gpio_get_level(GPIO_NUM_46),ge,gp,fmt,mute,volume,power,clock,rf,rm,rv,rp,rc);
+}
+static bool configure_output_curve(){
+ static bool configured=false;if(configured)return true;
+ esp_codec_dev_vol_map_t points[]={{0,controller::audio_volume_floor_db},{100,controller::audio_volume_ceiling_db}};
+ esp_codec_dev_vol_curve_t curve={};curve.vol_map=points;curve.count=2;
+ configured=esp_codec_dev_set_vol_curve(mic,&curve)==ESP_CODEC_DEV_OK;
+ return configured;
+}
 static bool play_pcm(const unsigned char *data,unsigned size,bool before_recording=false){
  if(!data||!size||(size%2)||size>960000||(held&&!before_recording)||!init_mic())return false;
  if(output_muted||output_volume==0)return true;
  unsigned epoch=playback_epoch.load();
  esp_codec_dev_sample_info_t fs={};fs.sample_rate=16000;fs.channel=2;fs.bits_per_sample=16;
  if(esp_codec_dev_open(mic,&fs)!=ESP_CODEC_DEV_OK)return false;
- esp_codec_dev_set_out_mute(mic,false);
+ if(!configure_output_curve()){esp_codec_dev_close(mic);return false;}
+ // Match the working audit: stabilize DAC before asserting the PA.
+ gpio_set_level(GPIO_NUM_46,0);
+ int unmute_result=esp_codec_dev_set_out_mute(mic,false);
+ ESP_LOGI("voice","AUDIO API unmute=%d",unmute_result);
  int16_t stereo[512];unsigned used=0;bool ok=true,io_ok=true;
  int64_t output_started=esp_timer_get_time();
  auto active=[&](){return (!held||before_recording)&&!output_muted&&output_volume>0&&epoch==playback_epoch.load();};
@@ -111,8 +130,12 @@ static bool play_pcm(const unsigned char *data,unsigned size,bool before_recordi
   }
   return !frames;
  };
- esp_codec_dev_set_out_vol(mic,output_volume.load());
+ int volume_result=esp_codec_dev_set_out_vol(mic,output_volume.load());
+ ESP_LOGI("voice","AUDIO API volume=%d result=%d",output_volume.load(),volume_result);
+ audio_snapshot("open");
  ok=silence(controller::audio_warmup_frames);
+ if(ok&&active()){gpio_set_level(GPIO_NUM_46,1);ok=silence(4800);}
+ audio_snapshot("pa_ready");
  while(ok&&used<size&&active()){
   unsigned n=(size-used)/2;if(n>256)n=256;
   for(unsigned i=0;i<n;i++){int16_t v=(int16_t)(data[used+2*i]|(data[used+2*i+1]<<8));stereo[2*i]=v;stereo[2*i+1]=v;}
@@ -125,7 +148,9 @@ static bool play_pcm(const unsigned char *data,unsigned size,bool before_recordi
  // bypasses the drain so STOP never waits for the tail.
  if(ok&&used==size&&active())ok=silence(controller::audio_tail_frames);
  ESP_LOGI("voice","OUTPUT bytes=%u/%u drained=%d interrupted=%d elapsed_ms=%lld",used,size,ok&&used==size,!active(),(long long)((esp_timer_get_time()-output_started)/1000));
+ audio_snapshot("drained");
  esp_codec_dev_set_out_mute(mic,true);esp_codec_dev_close(mic);
+ audio_snapshot("closed");
  return io_ok&&(!held||before_recording)&&(output_muted||output_volume==0||epoch==playback_epoch.load());
 }
 bool controller_audio_play_pcm(const unsigned char *data,unsigned size){return play_pcm(data,size);}
@@ -138,8 +163,37 @@ static void play_feedback(controller::Feedback cue,bool before_recording=false){
  ESP_LOGI("voice","CUE id=%d frames=%d peak=%d",(int)cue,count,peak);
  play_pcm((const unsigned char*)pcm,count*2,before_recording);
 }
+static void audit_output(){
+ if(held||!init_mic())return;
+ unsigned epoch=playback_epoch.load();
+ esp_codec_dev_sample_info_t fs={};fs.sample_rate=16000;fs.channel=2;fs.bits_per_sample=16;
+ if(esp_codec_dev_open(mic,&fs)!=ESP_CODEC_DEV_OK)return;
+ if(!configure_output_curve()){esp_codec_dev_close(mic);return;}
+ esp_codec_dev_set_out_vol(mic,output_volume.load());esp_codec_dev_set_in_gain(mic,30);esp_codec_dev_set_out_mute(mic,false);
+ static const int16_t sine[16]={0,12539,23170,30273,32767,30273,23170,12539,0,-12539,-23170,-30273,-32767,-30273,-23170,-12539};
+ int16_t out[512],in[512];bool ok=true;
+ for(int phase=0;phase<4&&ok;phase++){
+  bool amp=phase>=2,tone=phase%2;gpio_set_level(GPIO_NUM_46,amp?1:0);
+  int frames=tone?9600:4800,used=0;int64_t squares[2]={},si[2]={},sq[2]={};
+  while(used<frames&&epoch==playback_epoch.load()&&!output_muted&&!held){
+   int n=frames-used;if(n>256)n=256;
+   for(int i=0;i<n;i++){int16_t value=tone?(int32_t)sine[(used+i)%16]*16000/32767:0;out[2*i]=out[2*i+1]=value;}
+   if(esp_codec_dev_write(mic,out,n*4)!=ESP_CODEC_DEV_OK||esp_codec_dev_read(mic,in,n*4)!=ESP_CODEC_DEV_OK){ok=false;break;}
+   for(int i=0;i<n;i++)for(int ch=0;ch<2;ch++){int64_t value=in[2*i+ch];squares[ch]+=value*value;si[ch]+=value*sine[(used+i)%16];sq[ch]+=value*sine[(used+i+4)%16];}
+   used+=n;
+  }
+  if(used){
+   double rms[2],bin[2];for(int ch=0;ch<2;ch++){rms[ch]=sqrt((double)squares[ch]/used);bin[ch]=2*hypot((double)si[ch],(double)sq[ch])/used/32767.;}
+   ESP_LOGI("voice","AUDIO AUDIT amp=%d tone=%d frames=%d/%d left_rms=%.1f right_rms=%.1f left_1k=%.1f right_1k=%.1f pad46=%d",amp,tone,used,frames,rms[0],rms[1],bin[0],bin[1],gpio_get_level(GPIO_NUM_46));
+  }
+  if(used!=frames)break;
+ }
+ esp_codec_dev_set_out_mute(mic,true);esp_codec_dev_close(mic);
+ ESP_LOGI("voice","AUDIO AUDIT finished ok=%d; samples discarded, no upload",ok);
+}
 static void play_prompt(int prompt){
  using controller::SpeechPrompt;using controller::Feedback;
+ if(prompt==(int)SpeechPrompt::AUDIT){audit_output();return;}
  if(prompt==(int)SpeechPrompt::CLICK){click_playing=true;play_feedback(Feedback::CLICK,true);click_playing=false;return;}
  if(prompt==(int)SpeechPrompt::LISTEN){play_feedback(Feedback::LISTEN);return;}
  if(prompt==(int)SpeechPrompt::SUCCESS){play_feedback(Feedback::SUCCESS);return;}
