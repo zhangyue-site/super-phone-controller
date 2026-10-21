@@ -7,7 +7,9 @@ plugins {
 
 android {
     namespace = "org.example.phonecontroller"
-    compileSdk = flutter.compileSdkVersion
+    // flutter.compileSdkVersion 跟随本机 Flutter 版本；CI 上的 Flutter 3.24
+    // 解析成 34，而 androidx.core 1.15 要求 35。显式钉住，不依赖环境。
+    compileSdk = 35
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
