@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'transfer_session.dart';
+import 'firmware_image.dart';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -173,15 +174,10 @@ class BleOtaService {
       yield const PushProgress(done: true, success: false, log: '已有推送在进行');
       return;
     }
-    if (data.length < 4096) {
-      yield const PushProgress(done: true, success: false, log: '文件太小，不是固件');
-      return;
-    }
-    if (data.length > maxImageSize) {
-      yield PushProgress(
-          done: true,
-          success: false,
-          log: '固件 ${data.length} 字节超过槽位上限 $maxImageSize');
+    try {
+      FirmwareImage.parse(data);
+    } on FormatException catch (error) {
+      yield PushProgress(done: true, success: false, log: error.message);
       return;
     }
 
@@ -204,6 +200,7 @@ class BleOtaService {
     }
 
     final total = data.length;
+    var verified = false;
 
     try {
       yield const PushProgress(step: '连接设备', log: '设备连接就绪');
@@ -274,6 +271,7 @@ class BleOtaService {
       checkActive();
 
       if (result[0] == OtaState.ready) {
+        verified = true;
         yield const PushProgress(
           percent: 100,
           step: '切换启动槽',
@@ -293,6 +291,14 @@ class BleOtaService {
     } catch (e) {
       yield PushProgress(done: true, success: false, log: '传输失败：$e');
     } finally {
+      if (!verified) {
+        try {
+          await ctrl.write([0x04],
+              withoutResponse: false).timeout(const Duration(seconds: 2));
+        } catch (_) {
+          // A disconnected device also aborts the pending image.
+        }
+      }
       await statusSub.cancel();
       if (identical(_transfer, session)) _transfer = null;
       _busy = false;

@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:http/http.dart' as http;
 
 import 'ble_ota_service.dart';
+import 'firmware_image.dart';
 import 'push_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -151,40 +151,15 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       _bytes = null;
       _error = null;
     });
-    if (bytes.length < 4096) {
+    late final FirmwareImage image;
+    try {
+      image = FirmwareImage.parse(bytes);
+    } on FormatException catch (error) {
       setState(() {
         _busy = false;
-        _error = '这个文件太小，不像是固件（< 4KB）';
+        _error = error.message;
       });
       return;
-    }
-    if (bytes.length > BleOtaService.maxImageSize) {
-      setState(() {
-        _busy = false;
-        _error = '文件 ${(bytes.length / 1048576).toStringAsFixed(2)} MB '
-            '超过 OTA 槽位上限 3.25 MB';
-      });
-      return;
-    }
-
-    // ESP32 app 镜像头：byte0 = 0xE9
-    if (bytes[0] != 0xE9) {
-      setState(() {
-        _busy = false;
-        _error = '文件头不是 ESP32 镜像（应为 0xE9），确认选的是 app.bin';
-      });
-      return;
-    }
-
-    final digest = sha256.convert(bytes).toString();
-    // 版本号在 esp_app_desc_t 里，偏移 48 起 32 字节（与 124 的发布脚本一致）
-    String version = '';
-    if (bytes.length > 80) {
-      final raw = bytes.sublist(48, 80);
-      final end = raw.indexOf(0);
-      version = String.fromCharCodes(raw.sublist(0, end < 0 ? 32 : end));
-      // 只保留可打印字符，避免脏数据上屏
-      version = version.replaceAll(RegExp(r'[^\x20-\x7E]'), '').trim();
     }
 
     setState(() {
@@ -192,8 +167,8 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       _info = FirmwareInfo(
         name: name,
         size: bytes.length,
-        sha256: digest,
-        version: version.isEmpty ? '未知' : version,
+        sha256: image.sha,
+        version: image.version,
       );
       _busy = false;
       _error = null;
