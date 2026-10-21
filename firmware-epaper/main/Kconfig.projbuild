@@ -6,4 +6,12 @@ config CONTROLLER_USB_LOCAL
     help
         Isolated test: board 192.168.77.1 leases an address to the phone.
         No internet gateway/DNS advertised. Does not enable ADB automatically.
+config CONTROLLER_EXTERNAL_KEYS
+    bool "V2 external dry-contact keys on J1 GPIO1/GPIO2"
+    default n
+    help
+        Two normally-open, voltage-free contacts. A: GPIO1 to GND.
+        B: GPIO2 to GND. Internal pull-ups; no external supply required.
+        Uses only the V2 board's otherwise-unused J1 pins. External B never
+        powers off the board. Leave disabled when these pins serve other hardware.
 endmenu

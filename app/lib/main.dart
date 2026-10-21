@@ -14,7 +14,7 @@ class PcFlashApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'PhoneCtl Flash',
+      title: '控制板升级',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(),
       home: const DeviceScreen(),

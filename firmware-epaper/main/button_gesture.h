@@ -19,4 +19,43 @@ struct ButtonGesture {
   return ButtonEvent::NONE;
  }
 };
+// Active-low dry contacts and small onboard keys share a 30ms debounce.
+struct DebouncedButton {
+ bool candidate=false,stable=false;int64_t changed=0;
+ bool update(bool raw,int64_t now){
+  if(raw!=candidate){candidate=raw;changed=now;}
+  if(now-changed>=30)stable=candidate;
+  return stable;
+ }
+};
+enum class ControlEvent {NONE,HOME,MUTE,STOP};
+struct ControlButton {
+ ButtonGesture gesture;
+ ControlEvent update(bool value,int64_t now){
+  switch(gesture.update(value,now)){
+  case ButtonEvent::NEXT:return ControlEvent::HOME;
+  case ButtonEvent::HOME:return ControlEvent::MUTE;
+  case ButtonEvent::VOICE_DOWN:return ControlEvent::STOP;
+  default:return ControlEvent::NONE;
+  }
+ }
+};
+struct PowerOffHold {
+ bool held=false,fired=false;int64_t began=0;
+ bool update(bool physical_power_down,int64_t now){
+  if(!physical_power_down){held=false;fired=false;return false;}
+  if(!held){held=true;began=now;}
+  if(!fired&&now-began>=3000){fired=true;return true;}
+  return false;
+ }
+};
+// Stop wins over overlapping keys. Re-arm only after every contact releases.
+struct StopReleaseGate {
+ bool latched=false;
+ void stop(){latched=true;}
+ bool blocked(bool a,bool b,bool touch){
+  if(latched&&!a&&!b&&!touch)latched=false;
+  return latched;
+ }
+};
 }

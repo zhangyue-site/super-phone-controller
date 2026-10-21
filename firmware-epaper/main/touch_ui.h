@@ -1,20 +1,35 @@
 #pragma once
 #include <cstdint>
 namespace controller {
-inline int next_page(int current,int home){return current==home?home+5:current==home+5?0:current>=home+4?home:current>home?current+1:(current+1)%(home+1);}
-enum class TouchTarget {NONE,START,QUOTA,CONTROL,HOME,STOP,CONFIRM,UP,DOWN,LEFT,RIGHT,CLICK,PHONE_HOME,PHONE_BACK,UPDATE};
+inline int next_page(int current,int home){return (current+1)%(home+7);}
+inline int previous_page(int current,int home){return (current+home+6)%(home+7);}
+enum class TouchTarget {NONE,START,QUOTA,CONTROL,HOME,STOP,CONFIRM,UP,DOWN,LEFT,RIGHT,CLICK,PHONE_HOME,PHONE_BACK,UPDATE,VOLUME_DOWN,VOLUME_UP,MUTE,SOUND_TEST,SOUND_SETTINGS,FINISH};
 inline TouchTarget touch_target(int page,int x,int y,int home=5){
- if(x<8||x>=192||y<0||y>=200)return TouchTarget::NONE;
- if(page==home+5)return y>=45&&y<105?TouchTarget::UPDATE:y>=113&&y<173?TouchTarget::HOME:TouchTarget::NONE;
+ if(x<8||x>=192||y<0||y>=188)return TouchTarget::NONE;
+ if(page==home&&y<45)return TouchTarget::SOUND_SETTINGS;
+ if(y>=162)return x<100?TouchTarget::HOME:TouchTarget::STOP;
+ if(page==home+6){
+  if(y>=54&&y<100)return x<100?TouchTarget::VOLUME_DOWN:TouchTarget::VOLUME_UP;
+  if(y>=108&&y<154)return x<100?TouchTarget::MUTE:TouchTarget::SOUND_TEST;
+  return TouchTarget::NONE;
+ }
+ bool top=y>=45&&y<100,bottom=y>=105&&y<155;
+ if(page==home+5)return top?TouchTarget::UPDATE:bottom?TouchTarget::HOME:TouchTarget::NONE;
  if(page==2)return y>=65&&y<125?TouchTarget::CONFIRM:TouchTarget::NONE;
- bool top=y>=45&&y<105,bottom=y>=113&&y<173;
- if(page==home)return top?TouchTarget::START:bottom?TouchTarget::CONTROL:TouchTarget::NONE;
+ if(page==home)return y>=45&&y<155?TouchTarget::START:TouchTarget::NONE;
  if(page==home+1)return top?TouchTarget::PHONE_HOME:bottom?TouchTarget::PHONE_BACK:TouchTarget::NONE;
  if(page==home+2)return top?TouchTarget::LEFT:bottom?TouchTarget::RIGHT:TouchTarget::NONE;
  if(page==home+3)return top?TouchTarget::UP:bottom?TouchTarget::DOWN:TouchTarget::NONE;
  if(page==home+4)return top?TouchTarget::CLICK:bottom?TouchTarget::STOP:TouchTarget::NONE;
- if(page==home-1&&y>=45&&y<=118)return TouchTarget::START;
+ if(page==home-1&&y>=45&&y<155)return TouchTarget::START;
  return TouchTarget::NONE;
+}
+// Recording submission is distinct from cancellation; footer STOP always wins.
+inline TouchTarget voice_touch_target(int x,int y,int stage,bool conversing,bool result){
+ auto base=touch_target(4,x,y);
+ if(base!=TouchTarget::START)return base;
+ if(stage==1)return TouchTarget::FINISH;
+ return conversing||stage==10||stage==11||result?TouchTarget::STOP:base;
 }
 enum class TouchEdge {NONE,DOWN,UP};
 struct TouchContact {

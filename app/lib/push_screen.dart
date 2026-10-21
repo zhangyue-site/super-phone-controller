@@ -49,7 +49,7 @@ class _PushScreenState extends State<PushScreen> {
   int _lastSentAt = 0;
   Duration _lastSentAtWall = Duration.zero;
 
-  static const _steps = ['连接设备', '协商 MTU', '传输固件', '校验 sha256', '切换启动槽'];
+  static const _steps = ['连接设备', '协商 MTU', '传输固件', '校验 sha256', '等待重启确认'];
 
   @override
   void initState() {
@@ -89,7 +89,7 @@ class _PushScreenState extends State<PushScreen> {
           _sent = p.sent;
         }
         if (p.step == '校验 sha256') _step = 3;
-        if (p.step == '切换启动槽') _step = 4;
+        if (p.step == '等待重启确认') _step = 4;
         if (p.log != null) _logs.add(p.log!);
         if (p.done) {
           _done = true;
@@ -132,6 +132,7 @@ class _PushScreenState extends State<PushScreen> {
 
   @override
   void dispose() {
+    if (!_done) widget.service.cancelPush();
     _sub?.cancel();
     super.dispose();
   }
@@ -142,8 +143,7 @@ class _PushScreenState extends State<PushScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface,
         title: const Text('中断推送？'),
-        content: const Text(
-            '已传输的部分会被板子丢弃并回滚，不会留下半包固件。\n之后可以重新开始。'),
+        content: const Text('停止发送并断开连接。若板子已经完成校验并切换启动槽，中断无法撤销更新。'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -155,7 +155,11 @@ class _PushScreenState extends State<PushScreen> {
         ],
       ),
     );
-    if (ok == true && mounted) Navigator.of(context).pop();
+    if (ok == true && mounted) {
+      await widget.service.cancelPush();
+      await _sub?.cancel();
+      if (mounted) Navigator.of(context).pop();
+    }
   }
 
   @override
@@ -165,119 +169,126 @@ class _PushScreenState extends State<PushScreen> {
         ? (_success ? AppTheme.accent : AppTheme.danger)
         : AppTheme.accent;
 
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: Text(_done ? (_success ? '推送完成' : '推送失败') : '推送中…'),
-        actions: [
-          if (!_done)
-            TextButton(
-              onPressed: _confirmCancel,
-              child: const Text('中断',
-                  style: TextStyle(color: AppTheme.textDim)),
-            ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-        children: [
-          const SizedBox(height: 12),
-          Center(
-            child: RingProgress(
-              value: pct,
-              center: _done && _success ? '✓' : '${(_percent).round()}%',
-              subtitle: _done
-                  ? null
-                  : '${_fmt(_sent)} / ${_fmt(_info.size)}',
-              color: color,
-            ),
-          ),
-          if (!_done && _eta != null) ...[
-            const SizedBox(height: 14),
+    return PopScope(
+      canPop: _done,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _confirmCancel();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          title: Text(_done ? (_success ? '升级完成' : '更新未完成') : '第 3 步：传输固件'),
+          actions: [
+            if (!_done)
+              TextButton(
+                onPressed: _confirmCancel,
+                child:
+                    const Text('中断', style: TextStyle(color: AppTheme.textDim)),
+              ),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          children: [
+            const SizedBox(height: 12),
             Center(
-              child: Text(_eta!,
-                  style: const TextStyle(color: AppTheme.textDim, fontSize: 13)),
+              child: RingProgress(
+                value: pct,
+                center: _done && _success ? '✓' : '${(_percent).round()}%',
+                subtitle: _done ? null : '${_fmt(_sent)} / ${_fmt(_info.size)}',
+                color: color,
+              ),
             ),
-          ],
-          if (_done && _failMsg != null) ...[
-            const SizedBox(height: 18),
-            InfoBanner(
-                icon: Icons.error_outline,
-                color: AppTheme.danger,
-                text: _failMsg!),
-          ],
-          if (_done && _success) ...[
-            const SizedBox(height: 18),
-            const InfoBanner(
-              icon: Icons.check_circle_outline,
-              color: AppTheme.accent,
-              text: '固件已写入并校验通过。板子会在几秒内重启，'
-                  '重启后广播名里的版本号会变成新版本。',
-            ),
-          ],
-          const SizedBox(height: 26),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppTheme.surface,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppTheme.border),
-            ),
-            child: StepList(steps: [
-              for (var i = 0; i < _steps.length; i++)
-                (
-                  _steps[i],
-                  _done && !_success && i == _step
-                      ? 1
-                      : (i < _step ? 2 : (i == _step ? 1 : 0))
-                )
-            ]),
-          ),
-          const SizedBox(height: 14),
-          TextButton.icon(
-            onPressed: () => setState(() => _showLogs = !_showLogs),
-            icon: Icon(_showLogs ? Icons.expand_less : Icons.expand_more,
-                size: 18, color: AppTheme.textDim),
-            label: Text('日志（${_logs.length}）',
-                style: const TextStyle(color: AppTheme.textDim, fontSize: 13)),
-          ),
-          if (_showLogs)
+            if (!_done && _eta != null) ...[
+              const SizedBox(height: 14),
+              Center(
+                child: Text(_eta!,
+                    style:
+                        const TextStyle(color: AppTheme.textDim, fontSize: 13)),
+              ),
+            ],
+            if (_done && _failMsg != null) ...[
+              const SizedBox(height: 18),
+              InfoBanner(
+                  icon: Icons.error_outline,
+                  color: AppTheme.danger,
+                  text: _failMsg!),
+            ],
+            if (_done && _success) ...[
+              const SizedBox(height: 18),
+              const InfoBanner(
+                icon: Icons.check_circle_outline,
+                color: AppTheme.accent,
+                text: '已重新连接同一控制板，确认新版本启动且自检通过。',
+              ),
+            ],
+            const SizedBox(height: 26),
             Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: const Color(0xFF0A0D11),
-                borderRadius: BorderRadius.circular(10),
+                color: AppTheme.surface,
+                borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: AppTheme.border),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final l in _logs)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Text(l,
-                          style: AppTheme.mono.copyWith(
-                              color: AppTheme.textDim, fontSize: 11, height: 1.5)),
-                    ),
-                ],
-              ),
+              child: StepList(steps: [
+                for (var i = 0; i < _steps.length; i++)
+                  (
+                    _steps[i],
+                    _done && !_success && i == _step
+                        ? 1
+                        : (i < _step ? 2 : (i == _step ? 1 : 0))
+                  )
+              ]),
             ),
-        ],
-      ),
-      bottomNavigationBar: _done
-          ? SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                child: FilledButton(
-                  onPressed: () {
-                    Navigator.of(context).popUntil((r) => r.isFirst);
-                  },
-                  child: Text(_success ? '完成' : '返回'),
+            const SizedBox(height: 14),
+            TextButton.icon(
+              onPressed: () => setState(() => _showLogs = !_showLogs),
+              icon: Icon(_showLogs ? Icons.expand_less : Icons.expand_more,
+                  size: 18, color: AppTheme.textDim),
+              label: Text('日志（${_logs.length}）',
+                  style:
+                      const TextStyle(color: AppTheme.textDim, fontSize: 13)),
+            ),
+            if (_showLogs)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0A0D11),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final l in _logs)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Text(l,
+                            style: AppTheme.mono.copyWith(
+                                color: AppTheme.textDim,
+                                fontSize: 11,
+                                height: 1.5)),
+                      ),
+                  ],
                 ),
               ),
-            )
-          : null,
+          ],
+        ),
+        bottomNavigationBar: _done
+            ? SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: FilledButton(
+                    onPressed: () {
+                      Navigator.of(context).popUntil((r) => r.isFirst);
+                    },
+                    child: Text(_success ? '完成' : '返回'),
+                  ),
+                ),
+              )
+            : null,
+      ),
     );
   }
 

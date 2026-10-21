@@ -33,7 +33,7 @@ class _PulsingDotState extends State<PulsingDot>
         width: widget.size,
         height: widget.size,
         decoration: BoxDecoration(
-          color: widget.color.withOpacity(0.35 + 0.65 * _c.value),
+          color: widget.color.withValues(alpha: 0.35 + 0.65 * _c.value),
           shape: BoxShape.circle,
         ),
       ),
@@ -58,9 +58,9 @@ class InfoBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.10),
+        color: color.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(11),
-        border: Border.all(color: color.withOpacity(0.35)),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -99,7 +99,8 @@ class StepList extends StatelessWidget {
                   child: Text(
                     steps[i].$1,
                     style: TextStyle(
-                      color: steps[i].$2 == 0 ? AppTheme.textDim : AppTheme.text,
+                      color:
+                          steps[i].$2 == 0 ? AppTheme.textDim : AppTheme.text,
                       fontSize: 14,
                       fontWeight:
                           steps[i].$2 == 1 ? FontWeight.w600 : FontWeight.w400,
@@ -119,8 +120,8 @@ class StepList extends StatelessWidget {
       return Container(
         width: 18,
         height: 18,
-        decoration: const BoxDecoration(
-            color: AppTheme.accent, shape: BoxShape.circle),
+        decoration:
+            const BoxDecoration(color: AppTheme.accent, shape: BoxShape.circle),
         child: const Icon(Icons.check, size: 12, color: Color(0xFF06281B)),
       );
     }

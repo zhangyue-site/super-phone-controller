@@ -38,15 +38,15 @@ Gesture GestureDetector::feed(bool down, int x, int y, int64_t now_ms) {
 
         // 双击：与上次抬手间隔近、位置近、且两次都是点按。
         if (!moved_ && now_ms - release_ms_ <= kDoubleMs &&
-            dist(x, y, last_tap_x_, last_tap_y_) <= kDoublePx * kDoublePx) {
+            dist(last_.x, last_.y, last_tap_x_, last_tap_y_) <= kDoublePx * kDoublePx) {
             release_ms_ = -100000;  // 消费掉，防三连击当两次双击
             return Gesture::DoubleTap;
         }
 
         // 普通点按：记录抬手现场供下次双击判定，按钮命中逻辑照旧。
-        release_ms_ = now_ms;
-        last_tap_x_ = x;
-        last_tap_y_ = y;
+        release_ms_ = moved_ ? -100000 : now_ms;
+        last_tap_x_ = last_.x;
+        last_tap_y_ = last_.y;
         return Gesture::None;
     }
 
