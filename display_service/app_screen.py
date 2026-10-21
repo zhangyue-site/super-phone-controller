@@ -62,6 +62,7 @@ def handle(handler,config):
    voice_session,voice_sequence,frame_sequence=j.session,j.sequence,j.video_sequence+1
   result=mailbox.ingest_video(device,voice_session,voice_sequence,frame_sequence,payload,'jpeg')
   result['source']='user-consented-app-screen'
+  if frame_sequence==1 or frame_sequence%10==0:print('APP_SCREEN frame device=%s turn=%d frame=%d width=%d height=%d'%(device,voice_sequence,frame_sequence,result['width'],result['height']),flush=True)
   handler.reply(200,json.dumps(result).encode())
  except (ValueError,TypeError,KeyError,OSError):handler.reply(403,b'{"error":"screen session invalid or expired"}')
  return True
