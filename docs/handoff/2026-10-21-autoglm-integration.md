@@ -9,3 +9,9 @@ IME正常输入后立即恢复；失败/可捕获中断用trap恢复，断连遗
 17项固件主机测试、85项Python测试通过。审查发现并修复expire缩进和“未找到”误报成功问题。小米实测：微信搜索框已写入李洋，结果包含联系人标题及独立李洋节点，默认IME恢复豆包，结果页保留。这是Mac诊断调用，与板端语音验收分开。首次无等待时文字未写入；按官方切换/清空/输入/恢复等待后成功，固件已修正。
 
 完整云端规划器桥接测试因手机前台从豆包变化到饿了么而停止，没有重放动作，已请求用户暂停操作和其他自动化任务。ci57云端构建中；服务端代码已部署但EPAPER_PHONE_BACKEND=legacy，待新固件升级再启用autoglm。原服务代码备份/var/backups/phone-controller/before-autoglm-20261021.tar.gz，运行环境drop-in /etc/systemd/system/phone-controller-display.service.d/10-autoglm-runtime.conf。
+
+## 用户最新修正，取代上方执行架构
+
+Open-AutoGLM仅参考规划，HID鼠标负责所有点击/移动/拖动；ADB只允许中文输入。截图必须走另一条USB投屏通路。ci57已取消，没有刷入；服务器EPAPER_PHONE_BACKEND=hid_pending，手机任务明确播报当前未执行，避免落回旧ADB执行器。ci55仍在板上，保留已验证的语音/触摸功能。
+
+官方资料：Xiaomi17Ultra FAQ声明支持DP1.4 Alt Mode（https://www.mi.com/global/support/faq/details/KA-667490/）。微雪现板资料未提供DP/HDMI视频接收硬件（https://docs.waveshare.com/ESP32-S3-ePaper-1.54）。scrcpy OTG/HID免ADB模式明确禁用音视频（https://github.com/Genymobile/scrcpy/blob/master/doc/otg.md）。USB鼠标与USB视频采集必须分开验证，当前不能声称现板仅插数据线即可接收DP投屏。
