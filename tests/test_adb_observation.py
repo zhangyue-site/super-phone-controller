@@ -1,6 +1,7 @@
 """Execute the firmware's actual fixed shell observation script against Android command fixtures."""
 import ast,re,subprocess,unittest,tempfile,os
 from pathlib import Path
+from unittest.mock import patch
 from display_service.dialogue import parse_observation
 ROOT=Path(__file__).resolve().parents[1]
 def script():
@@ -13,6 +14,10 @@ cmd(){ echo 'com.miui.home/.launcher.Launcher'; }
 uiautomator(){ for target do :; done; printf '<?xml version="1.0"?><hierarchy><node package="com.android.settings" text="设置" bounds="[0,0][200,200]"/></hierarchy>\\n' > \"$target\"; }
 '''
 class ObservationTests(unittest.TestCase):
+ def setUp(self):
+  temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
+  env=patch.dict(os.environ,{'TMPDIR':temp.name});env.start();self.addCleanup(env.stop)
+
  def test_real_firmware_script_observation_parses(self):
   result=subprocess.run(['sh','-c',BASE.replace('POLICY',"echo 'showing=false'")+script()],capture_output=True,text=True)
   self.assertEqual(result.returncode,0,result.stderr)
