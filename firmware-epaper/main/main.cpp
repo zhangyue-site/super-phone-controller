@@ -28,6 +28,7 @@
 #include "network_screens.h"
 #include "ui_assets.h"
 #include "voice.h"
+#include "audio_feedback.h"
 #include "adb_local.h"
 #include "voice_screens.h"
 #include "preflight.h"
@@ -427,7 +428,7 @@ static void stop_now(){
  stop_sequence.fetch_add(1);
  controller_event("stop",page.load());
  taskENTER_CRITICAL(&consent_mux);
- ble_ota_cancel();controller_ota_cancel();controller_adb_cancel();controller_voice_cancel();stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
+ ble_ota_cancel();controller_ota_cancel();controller_adb_cancel();controller_voice_cancel();controller_audio_interrupt();stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
  taskEXIT_CRITICAL(&consent_mux);
  if(screen_task_handle)xTaskNotifyGive(screen_task_handle);
  ESP_LOGI(TAG,"Local stop latched; no actuator enabled");
@@ -435,7 +436,6 @@ static void stop_now(){
 static void touch_action(controller::TouchTarget target,int64_t began,int64_t now){
  using controller::TouchTarget;
  controller_event("action",page.load(),(int)target);
- if(target!=TouchTarget::VOLUME_DOWN&&target!=TouchTarget::VOLUME_UP&&target!=TouchTarget::MUTE&&target!=TouchTarget::SOUND_TEST&&target!=TouchTarget::START&&target!=TouchTarget::HOME&&target!=TouchTarget::STOP&&target!=TouchTarget::NONE)controller_audio_prompt(controller::SpeechPrompt::CLICK);
  switch(target){
  case TouchTarget::SOUND_SETTINGS:go_page(HOME_PAGE+6);break;
  case TouchTarget::VOLUME_DOWN:controller_audio_adjust(-20);controller_ota_changed();break;
@@ -448,7 +448,7 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
   go_page(PAGE_COUNT-1);
   stopped=false;controller_voice_conversation();
   break;
- case TouchTarget::HOME:controller_voice_cancel();go_page(HOME_PAGE);controller_audio_prompt(controller::SpeechPrompt::CLICK);break;
+ case TouchTarget::HOME:controller_voice_cancel();go_page(HOME_PAGE);break;
  case TouchTarget::QUOTA:go_page(0);break;
  case TouchTarget::CONTROL:go_page(controller_usb_hid_enabled()?HOME_PAGE+1:2);break;
  case TouchTarget::PHONE_HOME:case TouchTarget::PHONE_BACK:{
@@ -479,6 +479,7 @@ static void input_task(void*){
  controller::TouchGesture gesture;controller::TouchContact contact_state;int touch_page=-1;
  controller::ButtonGesture side_key;controller::ControlButton control_key;controller::GestureDetector swipes;
  controller::DebouncedButton voice_debounce,power_debounce,external_control_debounce;
+ controller::PressFeedback voice_press,power_press,external_press;
  unsigned swipe_epoch=0;bool swipe_contact=false;
  bool touch_voicing=false,key_voicing=false;unsigned touch_voice_epoch=0;
  bool updating=false;
@@ -494,10 +495,13 @@ static void input_task(void*){
   bool power_down=power_debounce.update(gpio_get_level(GPIO_NUM_18)==0,now);
   bool external_control_down=external_control_debounce.update(external_control_raw,now);
   bool control_down=power_down||external_control_down;
+  bool voice_pressed=voice_press.update(down),power_pressed=power_press.update(power_down),external_pressed=external_press.update(external_control_down);
+  if(voice_pressed||power_pressed||external_pressed)controller_audio_prompt(controller::SpeechPrompt::CLICK);
   int tx=0,ty=0;int contact=controller_touch_read(tx,ty);auto edge=contact_state.update(contact);
   auto target=contact==1?controller::touch_target(page.load(),tx,ty,HOME_PAGE):controller::TouchTarget::NONE;
   // Stop is acted on at contact-down, including during display refresh and OTA.
   if((controller_voice_conversing()||controller_voice_stage()==10||controller_voice_stage()==11||dialogue_frame_valid.load())&&page==PAGE_COUNT-1&&contact==1&&ty>=45&&ty<155)target=controller::TouchTarget::STOP;
+  if(edge==controller::TouchEdge::DOWN&&target!=controller::TouchTarget::NONE&&target!=controller::TouchTarget::STOP&&!screen_painting&&!screen_failed&&screen_epoch.load()==painted_epoch.load())controller_audio_prompt(controller::SpeechPrompt::CLICK);
   if(edge==controller::TouchEdge::DOWN&&target==controller::TouchTarget::STOP){
    stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();
   }

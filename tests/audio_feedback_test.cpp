@@ -3,6 +3,7 @@
 #include <cstdlib>
 int main(){
  using namespace controller;
+ PressFeedback edge;assert(!edge.update(false));assert(edge.update(true));assert(!edge.update(true));assert(!edge.update(false));assert(edge.update(true));
  for(auto cue:{Feedback::CLICK,Feedback::LISTEN,Feedback::SUCCESS,Feedback::FAILURE,Feedback::STOP}){
   int n=feedback_samples(cue);assert(n>0&&n<=4800);
   assert(feedback_sample(cue,0)==0);assert(feedback_sample(cue,n-1)==0);

@@ -3,6 +3,10 @@
 #include <cstdint>
 #include <initializer_list>
 namespace controller {
+struct PressFeedback {
+ bool held=false;
+ bool update(bool down){bool pressed=down&&!held;held=down;return pressed;}
+};
 enum class Feedback { CLICK, LISTEN, SUCCESS, FAILURE, STOP };
 inline bool feedback_allowed(int volume,bool muted,bool recording){return volume>0&&!muted&&!recording;}
 inline int feedback_samples(Feedback cue){return cue==Feedback::CLICK?960:cue==Feedback::STOP?1440:3840;}
