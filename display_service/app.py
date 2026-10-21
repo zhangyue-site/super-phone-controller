@@ -5,10 +5,13 @@ import hashlib,hmac,io,json,os,threading,time,subprocess
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse,parse_qs
+from . import events,firmware
+from .conversation import CONVERSATION
+from .audio_stream import read_chunks
 from .model import quota_rows
 from .voice import validate_pcm,recognize
 from .readiness import READINESS
-from .render import render
+from .render import render,render_dialogue
 from .control import read as read_interaction, write as write_interaction
 
 CONFIG=Path(os.environ.get('EPAPER_CONFIG','/etc/phone-controller/devices.json'))
@@ -51,6 +54,13 @@ class Handler(BaseHTTPRequestHandler):
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         parsed=urlparse(self.path)
+        if parsed.path in ('/firmware/manifest','/firmware/image'):
+            try:
+                if parsed.path.endswith('/manifest'):return self.reply(200,firmware.manifest(device),'text/plain')
+                sha=parse_qs(parsed.query).get('sha',[''])[0]
+                return self.reply(200,firmware.release(device,sha)[1],'application/octet-stream')
+            except (OSError,ValueError,KeyError,TypeError):return self.reply(404,b'{}')
+        if parsed.path=='/events':return self.reply(200,json.dumps(events.tail(device)).encode())
         if parsed.path=='/checks':return self.reply(200,json.dumps(READINESS.snapshot()).encode())
         if parsed.path not in ('/screen.bin','/screen.png','/status'):return self.reply(404,b'{}')
         rows=snapshot()
@@ -67,6 +77,23 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(10)
         device=self.device()
         if device is None:return self.reply(401,b'{}')
+        if self.path=='/firmware/report':
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 1<=size<=1024:raise ValueError('size')
+                raw=self.rfile.read(size)
+                if len(raw)!=size:raise ValueError('truncated')
+                return self.reply(200,json.dumps(firmware.report(device,raw)).encode())
+            except (ValueError,TypeError):return self.reply(400,b'{}')
+        if self.path=='/events':
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 1<=size<=16384:raise ValueError('invalid size')
+                raw=self.rfile.read(size)
+                if len(raw)!=size:raise ValueError('truncated batch')
+                count=events.ingest(device,raw)
+                return self.reply(200,json.dumps({'accepted':count}).encode())
+            except (ValueError,UnicodeError,TypeError):return self.reply(400,b'{}')
         if self.path in ('/checks','/checks.bin'):
             result=READINESS.run()
             if self.path=='/checks.bin':
@@ -77,7 +104,37 @@ class Handler(BaseHTTPRequestHandler):
         seq=self.headers.get('X-Voice-Sequence','')
         valid_session=bool(re.fullmatch(r'[0-9a-f]{16}',session) and re.fullmatch(r'[0-9]{1,10}',seq))
         sequence=int(seq) if valid_session else 0
-        if self.path=='/voice':
+        if self.path.startswith('/dialogue/'):
+            if not valid_session or sequence<1:return self.reply(400,b'{}')
+            try:
+                if self.path=='/dialogue/poll':
+                    return self.reply(200,json.dumps(CONVERSATION.mailbox.poll(device,session,sequence),ensure_ascii=False).encode())
+                if self.path=='/dialogue/screen':
+                    with CONVERSATION.mailbox.lock:
+                        j=CONVERSATION.mailbox._job(device,session,sequence)
+                        frame=render_dialogue(j.reply,j.state,j.speech_error).tobytes()
+                    return self.reply(200,frame,'application/octet-stream')
+                if self.path=='/dialogue/audio':
+                    return self.reply(200,CONVERSATION.mailbox.audio(device,session,sequence),'application/octet-stream')
+                if self.path in ('/dialogue/result','/dialogue/text'):
+                    size=int(self.headers.get('Content-Length','0'))
+                    if not 1<=size<=128000:raise ValueError('body size')
+                    raw=self.rfile.read(size)
+                    if len(raw)!=size:raise ValueError('truncated')
+                    body=json.loads(raw)
+                    if self.path=='/dialogue/text':
+                        text=body['text']
+                        if not isinstance(text,str) or not 1<=len(text)<=120:raise ValueError('text length')
+                        with LOCK:
+                            if sequence<=VOICE_CANCELLED.get(device,{}).get(session,0):raise ValueError('cancelled turn')
+                            CONVERSATION.start(device,session,sequence,text)
+                    else:
+                        if type(body['ok']) is not bool or not isinstance(body['output'],str) or len(body['output'].encode())>48000:raise ValueError('result shape')
+                        CONVERSATION.mailbox.ack(device,session,sequence,body['id'],body['ok'],body['output'])
+                    return self.reply(200,b'{"accepted":true}')
+                return self.reply(404,b'{}')
+            except (ValueError,KeyError,TypeError):return self.reply(409,b'{"error":"turn rejected"}')
+        if self.path in ('/voice','/voice/stream'):
             if not valid_session or sequence<1:return self.reply(400,b'{}')
             with LOCK:
                 if sequence<=VOICE_CANCELLED.get(device,{}).get(session,0):return self.reply(409,b'{}')
@@ -85,18 +142,34 @@ class Handler(BaseHTTPRequestHandler):
                 VOICE_BUSY.add(device)
                 generation=VOICE_GENERATION.get(device,0)
             try:
-                size=int(self.headers.get('Content-Length','0'))
-                if not 12800<=size<=320000:raise ValueError('invalid length')
-                raw=self.rfile.read(size)
-                if len(raw)!=size:raise ValueError('truncated audio')
+                started=time.monotonic();first=[None]
+                def progress(size):
+                    if first[0] is None:
+                        first[0]=time.monotonic()
+                        print('VOICE first_chunk bytes=%d delay_ms=%d'%(size,(first[0]-started)*1000),flush=True)
+                if self.path=='/voice/stream':
+                    if self.headers.get('Transfer-Encoding','').lower()!='chunked':raise ValueError('chunked required')
+                    if self.headers.get('Content-Length') is not None:raise ValueError('ambiguous length')
+                    raw=read_chunks(self.rfile,progress)
+                else:
+                    size=int(self.headers.get('Content-Length','0'))
+                    if not 12800<=size<=320000:raise ValueError('invalid length')
+                    raw=self.rfile.read(size)
+                    if len(raw)!=size:raise ValueError('truncated audio')
+                received=time.monotonic()
+                print('VOICE received bytes=%d receive_ms=%d'%(len(raw),(received-started)*1000),flush=True)
                 validate_pcm(raw)
                 with LOCK:
                     if generation!=VOICE_GENERATION.get(device,0):return self.reply(409,b'{}')
                     write_interaction(device,'thinking','语音已上传，正在云端识别')
                 text=recognize(raw)
+                print("VOICE recognized asr_ms=%d"%((time.monotonic()-received)*1000),flush=True)
                 with LOCK:
                     if generation!=VOICE_GENERATION.get(device,0):return self.reply(409,b'{}')
-                    write_interaction(device,'waiting',text+'（已识别；手机执行器尚未接入）')
+                    if self.headers.get('X-Voice-Dialogue')=='1':
+                        if sequence<=VOICE_CANCELLED.get(device,{}).get(session,0):raise ValueError('cancelled turn')
+                        CONVERSATION.start(device,session,sequence,text)
+                    else:write_interaction(device,'waiting',text+'（仅识别模式）')
                 return self.reply(200,b'{"recognized":true,"actuatorConnected":false}')
             except (ValueError,OSError,TimeoutError,KeyError,RuntimeError,subprocess.SubprocessError):
                 with LOCK:
@@ -105,17 +178,22 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 with LOCK:VOICE_BUSY.discard(device)
         if self.path!='/stop':return self.reply(404,b'{}')
+        CONVERSATION.mailbox.cancel(device,session,sequence)
         with LOCK:
             VOICE_GENERATION[device]=VOICE_GENERATION.get(device,0)+1
             if valid_session:
                 history=VOICE_CANCELLED.setdefault(device,OrderedDict())
                 history[session]=max(sequence,history.get(session,0));history.move_to_end(session)
                 while len(history)>16:history.popitem(last=False)
-            write_interaction(device,'stopped','本机停止请求已记录；控制执行器尚未接入')
+            write_interaction(device,'stopped','对话任务已取消；板端停止会撤销本地ADB操作')
         return self.reply(200,b'{"recorded":true,"actuatorConnected":false}')
 
 
 def main():
+    def expire():
+        while True:
+            time.sleep(5);CONVERSATION.expire()
+    threading.Thread(target=expire,daemon=True).start()
     ThreadingHTTPServer(('127.0.0.1',18943),Handler).serve_forever()
 
 if __name__=='__main__':main()

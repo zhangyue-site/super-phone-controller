@@ -1,5 +1,7 @@
 #include "voice.h"
 #include "conversation_policy.h"
+#include "dialogue.h"
+#include "voice_lifecycle.h"
 #include "touch.h"
 #include "adb_local.h"
 #include "sdkconfig.h"
@@ -19,8 +21,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 static std::atomic<bool> held(false),cancelled(false),conversation(false);
-static std::atomic<unsigned> conversation_turns(0),conversation_epoch(0);
-static std::atomic<int> stage(0);
+static std::atomic<unsigned> conversation_turns(0);
+static controller::VoiceLifecycle lifecycle;
+static auto &conversation_epoch=lifecycle.epoch;
+static auto &stage=lifecycle.stage;
 static std::atomic<uint32_t> adb_consent(0);
 static std::atomic<bool> diagnostic(false),prepare_only(false);
 static TaskHandle_t worker,stream_worker;
@@ -84,25 +88,30 @@ static bool init_mic(){
  mic=esp_codec_dev_new(&dev);if(!mic)return false;
  ESP_LOGI("voice","ES8311 driver initialized; ADC remains closed until hold");return true;
 }
+bool controller_audio_play_pcm(const unsigned char *data,unsigned size){
+ if(!data||!size||(size%2)||size>960000||held||!init_mic())return false;
+ if(output_muted||output_volume==0)return true;
+ unsigned epoch=playback_epoch.load();
+ esp_codec_dev_sample_info_t fs={};fs.sample_rate=16000;fs.channel=2;fs.bits_per_sample=16;
+ if(esp_codec_dev_open(mic,&fs)!=ESP_CODEC_DEV_OK)return false;
+ esp_codec_dev_set_out_mute(mic,false);
+ int16_t stereo[512];unsigned used=0;bool ok=true;
+ while(used<size&&!held&&!output_muted&&epoch==playback_epoch.load()){
+  unsigned n=(size-used)/2;if(n>256)n=256;
+  for(unsigned i=0;i<n;i++){int16_t v=(int16_t)(data[used+2*i]|(data[used+2*i+1]<<8));stereo[2*i]=v;stereo[2*i+1]=v;}
+  esp_codec_dev_set_out_vol(mic,output_volume.load());
+  if(esp_codec_dev_write(mic,stereo,n*4)!=ESP_CODEC_DEV_OK){ok=false;break;}
+  used+=n*2;
+ }
+ esp_codec_dev_set_out_mute(mic,true);esp_codec_dev_close(mic);
+ return ok&&!held&&(output_muted||epoch==playback_epoch.load());
+}
 static void play_prompt(int prompt){
  const uint8_t *starts[]={nullptr,ready_start,recognized_start,failed_start,stopped_start,test_start};
  const uint8_t *ends[]={nullptr,ready_end,recognized_end,failed_end,stopped_end,test_end};
- if(prompt<1||prompt>5||output_muted||held||!init_mic())return;
- unsigned epoch=playback_epoch.load();
- esp_codec_dev_sample_info_t fs={};fs.sample_rate=16000;fs.channel=2;fs.bits_per_sample=16;
- if(esp_codec_dev_open(mic,&fs)!=ESP_CODEC_DEV_OK)return;
- esp_codec_dev_set_out_mute(mic,false);
- int16_t stereo[512];const uint8_t *cursor=starts[prompt];
- while(cursor<ends[prompt]&&!held&&!output_muted&&epoch==playback_epoch.load()){
-  size_t n=(ends[prompt]-cursor)/2;if(n>256)n=256;
-  if(!n)break;
-  for(size_t i=0;i<n;++i){int16_t sample=(int16_t)(cursor[2*i]|(cursor[2*i+1]<<8));stereo[2*i]=sample;stereo[2*i+1]=sample;}
-  esp_codec_dev_set_out_vol(mic,output_volume.load());
-  if(esp_codec_dev_write(mic,stereo,n*4)!=ESP_CODEC_DEV_OK)break;
-  cursor+=n*2;
- }
- esp_codec_dev_set_out_mute(mic,true);esp_codec_dev_close(mic);
+ if(prompt>=1&&prompt<=5)controller_audio_play_pcm(starts[prompt],ends[prompt]-starts[prompt]);
 }
+void controller_voice_state(int value){state(value);}
 static void run(void*){
  auto pcm=(int16_t*)heap_caps_malloc(320000,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
  for(;;){
@@ -113,6 +122,7 @@ static void run(void*){
   bool test=diagnostic.exchange(false);
   bool prepare=prepare_only.exchange(false);
   if((!held || cancelled) && !test)continue;
+  controller::VoiceLifecycle::Lease lease(lifecycle);
 #if CONFIG_CONTROLLER_USB_LOCAL
   if(!test && (prepare || !controller_voice_prepared())){
    unsigned cancel_at_start=cancel_sequence.load();uint32_t consent=adb_consent.load();
@@ -120,10 +130,10 @@ static void run(void*){
    state(7);bool ready=controller_adb_activate(consent);
    if(ready && !cancelled && controller_voice_online())ready=controller_preflight_probe();
    if(!cancelled && cancel_sequence.load()==cancel_at_start){state(ready?8:9);held=false;if(ready&&controller_voice_prepared()){controller_audio_prompt(controller::SpeechPrompt::READY);}}
-   if(ready&&controller_voice_prepared()&&conversation&&!cancelled&&turn_epoch==conversation_epoch.load()){
+   if(ready&&controller_voice_prepared()&&conversation&&!cancelled&&lifecycle.current(turn_epoch)){
     pending_prompt=0;play_prompt((int)controller::SpeechPrompt::READY);vTaskDelay(pdMS_TO_TICKS(400));
-    if(conversation&&!cancelled&&turn_epoch==conversation_epoch.load()){held=true;xTaskNotifyGive(worker);}
-   }else if(turn_epoch==conversation_epoch.load())conversation=false;
+    if(conversation&&!cancelled&&lifecycle.current(turn_epoch)){held=true;xTaskNotifyGive(worker);}
+   }else if(lifecycle.current(turn_epoch))conversation=false;
    continue;
   }
 #endif
@@ -167,50 +177,52 @@ static void run(void*){
   if(!stream.abort)state(2);
   while(stream.result==0){if(cancelled)stream.abort=true;vTaskDelay(pdMS_TO_TICKS(10));}
   if(cancelled){state(0);continue;}
-  if(turn_epoch!=conversation_epoch.load())continue;
+  if(!lifecycle.current(turn_epoch))continue;
   held=false;
   if(continuous&&!vad.send()){conversation=false;state(0);controller_audio_prompt(controller::SpeechPrompt::STOPPED);continue;}
   bool uploaded=stream.result==1;
+  if(uploaded)uploaded=controller_dialogue_run(sequence);
+  if(!lifecycle.current(turn_epoch)||cancelled)continue;
   state(uploaded?3:5);if(uploaded)controller_voice_changed(true);
-  if(continuous&&uploaded&&conversation&&turn_epoch==conversation_epoch.load()&&++conversation_turns<12){
-   play_prompt((int)controller::SpeechPrompt::RECOGNIZED);
+  if(continuous&&uploaded&&conversation&&lifecycle.current(turn_epoch)&&++conversation_turns<12){
+   // Spoken reply has completed; keep a short acoustic guard before reopening RX.
    vTaskDelay(pdMS_TO_TICKS(400));
-   if(conversation&&!cancelled&&turn_epoch==conversation_epoch.load()){record_sequence=next_sequence.fetch_add(1);held=true;xTaskNotifyGive(worker);}
-  }else{conversation=false;controller_audio_prompt(continuous&&uploaded?controller::SpeechPrompt::STOPPED:uploaded?controller::SpeechPrompt::RECOGNIZED:controller::SpeechPrompt::FAILED);}
+   if(conversation&&!cancelled&&lifecycle.current(turn_epoch)){record_sequence=next_sequence.fetch_add(1);held=true;xTaskNotifyGive(worker);}
+  }else{conversation=false;controller_audio_prompt(continuous&&uploaded?controller::SpeechPrompt::STOPPED:uploaded?controller::SpeechPrompt::STOPPED:controller::SpeechPrompt::FAILED);}
  }
 }
 void controller_voice_init(){
  nvs_handle_t h;if(nvs_open("audio",NVS_READONLY,&h)==ESP_OK){uint8_t v=60,m=0;nvs_get_u8(h,"volume",&v);nvs_get_u8(h,"muted",&m);output_volume=controller::clamp_volume(v)/20*20;output_muted=m!=0;nvs_close(h);}
- snprintf(session,sizeof(session),"%08x%08x",(unsigned)esp_random(),(unsigned)esp_random());xTaskCreate(upload_run,"voice_stream",8192,nullptr,3,&stream_worker);xTaskCreate(run,"voice",6144,nullptr,4,&worker);}
+ snprintf(session,sizeof(session),"%08x%08x",(unsigned)esp_random(),(unsigned)esp_random());xTaskCreate(upload_run,"voice_stream",8192,nullptr,3,&stream_worker);xTaskCreate(run,"voice",12288,nullptr,4,&worker);}
 static void begin_voice_request(){
- controller_audio_interrupt();
+ controller_audio_interrupt();controller_dialogue_screen(nullptr);
  adb_consent=controller_adb_ticket();record_sequence=next_sequence.fetch_add(1);cancelled=false;held=true;xTaskNotifyGive(worker);
 }
 void controller_voice_prepare(){
- if(stage==1 || stage==2 || stage==4 || stage==7)return;
+ if(!lifecycle.can_start())return;
  prepare_only=true;begin_voice_request();
 }
 void controller_voice_hold(bool value){
  if(!value){held=false;return;}
- if(stage==1 || stage==2 || stage==4 || stage==7)return;
+ if(!lifecycle.can_start())return;
  conversation=false;conversation_epoch.fetch_add(1);prepare_only=false;begin_voice_request();
 }
-void controller_voice_cancel(){conversation_epoch.fetch_add(1);conversation=false;controller_audio_interrupt();cancel_sequence=next_sequence.fetch_add(1);cancelled=true;held=false;}
+void controller_voice_cancel(){if(conversation||lifecycle.busy)controller_adb_cancel();lifecycle.cancel();controller_voice_changed(false);conversation=false;controller_audio_interrupt();cancel_sequence=next_sequence.fetch_add(1);cancelled=true;held=false;}
 int controller_voice_stage(){
 #if CONFIG_CONTROLLER_USB_LOCAL
- if(stage>=7){int adb=controller_adb_stage();return adb==3?8:(adb==1||adb==2)?7:(adb==0?0:9);}
+ if(stage>=7&&stage<=9){int adb=controller_adb_stage();return adb==3?8:(adb==1||adb==2)?7:(adb==0?0:9);}
 #endif
  return stage.load();
 }
 
-void controller_voice_test(){if(stage==1||stage==2||stage==4)return;controller_audio_interrupt();cancelled=false;diagnostic=true;xTaskNotifyGive(worker);}
+void controller_voice_test(){if(!lifecycle.can_start())return;controller_audio_interrupt();cancelled=false;diagnostic=true;xTaskNotifyGive(worker);}
 
 const char *controller_voice_session(){return session;}
 unsigned controller_voice_cancel_sequence(){return cancel_sequence.load();}
 
 bool controller_voice_conversing(){return conversation.load();}
 void controller_voice_conversation(){
- if(stage==1||stage==2||stage==4||stage==7)return;
+ if(!lifecycle.can_start())return;
  if(conversation)return;
  conversation_epoch.fetch_add(1);conversation_turns=0;conversation=true;prepare_only=false;begin_voice_request();
 }

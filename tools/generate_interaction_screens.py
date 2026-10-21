@@ -71,18 +71,35 @@ for title,hint,detail in [
     ('语音待命','点此开始对话','点一下 · 说完自动发送'),
     ('正在听','说完停顿即可发送','点此结束对话'),
     ('正在识别','请稍等','点此结束对话'),
-    ('已识别','提示后继续听','尚未执行手机操作'),
+    ('本轮完成','播报后继续听','点此结束对话'),
     ('准备麦克风','请稍等','点击大区域结束'),
     ('识别失败','点此重新开始','靠近麦克风说话'),
     ('尚未连接','点此检测连接','请检查手机连接'),
     ('正在连接','请查看手机授权','点击大区域结束'),
     ('连接已建立','点此开始对话','开始说话'),
     ('连接失败','点此重新开始','请检查手机授权'),
+    ('正在处理','对话或手机操作中','点此立即停止'),
+    ('正在播报','播完后继续听','点此立即停止'),
 ]:
     im=Image.new('1',(200,200),1)
     text(im,(100,20),title,28,True);text(im,(100,77),hint,18,True);text(im,(100,119),detail,15,True)
     voice.append(im)
 emit('interaction_voice',voice,'interaction-voice')
+adb_errors=[]
+for title,hint,detail in [
+    ('等待连接','点击重试','检查手机USB直连'),
+    ('未获手机地址','点击重试','检查数据线和USB状态'),
+    ('ADB 端口未开','点击重试','手机重启后需恢复ADB'),
+    ('ADB 连接超时','点击重试','检查手机和数据线'),
+    ('本地网络失败','点击重试','重新连接USB数据线'),
+    ('ADB 授权失败','请在手机确认授权','再点击此处重试'),
+    ('ADB 探测失败','只读命令未通过','本次未执行手机操作'),
+    ('ADB 连接已断','点击重试连接','不会自动重发动作'),
+]:
+    im=Image.new('1',(200,200),1)
+    text(im,(100,16),title,24,True);text(im,(100,70),hint,18,True);text(im,(100,118),detail,15,True)
+    adb_errors.append(im)
+emit('interaction_adb_error',adb_errors,'interaction-adb-error')
 # Footer-only strip shared by every screen.
 im=homes[0]
 strip=im.crop((0,162,200,188)).tobytes()
