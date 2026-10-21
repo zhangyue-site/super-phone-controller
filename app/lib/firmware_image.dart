@@ -5,7 +5,8 @@ import 'package:crypto/crypto.dart';
 class FirmwareImage {
   final String version;
   final String sha;
-  const FirmwareImage(this.version, this.sha);
+  final String elfSha256;
+  const FirmwareImage(this.version, this.sha, this.elfSha256);
   static const maxSize = 0x340000;
 
   static FirmwareImage parse(Uint8List bytes) {
@@ -60,6 +61,12 @@ class FirmwareImage {
     for (var i = 0; i < 32; i++) {
       if (bytes[end + i] != digest[i]) reject('固件 SHA256 校验失败');
     }
-    return FirmwareImage(version, sha256.convert(bytes).toString());
+    return FirmwareImage(
+        version,
+        sha256.convert(bytes).toString(),
+        bytes
+            .sublist(176, 208)
+            .map((b) => b.toRadixString(16).padLeft(2, '0'))
+            .join());
   }
 }

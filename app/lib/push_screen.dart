@@ -49,7 +49,7 @@ class _PushScreenState extends State<PushScreen> {
   int _lastSentAt = 0;
   Duration _lastSentAtWall = Duration.zero;
 
-  static const _steps = ['连接设备', '协商 MTU', '传输固件', '校验 sha256', '切换启动槽'];
+  static const _steps = ['连接设备', '协商 MTU', '传输固件', '校验 sha256', '等待重启确认'];
 
   @override
   void initState() {
@@ -89,7 +89,7 @@ class _PushScreenState extends State<PushScreen> {
           _sent = p.sent;
         }
         if (p.step == '校验 sha256') _step = 3;
-        if (p.step == '切换启动槽') _step = 4;
+        if (p.step == '等待重启确认') _step = 4;
         if (p.log != null) _logs.add(p.log!);
         if (p.done) {
           _done = true;
@@ -177,7 +177,7 @@ class _PushScreenState extends State<PushScreen> {
       child: Scaffold(
         appBar: AppBar(
           automaticallyImplyLeading: false,
-          title: Text(_done ? (_success ? '固件校验通过' : '更新未完成') : '第 3 步：传输固件'),
+          title: Text(_done ? (_success ? '升级完成' : '更新未完成') : '第 3 步：传输固件'),
           actions: [
             if (!_done)
               TextButton(
@@ -219,8 +219,7 @@ class _PushScreenState extends State<PushScreen> {
               const InfoBanner(
                 icon: Icons.check_circle_outline,
                 color: AppTheme.accent,
-                text: '固件已写入并校验通过。板子会在几秒内重启，'
-                    '重启后广播名里的版本号会变成新版本。',
+                text: '已重新连接同一控制板，确认新版本启动且自检通过。',
               ),
             ],
             const SizedBox(height: 26),
