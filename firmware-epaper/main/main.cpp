@@ -621,6 +621,10 @@ static void console_command(char *line){
  else if(strcmp(line,"AUDIO TEST")==0){controller_audio_prompt(controller::SpeechPrompt::TEST);}
  else if(strcmp(line,"AUDIO AUDIT")==0){controller_audio_prompt(controller::SpeechPrompt::AUDIT);}
  else if(strcmp(line,"AUDIO CLICK")==0){controller_audio_prompt(controller::SpeechPrompt::CLICK);}
+ else if(strcmp(line,"VOICE PREPARE")==0){stopped=false;go_page(PAGE_COUNT-1);controller_voice_prepare();controller_usb_write("Voice connection check requested\r\n");}
+ else if(strcmp(line,"VOICE START")==0){stopped=false;go_page(PAGE_COUNT-1);controller_voice_conversation();controller_usb_write("Continuous voice requested\r\n");}
+ else if(strcmp(line,"VOICE DOWN")==0){stopped=false;go_page(PAGE_COUNT-1);controller_voice_hold(true);controller_usb_write("Voice hold requested\r\n");}
+ else if(strcmp(line,"VOICE UP")==0){controller_voice_hold(false);controller_usb_write("Voice hold released\r\n");}
  else if(strcmp(line,"MIC TEST")==0){controller_voice_test();controller_usb_write("Microphone diagnostic: one second; samples discarded\r\n");}
  else if(strcmp(line,"PAGE")==0)go_page(controller::next_page(page.load(),HOME_PAGE));
  else if(strcmp(line,"SAFE")==0){taskENTER_CRITICAL(&consent_mux);controller_usb_request_mode(false);go_page(0);taskEXIT_CRITICAL(&consent_mux);}
