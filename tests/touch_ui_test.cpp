@@ -2,6 +2,7 @@
 #include "touch_ui.h"
 using namespace controller;
 int main(){
+ assert(controller::touch_target(5,100,20)==controller::TouchTarget::SOUND_SETTINGS);
  assert(touch_target(5,50,75)==TouchTarget::START);
  assert(touch_target(5,40,160)==TouchTarget::NONE);
  assert(touch_target(5,150,140)==TouchTarget::START);

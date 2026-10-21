@@ -72,6 +72,7 @@ static bool init_mic(){
  if(i2c_master_probe(bus,0x18,100)!=ESP_OK){ESP_LOGW("voice","ES8311 not responding");return false;}
  i2s_chan_handle_t tx,rx;
  i2s_chan_config_t channel=I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0,I2S_ROLE_MASTER);
+ channel.dma_desc_num=4;channel.dma_frame_num=128;
  if(i2s_new_channel(&channel,&tx,&rx)!=ESP_OK)return false;
  i2s_std_config_t cfg={};cfg.clk_cfg=I2S_STD_CLK_DEFAULT_CONFIG(16000);
  cfg.slot_cfg=I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,I2S_SLOT_MODE_STEREO);
@@ -110,7 +111,9 @@ static bool play_pcm(const unsigned char *data,unsigned size,bool before_recordi
 }
 bool controller_audio_play_pcm(const unsigned char *data,unsigned size){return play_pcm(data,size);}
 static void play_feedback(controller::Feedback cue,bool before_recording=false){
- static int16_t pcm[4800];int count=controller::feedback_samples(cue);
+ static auto pcm=(int16_t*)heap_caps_malloc(4800*sizeof(int16_t),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+ if(!pcm)return;
+ int count=controller::feedback_samples(cue);
  for(int i=0;i<count;i++)pcm[i]=controller::feedback_sample(cue,i);
  play_pcm((const unsigned char*)pcm,count*2,before_recording);
 }

@@ -607,6 +607,7 @@ static void console_command(char *line){
 #endif
  }
  else if(strcmp(line,"WIFI OFF")==0){wifi_enabled=false;wifi_connected=false;online=controller_usb_net_has_ip();if(wifi_initialized){esp_wifi_stop();}controller_usb_write("WiFi disabled\r\n");}
+ else if(strcmp(line,"HEAP")==0){char out[180];snprintf(out,sizeof(out),"HEAP internal=%u largest=%u dma=%u dma_largest=%u\r\n",(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),(unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));controller_usb_write(out);}
  else if(strcmp(line,"AUDIO")==0){char out[120];snprintf(out,sizeof(out),"AUDIO volume=%d muted=%d stage=%d\r\n",controller_audio_volume(),controller_audio_muted(),controller_voice_stage());controller_usb_write(out);}
  else if(strcmp(line,"AUDIO UP")==0){controller_audio_adjust(20);controller_ota_changed();}
  else if(strcmp(line,"AUDIO DOWN")==0){controller_audio_adjust(-20);controller_ota_changed();}
