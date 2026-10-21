@@ -107,6 +107,19 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith('/dialogue/'):
             if not valid_session or sequence<1:return self.reply(400,b'{}')
             try:
+                if self.path=='/dialogue/video':
+                    from .bridge_video import MAX_UPLOAD
+                    size=int(self.headers.get('Content-Length','0'))
+                    frame_sequence=int(self.headers.get('X-Video-Sequence','0'))
+                    codec=self.headers.get('X-Video-Codec','')
+                    if not 1<=size<=MAX_UPLOAD:raise ValueError('video body size')
+                    with CONVERSATION.mailbox.lock:
+                        j=CONVERSATION.mailbox._job(device,session,sequence)
+                        if j.done:raise ValueError('completed turn')
+                    raw=self.rfile.read(size)
+                    if len(raw)!=size:raise ValueError('truncated video')
+                    result=CONVERSATION.mailbox.ingest_video(device,session,sequence,frame_sequence,raw,codec)
+                    return self.reply(200,json.dumps(result).encode())
                 if self.path=='/dialogue/poll':
                     return self.reply(200,json.dumps(CONVERSATION.mailbox.poll(device,session,sequence),ensure_ascii=False).encode())
                 if self.path=='/dialogue/screen':
