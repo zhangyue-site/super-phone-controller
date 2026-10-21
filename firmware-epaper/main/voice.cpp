@@ -36,7 +36,7 @@ static void upload_run(void*){
 }
 static esp_codec_dev_handle_t mic;
 static std::atomic<int> output_volume(100),pending_prompt(0);
-static std::atomic<bool> output_muted(false),click_playing(false);
+static std::atomic<bool> output_muted(true),click_playing(false);
 static std::atomic<unsigned> playback_epoch(0);
 #define AUDIO_ASSET(name) extern const uint8_t name##_start[] asm("_binary_" #name "_pcm_start"); extern const uint8_t name##_end[] asm("_binary_" #name "_pcm_end");
 AUDIO_ASSET(ready)
@@ -292,7 +292,9 @@ static void run(void*){
  }
 }
 void controller_voice_init(){
- nvs_handle_t h;if(nvs_open("audio",NVS_READONLY,&h)==ESP_OK){uint8_t v=100,m=0;nvs_get_u8(h,"volume",&v);nvs_get_u8(h,"muted",&m);output_volume=controller::clamp_volume(v)/20*20;output_muted=m!=0;nvs_close(h);}
+ // Every boot starts silent, including OTA from firmware that persisted muted=false.
+ output_muted=true;
+ nvs_handle_t h;if(nvs_open("audio",NVS_READONLY,&h)==ESP_OK){uint8_t v=100;nvs_get_u8(h,"volume",&v);output_volume=controller::clamp_volume(v)/20*20;nvs_close(h);}
  snprintf(session,sizeof(session),"%08x%08x",(unsigned)esp_random(),(unsigned)esp_random());xTaskCreate(upload_run,"voice_stream",8192,nullptr,3,&stream_worker);xTaskCreate(run,"voice",12288,nullptr,4,&worker);}
 static void begin_voice_request(){
  if(!click_playing&&pending_prompt!=(int)controller::SpeechPrompt::CLICK)controller_audio_interrupt();
