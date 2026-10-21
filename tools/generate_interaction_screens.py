@@ -25,7 +25,7 @@ def emit(name,frames,preview):
         ImageDraw.Draw(im).rectangle((0,162,199,187),fill=1)
         ImageDraw.Draw(im).line((8,162,191,162),fill=0)
         ImageDraw.Draw(im).line((100,162,100,186),fill=0)
-        text(im,(50,166),'首页/A双击',12,True);text(im,(150,166),'停止/B长按',12,True)
+        text(im,(50,166),'首页',12,True);text(im,(150,166),'停止',12,True)
         im.save(ROOT/'previews'/f'{preview}-{i}.png')
     rows=['{'+','.join(map(str,im.tobytes()))+'}' for im in frames]
     assets.append('static const unsigned char '+name+'['+str(len(rows))+'][5000]={'+','.join(rows)+'};')
@@ -33,9 +33,9 @@ homes=[]
 for state in ['等待连接','连接待检测','准备就绪','已停止']:
     im=Image.new('1',(200,200),1)
     text(im,(8,4),state,28)
-    text(im,(8,36),'短按 A 翻页 · B 双击声音',13)
-    button(im,(8,55,191,154),'按住 A 说话',26)
-    text(im,(100,116),'松开后发送',19,True)
+    text(im,(8,36),'上滑翻页 · 声音可调',13)
+    button(im,(8,55,191,154),'点此开始对话',26)
+    text(im,(100,116),'说完停顿 · 自动发送',17,True)
     homes.append(im)
 emit('interaction_home',homes,'interaction-home')
 manual=[]
@@ -47,7 +47,7 @@ emit('interaction_manual',manual,'interaction-manual')
 sound=[]
 for muted in (False,True):
     for volume in range(0,101,20):
-        im=base('声音 · 静音' if muted else '声音 · 播报','短按 A 加 · B 减')
+        im=base('声音 · 静音' if muted else '声音 · 播报','点击 − / + 调节音量')
         text(im,(100,51),f'{volume}%',42,True)
         text(im,(25,58),'−',26,True);text(im,(175,58),'+',26,True)
         button(im,(8,108,95,153),'恢复' if muted else '静音',20);button(im,(104,108,191,153),'试听',20)
@@ -68,16 +68,16 @@ for hint in ['等待手机发送固件','正在接收，请保持靠近','正在
 emit('interaction_ble',ble,'interaction-ble')
 voice=[]
 for title,hint,detail in [
-    ('语音待命','按住 A 说话','松开后发送'),
-    ('正在录音','松开 A 发送','B 长按停止'),
-    ('正在识别','请稍等','B 长按停止'),
-    ('已识别','请查看交互页','尚未执行手机操作'),
-    ('准备麦克风','请继续按住 A','B 长按停止'),
-    ('识别失败','按住 A 重试','靠近麦克风说话'),
-    ('尚未连接','按住 A 检测','请检查手机连接'),
-    ('正在连接','请查看手机授权','B 长按停止'),
-    ('连接已建立','松开后重新按住 A','开始说话'),
-    ('连接失败','按住 A 重试','请检查手机授权'),
+    ('语音待命','点此开始对话','点一下 · 说完自动发送'),
+    ('正在听','说完停顿即可发送','点此结束对话'),
+    ('正在识别','请稍等','点此结束对话'),
+    ('已识别','提示后继续听','尚未执行手机操作'),
+    ('准备麦克风','请稍等','点击大区域结束'),
+    ('识别失败','点此重新开始','靠近麦克风说话'),
+    ('尚未连接','点此检测连接','请检查手机连接'),
+    ('正在连接','请查看手机授权','点击大区域结束'),
+    ('连接已建立','点此开始对话','开始说话'),
+    ('连接失败','点此重新开始','请检查手机授权'),
 ]:
     im=Image.new('1',(200,200),1)
     text(im,(100,20),title,28,True);text(im,(100,77),hint,18,True);text(im,(100,119),detail,15,True)

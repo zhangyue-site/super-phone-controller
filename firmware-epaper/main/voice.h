@@ -34,3 +34,6 @@ int controller_audio_volume();
 bool controller_audio_muted();
 void controller_audio_adjust(int delta);
 void controller_audio_toggle_mute();
+
+void controller_voice_conversation();
+bool controller_voice_conversing();
