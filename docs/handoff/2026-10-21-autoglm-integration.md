@@ -24,3 +24,5 @@ Open-AutoGLM仅参考规划，HID鼠标负责所有点击/移动/拖动；ADB只
 Android 官方 AOA 2.0 支持 accessory+ADB 配置，同时通过控制传输注册 HID、发送鼠标/键盘事件。该模式中板端为 USB 主机、手机为 accessory；与当前 S3 固件的 USB 外设 HID 描述符是不同实现。Xiaomi 17 Ultra 支持 DP 1.4 Alt Mode，但视频采集还需 USB-C PD/DP Alt Mode 协商与布线、DP 转 HDMI 接收、HDMI-to-MIPI CSI 采集（例如 HDMI 接收桥 + P4 CSI 摄入），以及维持 USB2 AOA/ADB 的同一配件链路。EDID只声明显示能力，不采集像素。正式集成需先验证 DP、AOA HID、ADB Keyboard 三者同线并发和供电，再选定采集桥与PCB。
 
 现有 Waveshare S3 1.54-inch e-paper board 没有 DP/HDMI 接收输入，因此没有板端视频帧来源。不能以 Mac scrcpy、ADB screencap、电脑转发或无线投屏充当验收。下一阶段先做外置实验链路：USB-C DP Alt Mode → HDMI 接收 → CSI/P4 capture；AOA host 单独验证 HID 与 ADB 的并发；通过后再设计可集成版载板/主板。当前固件保留已验收语音与屏幕交互；没有给旧 S3 刷入未验证 HID/视频固件。
+
+补充参考：GitHub 上的 nemarpuc/libaoahid 已在实体 Android 设备验证 AOA2 HID 鼠标，并提供同一 USB handle 同时承载 HID control 与 ADB bulk 的做法。它依赖桌面 libusb，不能直接用于当前 MCU；适合移植其 AOA 请求次序与回归用例到 ESP-IDF USB Host。ESP32-P4 官方 Host 栈支持两个 OTG 控制器独立 host，Function EV Board 有 CSI，可作视频/USB 原型台架。

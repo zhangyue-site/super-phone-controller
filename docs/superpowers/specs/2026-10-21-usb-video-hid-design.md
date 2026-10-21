@@ -3,7 +3,7 @@
 日期：2026-10-21
 状态：硬件可行性阶段；当前 S3 板没有视频接收器，服务端手机操作保持停用。
 
-资料依据：[Android Open Accessory 2.0](https://source.android.com/docs/core/interaction/accessories/aoa2)、[小米 DP 1.4 Alt Mode 说明](https://www.mi.com/global/support/faq/details/KA-667490/)、[TC358743 驱动参考](https://github.com/espkvm/espkvm/tree/main/components/tc358743)、[微雪现板资料](https://docs.waveshare.com/ESP32-S3-ePaper-1.54)。
+资料依据：[Android Open Accessory 2.0](https://source.android.com/docs/core/interaction/accessories/aoa2)、[libaoahid 实机参考](https://github.com/nemarpuc/libaoahid)、[ESP32-P4 USB Host 文档](https://docs.espressif.com/projects/esp-usb/en/latest/esp32p4/usb_host.html)、[P4 Function EV Board](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32p4/esp32-p4-function-ev-board/user_guide.html)、[小米 DP 1.4 Alt Mode 说明](https://www.mi.com/global/support/faq/details/KA-667490/)、[TC358743 驱动参考](https://github.com/espkvm/espkvm/tree/main/components/tc358743)、[微雪现板资料](https://docs.waveshare.com/ESP32-S3-ePaper-1.54)。
 
 ## 目标
 
@@ -11,11 +11,13 @@
 
 ## USB 连接角色
 
-Android Open Accessory 2.0 的 accessory+ADB 配置允许配件主机和手机 accessory 同时使用 ADB；AOAv2 HID 通过控制传输注册和发送 HID 报告，不要求手机枚举控制板的普通 HID 外设。该方案与当前 ESP32-S3 USB 外设固件不同，需要 USB host/AOA 实现及目标小米实测。
+Android Open Accessory 2.0 定义 accessory+ADB 产品模式；AOAv2 HID 通过控制传输注册和发送 HID 报告，不要求手机枚举控制板的普通 HID 外设。libaoahid 的现成 C++20/libusb 库已在实体 Android 平板和手机上测过鼠标，并演示同一 USB handle 同时跑 HID 控制传输与 ADB bulk channel；它依赖 PC 的 libusb，适合作为协议与测试用例参考，不是 ESP-IDF 可直接链接的组件。P4 USB Host API 支持两个 USB 2.0 OTG 控制器分别做 host，并支持同一复合设备由多个 client 使用；需把 AOA/HID/ADB 传输适配到 ESP-IDF Host API，并在目标小米上确认同会话。该方案与当前 ESP32-S3 USB 外设固件不同。
 
 目标 Xiaomi 17 Ultra 支持 DP 1.4 Alt Mode。USB-C 视频链路仍需 PD/Alt-Mode 协商、DP lane 信号完整性及接收芯片。EDID/显示器诱骗只会使手机输出视频，不会读取/解码帧。
 
 ## 实验链路
+
+首选台架验证平台为 ESP32-P4-Function-EV-Board：它具备 MIPI CSI、H.264/JPEG处理资源与两个 USB OTG 控制器，适合在 P4 上收帧并实现 USB Host/AOA；仍需外部 USB-C PD/DP 接收和视频桥接。现有 S3 墨水屏板可先经 UART/SPI 做界面/音频副板。验证成功后再决定把 P4 和现有板功能合并到单块定制板。
 
 手机 USB-C 同时保留 USB2 数据并输出 DP Alt Mode。配件侧包含：
 
