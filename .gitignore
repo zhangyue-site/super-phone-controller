@@ -45,3 +45,5 @@ firmware-epaper/main/device_config.h
 firmware-epaper/sdkconfig.interaction*
 app/flutter_*.log
 firmware-epaper/dependencies.lock
+
+app/android/.kotlin/
