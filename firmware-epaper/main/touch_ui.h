@@ -6,6 +6,7 @@ inline int previous_page(int current,int home){return (current+home+6)%(home+7);
 enum class TouchTarget {NONE,START,QUOTA,CONTROL,HOME,STOP,CONFIRM,UP,DOWN,LEFT,RIGHT,CLICK,PHONE_HOME,PHONE_BACK,UPDATE,VOLUME_DOWN,VOLUME_UP,MUTE,SOUND_TEST,SOUND_SETTINGS};
 inline TouchTarget touch_target(int page,int x,int y,int home=5){
  if(x<8||x>=192||y<0||y>=188)return TouchTarget::NONE;
+ if(page==home&&y<45)return TouchTarget::SOUND_SETTINGS;
  if(y>=162)return x<100?TouchTarget::HOME:TouchTarget::STOP;
  if(page==home+6){
   if(y>=54&&y<100)return x<100?TouchTarget::VOLUME_DOWN:TouchTarget::VOLUME_UP;
