@@ -1,4 +1,5 @@
 #include <cassert>
+#include <initializer_list>
 #include "touch_ui.h"
 using namespace controller;
 int main(){
@@ -12,6 +13,12 @@ int main(){
  assert(touch_target(2,90,95)==TouchTarget::CONFIRM);
  assert(touch_target(5,250,75)==TouchTarget::NONE);
  assert(touch_target(3,80,90,4)==TouchTarget::START);
+ assert(voice_touch_target(50,90,1,true,false)==TouchTarget::FINISH);
+ assert(voice_touch_target(50,90,1,false,false)==TouchTarget::FINISH);
+ for(int stage:{2,4,7,10,11})assert(voice_touch_target(50,90,stage,true,false)==TouchTarget::STOP);
+ assert(voice_touch_target(50,90,0,false,false)==TouchTarget::START);
+ assert(voice_touch_target(170,175,1,true,false)==TouchTarget::STOP);
+ assert(voice_touch_target(50,175,1,true,false)==TouchTarget::HOME);
  TouchContact contact;
  assert(contact.update(-1)==TouchEdge::NONE);
  assert(contact.update(1)==TouchEdge::NONE); // unknown/multitouch cannot become new down

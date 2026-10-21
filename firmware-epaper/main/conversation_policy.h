@@ -11,6 +11,6 @@ struct ConversationVad {
   else silence+=count;
   return samples>=160000 || (speech&&silence>=14400);
  }
- bool send()const{return speech&&voiced>=2400;}
+ bool send(bool manual=false)const{return manual?samples>=6400:speech&&voiced>=2400;}
 };
 }
