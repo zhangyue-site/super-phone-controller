@@ -82,13 +82,19 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          # esp_app_desc_t 在镜像里紧跟 24 字节镜像头(8)+段头(16)之后：
-          # magic(4) secure_version(4) reserv(8) version(32) project_name(32)
-          ACTUAL=$(python3 - "$FIRMWARE_DIR/build/$PROJECT_NAME.bin" <<'PY'
+          # esp_app_desc_t 里 version 是 32 字节定长字段。偏移随段布局变化，
+          # 与其硬编码，不如在镜像头 64KB 内直接搜这个字符串——版本号本身
+          # 足够独特，不会误命中。
+          ACTUAL=$(python3 - "$FIRMWARE_DIR/build/$PROJECT_NAME.bin" "$VERSION" <<'PY'
           import sys
-          blob = open(sys.argv[1], "rb").read()
-          off = 24 + 16
-          print(blob[off + 16: off + 48].split(b"\x00")[0].decode("utf-8", "replace"))
+          blob = open(sys.argv[1], "rb").read(65536)
+          want = sys.argv[2].encode()
+          idx = blob.find(want)
+          if idx < 0:
+              print("NOT_FOUND")
+          else:
+              end = blob.find(b"\x00", idx)
+              print(blob[idx:end].decode("utf-8", "replace"))
           PY
           )
           echo "embedded version: $ACTUAL (expected: $VERSION)"
