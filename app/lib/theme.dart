@@ -37,7 +37,7 @@ class AppTheme {
           letterSpacing: -0.2,
         ),
       ),
-      cardTheme: CardTheme(
+      cardTheme: CardThemeData(
         color: surface,
         elevation: 0,
         shape: RoundedRectangleBorder(
@@ -51,7 +51,8 @@ class AppTheme {
           foregroundColor: const Color(0xFF06281B),
           minimumSize: const Size.fromHeight(52),
           textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -59,10 +60,12 @@ class AppTheme {
           minimumSize: const Size.fromHeight(52),
           side: const BorderSide(color: border),
           foregroundColor: text,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
-      dividerTheme: const DividerThemeData(color: border, thickness: 1, space: 1),
+      dividerTheme:
+          const DividerThemeData(color: border, thickness: 1, space: 1),
     );
   }
 
