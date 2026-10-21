@@ -57,9 +57,13 @@ voice worker 独占 codec；录音/忙碌期间不补播普通点击或试听，
 
 在上述“三声都清楚”版本基础上，短音峰值16000→24000（+3.52dB）；保留6dB硬件补偿，用曲线{0,-44dB},{100,+6dB}使UI100对应DAC0dB（原DAC-6dB），最大数字信号相对增加约9.5dB。峰值24000且DAC不超过unity，保留数字余量；这不是声压测量，不能承诺实际再增加20dB。20dB幅度增量需要10倍振幅/100倍功率，不能直接叠加而忽略硬件余量。
 
-17项host测试和ESP-IDF5.5编译通过；代码静态复核无阻断。最终更响版本仍待用户确认响度、是否失真，以及屏幕加减、首页和实体按下的实际体验。ADB USB Host硬件/驱动与手机重启测试仍未完成。
+17项host测试和ESP-IDF5.5编译通过；代码静态复核无阻断。用户最终明确确认：“声音够大，首页也能返回”。响度及首页返回已获人工验收。ADB USB Host硬件/驱动与手机重启测试仍未完成。
 
 参考源码：
 - https://github.com/waveshareteam/ESP32-S3-ePaper-1.54/blob/main/02_Example/ESP-IDF/V2/08_Audio_Test/components/audio_bsp/audio_bsp.c
 - https://github.com/78/xiaozhi-esp32/blob/main/main/audio/codecs/es8311_audio_codec.cc
 - https://github.com/LucaCevasco/pietro-computer/blob/main/main/audio.c
+
+## 全局静音与最大音量验收
+
+用户明确要求提示音、播报、试听全静音，麦克风仍可收音。沿用统一输出音量/静音路径，实板设为100档；新设备默认音量也改为100，已有NVS设置继续保留。静音期间发送CLICK、试听、STOP，日志新增OUTPUT记录为0；MIC TEST仍获取16000样本（RMS95.9、峰值416），仅统计后丢弃、不上传。解除静音后恢复100档，正常重启。证据：controller-global-mute-board.log。
