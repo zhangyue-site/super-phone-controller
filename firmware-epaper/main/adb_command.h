@@ -28,11 +28,11 @@ inline bool adb_command(const AdbCommand &c,char *out,unsigned size){
   "case \"$original\" in ''|*[!a-zA-Z0-9_./$]*) exit 40;; esac; "
   "test ! -e \"$restore_file\" || exit 41; "
   "printf '%%s' \"$original\" > \"$restore_file\" || exit 42; "
-  "restore(){ ime set \"$original\" >/dev/null && rm -f \"$restore_file\"; }; "
+  "restore(){ ime set \"$original\" >/dev/null && sleep 1 && rm -f \"$restore_file\"; }; "
   "trap restore EXIT; trap 'exit 130' HUP INT TERM; "
-  "ime set com.android.adbkeyboard/.AdbIME >/dev/null || exit 43; "
-  "am broadcast -a ADB_CLEAR_TEXT >/dev/null || exit 44; "
-  "am broadcast -a ADB_INPUT_B64 --es msg '%s' >/dev/null || exit 44; "
+  "ime set com.android.adbkeyboard/.AdbIME >/dev/null || exit 43; sleep 1; "
+  "am broadcast -a ADB_CLEAR_TEXT >/dev/null || exit 44; sleep 1; "
+  "am broadcast -a ADB_INPUT_B64 --es msg '%s' >/dev/null || exit 44; sleep 1; "
   "trap - EXIT; restore || exit 45",c.text_b64);break;
  case AdbOp::LAUNCH:n=snprintf(out,size,"am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n '%s'",c.component);break;
  case AdbOp::HOME:n=snprintf(out,size,"input keyevent KEYCODE_HOME");break;
