@@ -1,13 +1,23 @@
 #pragma once
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 namespace controller {
-enum class AdbOp {OBSERVE,HOME,BACK,SETTINGS,TAP,SWIPE};
-struct AdbCommand {AdbOp op;int x=0,y=0,x2=0,y2=0;};
+enum class AdbOp {OBSERVE,HOME,BACK,SETTINGS,TAP,SWIPE,LAUNCH};
+struct AdbCommand {AdbOp op;int x=0,y=0,x2=0,y2=0;char component[160]={};};
 inline bool adb_command(const AdbCommand &c,char *out,unsigned size){
  if(c.x<0||c.y<0||c.x2<0||c.y2<0||c.x>10000||c.y>10000||c.x2>10000||c.y2>10000)return false;
+ if(c.op==AdbOp::LAUNCH){
+  unsigned slash=0;
+  for(const char *p=c.component;*p;p++){
+   if(*p=='/')slash++;
+   if(!std::isalnum((unsigned char)*p)&&!strchr("._/$",*p))return false;
+  }
+  if(slash!=1||!strchr(c.component,'.'))return false;
+ }
  int n=-1;
  switch(c.op){
+ case AdbOp::LAUNCH:n=snprintf(out,size,"am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n '%s'",c.component);break;
  case AdbOp::HOME:n=snprintf(out,size,"input keyevent KEYCODE_HOME");break;
  case AdbOp::BACK:n=snprintf(out,size,"input keyevent KEYCODE_BACK");break;
  case AdbOp::SETTINGS:n=snprintf(out,size,"am start -a android.settings.SETTINGS");break;

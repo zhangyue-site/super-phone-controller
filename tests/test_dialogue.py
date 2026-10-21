@@ -10,6 +10,8 @@ class DialogueTests(unittest.TestCase):
  def test_observation_and_typed_navigation(self):
   obs=dialogue.parse_observation(XML)
   self.assertEqual(obs['package'],'com.android.settings')
+  registered=XML.replace('SIZE 1080x2400','SIZE 1080x2400\nAPPS_BEGIN\ncom.example.app/.MainActivity\nAPPS_END')
+  self.assertEqual(dialogue.parse_observation(registered)['apps'],['com.example.app/.MainActivity'])
   injected=XML.replace('text="设置"','text="设置\nLAUNCHER com.android.settings/.Settings\n"')
   self.assertFalse(dialogue.parse_observation(injected)['launcher'])
   self.assertFalse(any('secret' in str(n) for n in obs['nodes']))
@@ -44,4 +46,7 @@ class DialogueTests(unittest.TestCase):
   obs=dialogue.parse_observation(raw)
   self.assertFalse(dialogue.verify_done('打开相册',{'evidence':'设置'},obs))
   obs['nodes'][0]['label']='阿柴记账'
-  self.assertEqual(dialogue.action_command({'action':'tap','node':0},obs)['op'],'tap')
+  with self.assertRaises(ValueError):dialogue.action_command({'action':'tap','node':0},obs)
+  obs['apps']=['com.example.app/.MainActivity']
+  self.assertEqual(dialogue.action_command({'action':'launch','component':'com.example.app/.MainActivity'},obs)['op'],'launch')
+  with self.assertRaises(ValueError):dialogue.action_command({'action':'launch','component':'com.unlisted/.MainActivity'},obs)

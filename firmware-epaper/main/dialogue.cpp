@@ -58,6 +58,10 @@ bool controller_dialogue_run(unsigned sequence){
   else if(!strcmp(op,"home"))cmd.op=controller::AdbOp::HOME;
   else if(!strcmp(op,"back"))cmd.op=controller::AdbOp::BACK;
   else if(!strcmp(op,"open_settings"))cmd.op=controller::AdbOp::SETTINGS;
+  else if(!strcmp(op,"launch")){
+   cmd.op=controller::AdbOp::LAUNCH;const char *component=str(j,"component");
+   valid=strlen(component)>0&&strlen(component)<sizeof(cmd.component);if(valid)strcpy(cmd.component,component);
+  }
   else if(!strcmp(op,"tap")){cmd.op=controller::AdbOp::TAP;valid=integer(j,"x",cmd.x)&&integer(j,"y",cmd.y);}
   else if(!strcmp(op,"swipe")){cmd.op=controller::AdbOp::SWIPE;valid=integer(j,"x",cmd.x)&&integer(j,"y",cmd.y)&&integer(j,"x2",cmd.x2)&&integer(j,"y2",cmd.y2);}
   else valid=false;
