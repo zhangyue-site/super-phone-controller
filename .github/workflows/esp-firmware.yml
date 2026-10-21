@@ -175,7 +175,7 @@ jobs:
 
       # 可选：构建完直接推给 OTA 服务端，板子下次轮询自动升级
       - name: Publish to OTA endpoint
-        if: vars.OTA_ENABLED == 'true'
+        if: vars.OTA_ENABLED == 'true' && github.ref == 'refs/heads/main'
         env:
           OTA_ENDPOINT: ${{ secrets.OTA_ENDPOINT }}
           OTA_TOKEN: ${{ secrets.OTA_TOKEN }}
