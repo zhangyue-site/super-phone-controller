@@ -65,3 +65,12 @@
 当前商店仍为1.0.1+2（2026-10-21再次HEAD确认HTTP200/47098069bytes）。实板读回ci55/ota_1，云current对应ci55且保留ci54 previous，boot-confirmed/imageState2存在。未通过这次检查进行新OTA写入，App整轮实机BLE升级仍需用手机安装候选APK验证。
 
 App“从服务器获取”当前没有设备凭据，私有端点会返回401；本地授权app.bin BLE升级和板子自身云OTA是两个现有入口。不能宣称App已实现免文件选择的一键云升级，也不应公开含设备身份的固件来绕过鉴权。
+
+
+### 1.0.2候选构建结果
+
+App run39587552131成功：Flutter analyze、回归与正式签名APK构建均通过；APK包名site.zhangyue.pcflash，versionName1.0.2/versionCode3，minSDK26，targetSDK36。apksigner verify通过，证书SHA256与既有B5正式证书相同。候选APK大小47098069，SHA256 3fae89b479246852650ddc8797dae04d5c0a45bfd82749a99d85351a18c05878。产物106:/opt/phone-controller-release/2026-10-21/phone-controller-flash-1.0.2-vc3.apk。
+
+firmware run39587552130也成功，17项固件主机/80项Python回归及IDF构建、版本、PSRAM和容量检查通过，分支发布OTA步骤跳过。当前实板仍ci55，不因本次构建切换。
+
+1.0.2尚未更新商店目录，已请用户在升级手机上手动安装候选并验证连接。遵守ADB仅输入中文，未通过ADB安装/操作升级App。BLE完整推送、断线恢复和重启后版本确认仍未新验收，不以构建成功代替。
