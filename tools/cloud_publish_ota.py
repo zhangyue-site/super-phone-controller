@@ -16,5 +16,5 @@ def main():
  if not header.endswith(b'\n'):raise SystemExit('invalid publish header')
  metadata=json.loads(header);source=metadata['source'];generation=metadata.get('generation',0);data=sys.stdin.buffer.read(0x340001)
  entry=publish(args.device,data,source,activate=args.activate,generation=generation)
- print(json.dumps(dict(entry,activated=args.activate)))
+ print(json.dumps(dict(entry,activated=args.activate,device=args.device)))
 if __name__=='__main__':main()

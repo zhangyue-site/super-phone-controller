@@ -187,6 +187,7 @@ jobs:
       - name: Publish to OTA endpoint
         if: vars.OTA_ENABLED == 'true' && github.ref == 'refs/heads/main'
         env:
+          VERSION: ${{ steps.ver.outputs.version }}
           OTA_SSH_HOST: ${{ vars.OTA_SSH_HOST }}
           OTA_DEVICE: ${{ vars.OTA_DEVICE }}
           OTA_SSH_KEY: ${{ secrets.OTA_SSH_KEY }}
@@ -200,9 +201,21 @@ jobs:
           printf '%s\n' "$OTA_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ota-ssh/known_hosts"
           chmod 600 "$RUNNER_TEMP/ota-ssh/key" "$RUNNER_TEMP/ota-ssh/known_hosts"
           trap 'rm -rf "$RUNNER_TEMP/ota-ssh"' EXIT
-          python3 - <<'PYDATA' | ssh -T -i "$RUNNER_TEMP/ota-ssh/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/ota-ssh/known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "root@$OTA_SSH_HOST" ota-publish
+          python3 - <<'PYDATA' | ssh -T -i "$RUNNER_TEMP/ota-ssh/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/ota-ssh/known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "root@$OTA_SSH_HOST" ota-publish > "$RUNNER_TEMP/ota-publish.json"
           import json,os,sys
           from pathlib import Path
           sys.stdout.buffer.write((json.dumps({'source':os.environ['GITHUB_SHA'],'generation':int(os.environ['GITHUB_RUN_NUMBER'])})+'\n').encode())
           sys.stdout.buffer.write(Path('out/app.bin').read_bytes())
           PYDATA
+          python3 - <<'PYVERIFY'
+          import hashlib,json,os
+          from pathlib import Path
+          entry=json.loads((Path(os.environ['RUNNER_TEMP'])/'ota-publish.json').read_text())
+          blob=Path('out/app.bin').read_bytes()
+          assert entry['device']==os.environ['OTA_DEVICE']
+          assert entry['version']==os.environ['VERSION']
+          assert entry['source']==os.environ['GITHUB_SHA']
+          assert entry['sha256']==hashlib.sha256(blob).hexdigest()
+          assert entry['size']==len(blob) and entry['activated'] is True
+          print('Private cloud OTA activated:',entry['version'],entry['sha256'])
+          PYVERIFY
