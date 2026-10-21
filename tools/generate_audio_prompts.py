@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PHRASES = {
     'ready': '连接就绪，请点屏幕',
     'recognized': '已识别，请继续说',
-    'failed': '识别失败，请重试',
+    'failed': '这次未完成，请查看屏幕',
     'stopped': '已停止',
     'test': '这是语音播报试听',
 }

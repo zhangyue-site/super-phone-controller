@@ -207,6 +207,18 @@ static bool paint(epaper_driver_display &display,const uint8_t *frame,bool full)
  memcpy(frame+188*25,mode==2?check_hint:mode==1?voice_hint:footer_hint,300); // Two full twelve-row lines fit below the controls.
 }
 bool controller_voice_online(){return online.load();}
+static uint8_t dialogue_frame[5000];
+static std::atomic<bool> dialogue_frame_valid(false);
+static portMUX_TYPE dialogue_mux=portMUX_INITIALIZER_UNLOCKED;
+void controller_dialogue_screen(const unsigned char *frame){
+ taskENTER_CRITICAL(&dialogue_mux);
+ dialogue_frame_valid=frame!=nullptr;
+ if(frame)memcpy(dialogue_frame,frame,5000);
+ taskEXIT_CRITICAL(&dialogue_mux);screen_dirty=true;
+}
+static bool dialogue_copy(uint8_t *frame){
+ taskENTER_CRITICAL(&dialogue_mux);bool valid=dialogue_frame_valid;if(valid)memcpy(frame,dialogue_frame,5000);taskEXIT_CRITICAL(&dialogue_mux);return valid;
+}
 void controller_voice_changed(bool completed){
  // Local completion feedback avoids another TLS round-trip for a 5000-byte screen.
  if(completed)ESP_LOGI(TAG,"Voice recognized; local result shown without fetching task bitmap");
@@ -221,7 +233,7 @@ bool controller_voice_upload(const unsigned char *pcm,unsigned size,unsigned seq
  esp_http_client_set_header(client,"Authorization",auth);esp_http_client_set_header(client,"Host","controller.example.invalid");
  char seq[16];snprintf(seq,sizeof(seq),"%u",sequence);
  esp_http_client_set_header(client,"X-Voice-Session",controller_voice_session());esp_http_client_set_header(client,"X-Voice-Sequence",seq);
- esp_http_client_set_header(client,"Content-Type","application/octet-stream");esp_http_client_set_method(client,HTTP_METHOD_POST);
+ esp_http_client_set_header(client,"Content-Type","application/octet-stream");esp_http_client_set_header(client,"X-Voice-Dialogue","1");esp_http_client_set_method(client,HTTP_METHOD_POST);
  esp_err_t err=esp_http_client_open(client,size);unsigned sent=0;
  if(err==ESP_OK){
   while(sent<size){int n=esp_http_client_write(client,(const char*)pcm+sent,size-sent);if(n<=0)break;sent+=n;}
@@ -238,7 +250,7 @@ bool controller_voice_stream_upload(VoiceStream &stream){
  auto client=esp_http_client_init(&cfg);if(!client)return false;
  esp_http_client_set_header(client,"Authorization",auth);esp_http_client_set_header(client,"Host","controller.example.invalid");
  esp_http_client_set_header(client,"X-Voice-Session",controller_voice_session());esp_http_client_set_header(client,"X-Voice-Sequence",seq);
- esp_http_client_set_header(client,"Content-Type","application/octet-stream");esp_http_client_set_method(client,HTTP_METHOD_POST);
+ esp_http_client_set_header(client,"Content-Type","application/octet-stream");esp_http_client_set_header(client,"X-Voice-Dialogue","1");esp_http_client_set_method(client,HTTP_METHOD_POST);
  int64_t began=esp_timer_get_time(),first=0;bool ok=esp_http_client_open(client,-1)==ESP_OK;unsigned sent=0;
  auto write=[&](const char *p,unsigned n){return !stream.abort&&esp_http_client_write(client,p,n)==(int)n;};
  while(ok&&!stream.abort){
@@ -287,6 +299,8 @@ static auto current_preflight(){
 }
 bool controller_voice_prepared(){return online && current_preflight()[7]==controller::DONE;}
 static void preparation(uint8_t *frame){
+ int adb_error=controller_adb_error();
+ if(adb_error>0&&adb_error<8){memcpy(frame,interaction_adb_error[adb_error],5000);return;}
  auto rows=current_preflight();memset(frame,255,5000);
  int step=0;while(step<7 && rows[step]==controller::DONE)++step;
  // The tiny display shows one actual current step at readable size, not eight small rows.
@@ -356,12 +370,15 @@ static void screen_task(void*){
    memcpy(frame,hid?mode_enabled_screen:mode_disabled_screen,5000);
   }else if(current_page==PAGE_COUNT-1){
    int voice=controller_voice_stage();
+   bool result_shown=(voice==11||voice==3||voice==5)&&dialogue_copy(frame);
+   if(!result_shown){
 #if CONFIG_CONTROLLER_USB_LOCAL
-   if(voice>=7 || voice==0 || voice==6){if(controller_voice_prepared())memcpy(frame,interaction_voice[0],5000);else preparation(frame);}
-   else memcpy(frame,interaction_voice[(voice>=0&&voice<10)?voice:5],5000);
+   if((voice>=7&&voice<=9) || voice==0 || voice==6){if(controller_voice_prepared())memcpy(frame,interaction_voice[0],5000);else preparation(frame);}
+   else memcpy(frame,interaction_voice[(voice>=0&&voice<12)?voice:5],5000);
 #else
-   memcpy(frame,interaction_voice[(voice>=0&&voice<10)?voice:5],5000);
+   memcpy(frame,interaction_voice[(voice>=0&&voice<12)?voice:5],5000);
 #endif
+   }
   }else if(current_page==3){
    int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);
   }else{
@@ -479,7 +496,7 @@ static void input_task(void*){
   int tx=0,ty=0;int contact=controller_touch_read(tx,ty);auto edge=contact_state.update(contact);
   auto target=contact==1?controller::touch_target(page.load(),tx,ty,HOME_PAGE):controller::TouchTarget::NONE;
   // Stop is acted on at contact-down, including during display refresh and OTA.
-  if(controller_voice_conversing()&&page==PAGE_COUNT-1&&contact==1&&ty>=45&&ty<155)target=controller::TouchTarget::STOP;
+  if((controller_voice_conversing()||controller_voice_stage()==10||controller_voice_stage()==11||dialogue_frame_valid.load())&&page==PAGE_COUNT-1&&contact==1&&ty>=45&&ty<155)target=controller::TouchTarget::STOP;
   if(edge==controller::TouchEdge::DOWN&&target==controller::TouchTarget::STOP){
    stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();
   }
