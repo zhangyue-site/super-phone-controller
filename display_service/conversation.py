@@ -48,7 +48,7 @@ class Conversation:
    action=d.get('action');reply=d.get('reply','')
    if action=='reply' and isinstance(reply,str) and reply.strip():
     final=reply[:120];state='done'
-   elif action=='home' and os.environ.get('EPAPER_AI_HID_HOME')=='1' and re.search(r'(回到|返回|回).*桌面|手机首页',text) and not re.search(r'微信|联系人|找到|发送',text):
+   elif action=='home' and os.environ.get('EPAPER_AI_HID_HOME')=='1' and re.search(r'(回到|返回|回).*桌面|手机首页',text) and not re.search(r'微信|联系人|找到|发送|不要|别|停止|取消',text):
     self.status(j.device,'running','正在请求板端HID返回桌面')
     result=self.mailbox.execute(j,{'op':'hid_home'})
     if result!='HID_HOME_REPORT_SENT':raise ValueError('invalid HID receipt')
