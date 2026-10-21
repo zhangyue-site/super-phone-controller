@@ -6,12 +6,13 @@ NAV=re.compile(r'打开|进入|查看|返回|列表|详情|账单|设置|菜单|
 
 def parse_observation(raw):
  if not isinstance(raw,str) or len(raw.encode())>48000:raise ValueError('observation size')
- focus=re.search(r'^FOCUS ([A-Za-z0-9_.]+)/([^\s]+)',raw,re.M)
- size=re.search(r'^SIZE (\d+)x(\d+)',raw,re.M)
- if not focus or not size or not re.search(r'^LOCKED false$',raw,re.M):raise ValueError('phone locked or no foreground')
- if not re.search(r'^END_LOCKED false$',raw,re.M) or not re.search(r'^END_FOCUS '+re.escape(focus[1]+'/'+focus[2])+r'$',raw,re.M):raise ValueError('phone changed while observing')
  start=raw.find('<?xml');start=start if start>=0 else raw.find('<hierarchy');end=raw.rfind('</hierarchy>')
  if start<0 or end<0:raise ValueError('incomplete UI')
+ header=raw[:start];footer=raw[end+12:]
+ focus=re.search(r'^FOCUS ([A-Za-z0-9_.]+)/([^\s]+)',header,re.M)
+ size=re.search(r'^SIZE (\d+)x(\d+)',header,re.M)
+ if not focus or not size or not re.search(r'^LOCKED false$',header,re.M):raise ValueError('phone locked or no foreground')
+ if not re.search(r'^END_LOCKED false$',footer,re.M) or not re.search(r'^END_FOCUS '+re.escape(focus[1]+'/'+focus[2])+r'$',footer,re.M):raise ValueError('phone changed while observing')
  root=ET.fromstring(raw[start:end+12]);nodes=[]
  for n in root.iter('node'):
   a=n.attrib
@@ -23,7 +24,7 @@ def parse_observation(raw):
   if not label and a.get('clickable')!='true' and a.get('scrollable')!='true':continue
   nodes.append({'id':len(nodes),'label':label,'bounds':bounds,'clickable':a.get('clickable')=='true','scrollable':a.get('scrollable')=='true','enabled':a.get('enabled','true')=='true'})
  if not nodes:raise ValueError('no UI nodes')
- return {'package':focus[1],'activity':focus[2],'launcher':bool(re.search(r'^LAUNCHER '+re.escape(focus[1])+r'/',raw,re.M)),'nodes':nodes}
+ return {'package':focus[1],'activity':focus[2],'launcher':bool(re.search(r'^LAUNCHER '+re.escape(focus[1])+r'/',header,re.M)),'nodes':nodes}
 
 def action_command(d,obs):
  action=d.get('action')
