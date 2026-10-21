@@ -84,9 +84,10 @@ void main() {
             .download('one', (_) async => []),
         throwsA(isA<Exception>()));
     final badHash = MockClient((r) async {
-      if (r.url.path.endsWith('challenge'))
+      if (r.url.path.endsWith('challenge')) {
         return http.Response(jsonEncode({'challenge': 'a' * 64}), 200);
-      if (r.url.path.endsWith('authorize'))
+      }
+      if (r.url.path.endsWith('authorize')) {
         return http.Response(
             jsonEncode({
               'version': 'ci99',
@@ -95,6 +96,7 @@ void main() {
               'ticket': 't' * 43
             }),
             200);
+      }
       return http.Response.bytes(List.filled(4096, 1), 200);
     });
     await expectLater(
