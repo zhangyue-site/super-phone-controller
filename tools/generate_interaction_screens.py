@@ -25,16 +25,17 @@ def emit(name,frames,preview):
         ImageDraw.Draw(im).rectangle((0,162,199,187),fill=1)
         ImageDraw.Draw(im).line((8,162,191,162),fill=0)
         ImageDraw.Draw(im).line((100,162,100,186),fill=0)
-        text(im,(50,164),'首页',16,True);text(im,(150,164),'停止',16,True)
+        text(im,(50,166),'首页/A双击',12,True);text(im,(150,166),'停止/B长按',12,True)
         im.save(ROOT/'previews'/f'{preview}-{i}.png')
     rows=['{'+','.join(map(str,im.tobytes()))+'}' for im in frames]
     assets.append('static const unsigned char '+name+'['+str(len(rows))+'][5000]={'+','.join(rows)+'};')
 homes=[]
-for state in ['连接手机后检测','已连接 · 按住先检测','准备就绪 · 松开发送','已停止 · 按住重新开始']:
-    im=base('手机助手',state)
-    ImageDraw.Draw(im).rectangle((140,0,191,27),outline=0)
-    text(im,(166,4),'声音',15,True)
-    button(im,(8,45,191,99),'按住说话');button(im,(8,105,191,154),'手动控制')
+for state in ['等待连接','连接待检测','准备就绪','已停止']:
+    im=Image.new('1',(200,200),1)
+    text(im,(8,4),state,28)
+    text(im,(8,36),'短按 A 翻页 · B 双击声音',13)
+    button(im,(8,55,191,154),'按住 A 说话',26)
+    text(im,(100,116),'松开后发送',19,True)
     homes.append(im)
 emit('interaction_home',homes,'interaction-home')
 manual=[]
@@ -46,8 +47,9 @@ emit('interaction_manual',manual,'interaction-manual')
 sound=[]
 for muted in (False,True):
     for volume in range(0,101,20):
-        im=base('声音设置',f'播报：{"静音" if muted else "开启"}    音量 {volume}%')
-        button(im,(8,54,95,99),'减小',20);button(im,(104,54,191,99),'增大',20)
+        im=base('声音 · 静音' if muted else '声音 · 播报','短按 A 加 · B 减')
+        text(im,(100,51),f'{volume}%',42,True)
+        text(im,(25,58),'−',26,True);text(im,(175,58),'+',26,True)
         button(im,(8,108,95,153),'恢复' if muted else '静音',20);button(im,(104,108,191,153),'试听',20)
         sound.append(im)
 emit('interaction_sound',sound,'interaction-sound')
@@ -64,6 +66,23 @@ for hint in ['等待手机发送固件','正在接收，请保持靠近','正在
     text(im,(100,118),'提交启动槽后无法中断',13,True)
     ble.append(im)
 emit('interaction_ble',ble,'interaction-ble')
+voice=[]
+for title,hint,detail in [
+    ('语音待命','按住 A 说话','松开后发送'),
+    ('正在录音','松开 A 发送','B 长按停止'),
+    ('正在识别','请稍等','B 长按停止'),
+    ('已识别','请查看交互页','尚未执行手机操作'),
+    ('准备麦克风','请继续按住 A','B 长按停止'),
+    ('识别失败','按住 A 重试','靠近麦克风说话'),
+    ('尚未连接','按住 A 检测','请检查手机连接'),
+    ('正在连接','请查看手机授权','B 长按停止'),
+    ('连接已建立','松开后重新按住 A','开始说话'),
+    ('连接失败','按住 A 重试','请检查手机授权'),
+]:
+    im=Image.new('1',(200,200),1)
+    text(im,(100,20),title,28,True);text(im,(100,77),hint,18,True);text(im,(100,119),detail,15,True)
+    voice.append(im)
+emit('interaction_voice',voice,'interaction-voice')
 # Footer-only strip shared by every screen.
 im=homes[0]
 strip=im.crop((0,162,200,188)).tobytes()

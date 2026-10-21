@@ -6,6 +6,11 @@ on:
         description: '固件版本号（留空则用日期+run号）'
         required: false
         type: string
+      external_keys:
+        description: '启用 V2 J1 GPIO1/GPIO2 两个外接干接点按键'
+        required: false
+        default: false
+        type: boolean
   push:
     paths:
       - 'firmware-epaper/**'
@@ -93,10 +98,12 @@ jobs:
       - name: Build in official image
         env:
           VERSION: ${{ steps.ver.outputs.version }}
+          EXTERNAL_KEYS: ${{ inputs.external_keys || false }}
         run: |
           docker run --rm \
             -v "$PWD/$FIRMWARE_DIR:/project" \
             -e VERSION \
+            -e EXTERNAL_KEYS \
             -w /project \
             "$IDF_IMAGE" \
             bash -c '
@@ -105,15 +112,20 @@ jobs:
               # 与 124 产线一致：USB_LOCAL 打开，OTA/语音走板子在手机上开的
               # 18843 本地 ADB 隧道，不依赖 WiFi。只加 defaults 不加 usb-local
               # 会让 endpoint 回落到 DISPLAY_ENDPOINT，没 WiFi 的板子必然失败。
+              CONTROLLER_DEFAULTS="sdkconfig.defaults;sdkconfig.usb-local.defaults"
+              if [ "$EXTERNAL_KEYS" = "true" ]; then
+                CONTROLLER_DEFAULTS="$CONTROLLER_DEFAULTS;sdkconfig.external-keys.defaults"
+              fi
               idf.py -DIDF_TARGET=esp32s3 -DPROJECT_VER="$VERSION" \
                 -DSDKCONFIG=sdkconfig.usb-local \
-                -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usb-local.defaults" \
+                -DSDKCONFIG_DEFAULTS="$CONTROLLER_DEFAULTS" \
                 -B build reconfigure build
             '
 
       - name: Verify version is embedded
         env:
           VERSION: ${{ steps.ver.outputs.version }}
+          EXTERNAL_KEYS: ${{ inputs.external_keys || false }}
         run: |
           # esp_app_desc_t 里 version 是 32 字节定长字段。偏移随段布局变化，
           # 与其硬编码，不如在镜像头 64KB 内直接搜这个字符串——版本号本身

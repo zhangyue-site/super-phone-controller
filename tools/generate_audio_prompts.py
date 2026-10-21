@@ -8,7 +8,7 @@ import subprocess, tempfile, wave
 
 ROOT = Path(__file__).resolve().parents[1]
 PHRASES = {
-    'ready': '可以开始说话',
+    'ready': '请重新按住说话',
     'recognized': '已识别，请查看屏幕',
     'failed': '识别失败，请重试',
     'stopped': '已停止',

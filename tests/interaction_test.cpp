@@ -15,7 +15,7 @@ int main() {
    p=next_page(p,home);
   }
   assert(p==home);
-  assert(touch_target(home,90,140,home)==TouchTarget::CONTROL);
+  assert(touch_target(home,90,140,home)==TouchTarget::START);
   assert(touch_target(home+6,35,80,home)==TouchTarget::VOLUME_DOWN);
   assert(touch_target(home+6,150,80,home)==TouchTarget::VOLUME_UP);
   assert(touch_target(home+6,35,140,home)==TouchTarget::MUTE);
@@ -24,7 +24,7 @@ int main() {
  assert(voice_contact(0,0,0,true)==VoiceContact::SEND);
  assert(voice_contact(0,0,0,false)==VoiceContact::CANCEL); // a real page change invalidates capture
  assert(voice_contact(1,80,70,true)==VoiceContact::KEEP);
- assert(voice_contact(1,80,140,true)==VoiceContact::CANCEL);
+ assert(voice_contact(1,80,160,true)==VoiceContact::CANCEL);
  assert(voice_contact(-1,80,70,true)==VoiceContact::CANCEL);
  assert(voice_contact(1,80,70,false)==VoiceContact::CANCEL);
  assert(clamp_volume(-20)==0 && clamp_volume(120)==100);
