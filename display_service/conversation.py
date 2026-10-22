@@ -53,7 +53,7 @@ class Conversation:
    if enabled and text.strip() in ('存为技能','保存为技能','把这个存为技能'):
     try:name=self.skills.save_last(j.device)
     except ValueError as error:raise NavigationError(str(error))
-    d={'action':'reply','reply':'已保存到微信技能组：'+name+'。下次可以从桌面回放。'}
+    d={'action':'reply','reply':'已固化为专项技能：'+name+'。下次可以从桌面回放。'}
    elif enabled and query is not None:
     try:answer=self.navigator.run(j,query)
     except ValueError as error:raise NavigationError(str(error))

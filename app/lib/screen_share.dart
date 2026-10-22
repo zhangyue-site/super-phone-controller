@@ -15,8 +15,9 @@ class ScreenShare {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(body))
         .timeout(const Duration(seconds: 25));
-    if (response.statusCode != 200 || response.bodyBytes.length > 4096)
+    if (response.statusCode != 200 || response.bodyBytes.length > 4096) {
       throw const FormatException('屏幕共享授权失败，请重试');
+    }
     final dynamic data = jsonDecode(response.body);
     if (data is! Map<String, dynamic>) throw const FormatException('共享授权格式无效');
     return data;
@@ -30,8 +31,9 @@ class ScreenShare {
       final challenge =
           await _post(client, 'challenge', {'device': info.device});
       final nonce = challenge['challenge'];
-      if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce))
+      if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
         throw const FormatException('共享挑战无效');
+      }
       final bytes = List.generate(
           32, (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16));
       final proof = await service.signDownloadChallenge(bytes);
@@ -44,8 +46,9 @@ class ScreenShare {
       final ticket = grant['ticket'];
       if (grant['scope'] != 'screen-frames' ||
           ticket is! String ||
-          !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket))
+          !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket)) {
         throw const FormatException('共享凭证无效');
+      }
       await channel.invokeMethod<void>('start', {'ticket': ticket});
     } finally {
       client.close();

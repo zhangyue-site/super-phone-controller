@@ -60,9 +60,10 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         final status = await ScreenShare.status();
         if (mounted) setState(() => _screenStatus = status);
       } catch (_) {
-        if (mounted)
+        if (mounted) {
           setState(() => _screenStatus =
               const ScreenTaskStatus(capture: '共享状态暂不可用，请稍后重试'));
+        }
       }
     });
     _prepare();
@@ -133,9 +134,10 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     });
     try {
       await ScreenShare.start(widget.service);
-      if (mounted)
+      if (mounted) {
         setState(
             () => _screenStatus = const ScreenTaskStatus(capture: '正在启动共享'));
+      }
     } catch (e) {
       if (mounted) setState(() => _error = '屏幕共享：$e');
     } finally {
@@ -304,9 +306,9 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
                             !_screenStatus.pointerReady)
                           const Text('控制板尚未就绪：请确认固件支持绝对鼠标并在板端同意 HID 控制'),
                         for (final skill in _screenStatus.skills)
-                          Text('已存技能：$skill'),
+                          Text('技能：$skill'),
                         const Text(
-                            '共享整个屏幕后，说“打开微信找到测试联系人”。成功后说“存为技能”才会保存到微信分组；回放总是从桌面开始。旋转屏幕后请重新共享。'),
+                            '先共享整屏，语音发起任务；说“存为技能”固化为专项技能。回放从桌面开始，画面变化时再由 AI 定位。当前先支持微信，例如“打开微信找到测试联系人”。旋转屏幕后请重新共享。'),
                         FilledButton.icon(
                             onPressed:
                                 _busy || !_connected ? null : _shareScreen,
@@ -315,9 +317,10 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
                         TextButton(
                             onPressed: () async {
                               await ScreenShare.stop();
-                              if (mounted)
+                              if (mounted) {
                                 setState(() => _screenStatus =
                                     const ScreenTaskStatus(capture: '已停止共享'));
+                              }
                             },
                             child: const Text('停止共享')),
                       ]))),

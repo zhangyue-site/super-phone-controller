@@ -84,6 +84,7 @@ class Job:
  pointer_protocol:str=''
  fenced:bool=False
  navigation_verified:bool=False
+ last_receipt:dict=field(default_factory=dict)
  video_sequence:int=0
  video_received:float=0
  video_width:int=0
@@ -131,6 +132,7 @@ class Mailbox:
    if not j.command or not j.delivered or ident!=j.command['id']:raise ValueError('stale acknowledgement')
    if not isinstance(output,str) or len(output.encode())>(786432 if j.command['op']=='screenshot' else 48000):raise ValueError('command output size')
    print('PHONE_RECEIPT device=%s turn=%d id=%s ok=%s'%(device,seq,ident[:8],ok),flush=True)
+   j.last_receipt={'id':ident,'op':j.command['op'],'ok':ok,'barrier_before':j.video_barrier}
    j.result=(ok,output,error);j.command=None;j.touched=self.clock()
    if j.fenced:j.video_barrier=uuid.uuid4().hex;j.video=b''
    j.event.set()
