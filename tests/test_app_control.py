@@ -1,11 +1,11 @@
 import hashlib,hmac,json,unittest,time
 from test_wechat_nav import frame
 from unittest.mock import patch
-from test_remote_http import RemoteHttpTests
-from display_service import app_control,remote_http
+import test_remote_http as http_tests
+from display_service import app_control,remote_http,app_screen
 from display_service.app_ota import Authority
 
-class AppControlTests(RemoteHttpTests):
+class AppControlTests(http_tests.RemoteHttpTests):
  # Keep only App cases; parent supplies the real HTTP server/board harness.
  test_both_origins_real_http_flow_and_scoped_verified_result=None
  test_bridge_auth_unknown_peer_cross_confirmation_and_stop=None
@@ -13,9 +13,10 @@ class AppControlTests(RemoteHttpTests):
  def setUp(self):
   super().setUp();self.control_auth=Authority()
   self.ap=patch.object(app_control,'AUTHORITY',self.control_auth);self.ap.start()
+  self.frames=patch.object(app_screen,'SEQUENCES',{});self.frames.start()
   self.remote.binding_allowed=remote_http.binding_allowed
  def tearDown(self):
-  self.ap.stop();super().tearDown()
+  self.frames.stop();self.ap.stop();super().tearDown()
  def grant(self):
   code,c=self.request('/app-control/challenge',{'device':'epaper-01'});self.assertEqual(code,200)
   proof=hmac.new(b'synthetic-device-only',b'PCFLASH1\nepaper-01\n'+bytes.fromhex(c['challenge']),hashlib.sha256).hexdigest()
