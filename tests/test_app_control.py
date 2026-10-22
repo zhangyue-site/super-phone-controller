@@ -71,6 +71,7 @@ class AppControlTests(http_tests.RemoteHttpTests):
  def test_no_injected_shell_or_owner(self):
   ticket=self.grant()
   self.assertEqual(self.command(ticket,'prepare',text='adb shell input tap 1 2')[0],409)
+  self.assertEqual(self.command(ticket,'confirm')[0],409)
   self.assertEqual(self.command(ticket,'prepare',text='打开微信找到李洋',device='other')[0],409)
   self.assertEqual(self.request('/app-control/authorize',{'device':'epaper-01','challenge':'0'*64,'proof':'0'*64})[0],409)
 if __name__=='__main__':unittest.main()

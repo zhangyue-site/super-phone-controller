@@ -43,7 +43,10 @@ def handle(handler,config):
    if operation=='prepare':
     result=remote.prepare(identity,obj.get('text'))
     result['reply']=result['reply'].split('回复 /phone 确认 ')[0]+'请在两分钟内点击“确认执行”。'
-   elif operation=='confirm':result=remote.confirm(identity,obj.get('task_id'))
+   elif operation=='confirm':
+    ident=obj.get('task_id')
+    if not isinstance(ident,str) or not re.fullmatch('[0-9a-f]{32}',ident):raise ValueError('请重新生成计划，再点击确认执行。')
+    result=remote.confirm(identity,ident)
    elif operation=='status':result=remote.status(identity,obj.get('task_id'))
    elif operation=='stop':result=remote.stop(identity)
    elif operation=='save':result=remote.save(identity,obj.get('task_id'))
@@ -51,6 +54,8 @@ def handle(handler,config):
   if result.get('state')=='pending':result['reply']=result['reply'].split('回复 /phone 确认 ')[0]+'请在两分钟内点击“确认执行”。'
   handler.reply(200,json.dumps(result,ensure_ascii=False).encode())
  except PermissionError:handler.reply(403,json.dumps({'reply':'控制授权已失效，请重新连接授权。'},ensure_ascii=False).encode())
- except (ValueError,TypeError,KeyError) as error:handler.reply(409,json.dumps({'reply':str(error)},ensure_ascii=False).encode())
+ except (ValueError,TypeError,KeyError) as error:
+  message='授权未完成，请检查蓝牙连接后重试。' if not path.endswith('/command') else str(error)
+  handler.reply(409,json.dumps({'reply':message},ensure_ascii=False).encode())
  except OSError:handler.reply(503,b'{}')
  return True
