@@ -43,4 +43,21 @@ class ScreenTests(unittest.TestCase):
   out=io.BytesIO();Image.new('RGB',(64,128)).save(out,format='JPEG');ticket=self.grant();m=Mailbox();j=m.create('test-board','b'*16,1)
   with patch.object(app_screen.CONVERSATION,'mailbox',m):
    h=Handler('/app-screen/frame',out.getvalue(),ticket);app_screen.handle(h,self.config);self.assertEqual(h.code,200);self.assertTrue(j.video);self.assertFalse(h.body['phone_execution'])
+ def test_revoked_during_body_read_cannot_bind_new_task(self):
+  ticket=self.grant();m=Mailbox();j=m.create('test-board','c'*16,1)
+  h=Handler('/app-screen/frame',b'fake',ticket)
+  def read(size):
+   self.auth.tickets.pop(ticket,None)
+   return b'fake'
+  h.rfile.read=read
+  with patch.object(app_screen.CONVERSATION,'mailbox',m):app_screen.handle(h,self.config)
+  self.assertEqual(h.code,403);self.assertFalse(j.video);self.assertFalse(j.screen_session)
+ def test_stale_stop_does_not_cancel_new_task(self):
+  ticket=self.grant();m=Mailbox();j=m.create('test-board','d'*16,1)
+  def revoked_subject(value):
+   self.auth.tickets.pop(value,None)
+   return 'test-board'
+  with patch.object(app_screen.CONVERSATION,'mailbox',m),patch.object(app_screen,'subject',revoked_subject):
+   h=Handler('/app-screen/stop',ticket=ticket);app_screen.handle(h,self.config)
+  self.assertEqual(h.code,403);self.assertFalse(j.cancelled)
 if __name__=='__main__':unittest.main()
