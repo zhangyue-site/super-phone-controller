@@ -50,7 +50,7 @@ def handle(handler,config):
     j=mailbox.jobs.get(device)
     result={'state':j.state if j and not j.cancelled else 'idle','reply':j.reply if j and not j.cancelled else '',
      'frame':j.video_sequence if j else 0,'pointerReady':bool(j and j.pointer_protocol=='absolute-v1'),
-     'skills':STORE.list(device),'barrier':j.video_barrier if j else ''}
+     'skills':STORE.catalog(device),'barrier':j.video_barrier if j else ''}
    handler.reply(200,json.dumps(result,ensure_ascii=False).encode());return True
   if path.endswith('/stop'):
    if size!=0:raise ValueError('size')

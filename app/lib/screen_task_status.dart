@@ -37,7 +37,9 @@ class ScreenTaskStatus {
     for (final skill in task['skills'] as List) {
       if (skill is! Map ||
           skill['group'] is! String ||
-          skill['name'] is! String) throw const FormatException('技能状态无效');
+          skill['name'] is! String) {
+        throw const FormatException('技能状态无效');
+      }
       skills.add('${skill['group']} · ${skill['name']}');
     }
     return ScreenTaskStatus(

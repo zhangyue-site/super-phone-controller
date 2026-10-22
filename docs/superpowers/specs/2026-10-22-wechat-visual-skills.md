@@ -12,3 +12,9 @@ App1.0.5+6 retains new icon and OTA; improves full-display consent guidance, cap
 Tests before code: deterministic synthetic phone frames + real mailbox simulated board ACK, full flow, stop/drop/old frames/failed input/final mismatch/no message, valid/invalid skill replay, fewer AI calls and device isolation. Run real vision on synthetic Chinese screen fixture to validate transport only, not claim real phone navigation. Cloud C++ host/IDF and Flutter tests/build; private staged firmware, signed App update with honest hardware limits.
 
 Review refinements: every board ACK, including Chinese input with IME restoration, clears frames and rotates capture barrier. App must echo barrier from previous capture response into future captures. Bind ticket+device+turn+barrier+frame ID, revoke old device screen tickets and cancel old task on screen restart. Final observation is compared with latest bounded-age fresh frame before completion/save; interrupted tasks cannot be saved.
+
+
+## User refinement: two Skill categories
+1. Generic collection/compilation Skill (collect-and-compile): reusable app-agnostic recorder/compiler, proven action receipts, frame/target guards, parameter schema, terminal verification, private device scope and desktop-entry replay contract. It is not a WeChat cache.
+2. Specialized skills: workflow templates plus bound parameters, e.g. wechat.search_contact(contact=李洋). Changing contact binds new input, never replays recorded old text. Other application adapters may register new WorkflowSpec without changing the collector/compiler. Only WeChat execution adapter is currently implemented; generic browser template tests prove storage/replay abstraction, not real browser control capability.
+App catalog distinguishes collector vs specialized; voice “存为技能” invokes the generic collector for last terminal-success task. Every specialized replay still uses its own allowlist/result verifier and fresh frames.

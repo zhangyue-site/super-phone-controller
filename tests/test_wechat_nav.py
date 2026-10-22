@@ -16,7 +16,7 @@ class NavigationTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
   self.store=SkillStore(Path(self.temp.name));self.calls=[]
- def run_flow(self,replay=False,bad_result=False,cancel_after=None,fail_input=False,cancel_in_vision=False,drop_after_input=False,changed=False):
+ def run_flow(self,replay=False,bad_result=False,cancel_after=None,fail_input=False,cancel_in_vision=False,drop_after_input=False,changed=False,query='李洋'):
   m=Mailbox();j=m.create("test-board","a"*16,1);j.pointer_protocol="absolute-v1";j.video_source="user-consented-app-screen"
   stop=threading.Event();commands=[];stage=[0]
   def feed():
@@ -30,6 +30,8 @@ class NavigationTests(unittest.TestCase):
       elif cmd["op"]=="hid_pointer":stage[0]+=1;output="HID_POINTER_REPORT_SENT"
       elif cmd["op"]=="type_text":
        if fail_input:m.ack(j.device,j.session,j.sequence,cmd["id"],False,"","input_failed");continue
+       import base64
+       self.assertEqual(base64.b64decode(cmd["text_b64"]).decode(),query)
        stage[0]=3;output="__PC_EXIT_0__"
       else:raise AssertionError(cmd)
       m.ack(j.device,j.session,j.sequence,cmd["id"],True,output)
@@ -45,7 +47,7 @@ class NavigationTests(unittest.TestCase):
    return observation(s)
   t=threading.Thread(target=feed);t.start()
   nav=WechatNavigator(m,self.store,vision=vision,frame_timeout=.8)
-  try:result=nav.run(j,"李洋");j.done=True;j.state="done"
+  try:result=nav.run(j,query);j.done=True;j.state="done"
   finally:stop.set();t.join()
   return result,commands,j
  def test_simulated_full_flow_and_explicit_save_replay_uses_less_ai(self):
@@ -86,3 +88,18 @@ class NavigationTests(unittest.TestCase):
  def test_failed_terminal_state_is_not_saved(self):
   _,_,j=self.run_flow();j.state="error"
   with self.assertRaises(ValueError):self.store.save_last("test-board")
+
+ def test_target_change_forces_vision_even_when_small_scene_hash_matches(self):
+  from display_service.wechat_nav import signature,matches,region,region_matches
+  im=Image.new("RGB",(600,1200),"white")
+  before=io.BytesIO();im.save(before,format="JPEG")
+  ImageDraw.Draw(im).rectangle((50,100,55,110),fill="black")
+  after=io.BytesIO();im.save(after,format="JPEG")
+  self.assertTrue(matches(signature(before.getvalue()),signature(after.getvalue())))
+  self.assertFalse(region_matches(region(before.getvalue(),[70,70,110,110]),after.getvalue()))
+
+ def test_specialized_skill_rebinds_contact_instead_of_replaying_old_name(self):
+  self.run_flow();self.store.save_last("test-board")
+  self.calls.clear();result,commands,j=self.run_flow(query="李华")
+  self.assertEqual(len(self.calls),1);self.assertIn("李华",result)
+  self.assertNotIn("李洋",result)

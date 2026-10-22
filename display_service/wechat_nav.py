@@ -3,90 +3,14 @@ import base64,hashlib,io,json,math,os,re,threading,time,zlib
 from pathlib import Path
 from PIL import Image
 from .wechat_vision import observe
+from .skill_engine import SkillStore,WorkflowSpec,ReplayEngine,signature,matches,region,region_matches
+WORKFLOW=WorkflowSpec('wechat.search_contact','微信','微信找联系人',('contact',),'wechat.search_results')
 
 def parse_task(text):
  text=re.sub(r"^(回放技能|运行技能)\s*","",text.strip())
  match=re.fullmatch(r"(?:请|帮我)?(?:打开|进入)微信(?:然后|并|，|,)?(?:找到|搜索|查找)([\u4e00-\u9fffA-Za-z0-9·]{1,24})",text)
  if not match or re.search(r"发送|发消息|不要|停止|取消|然后|转账|删除|支付",match[1]):return None
  return match[1]
-def signature(raw):
- with Image.open(io.BytesIO(raw)) as im:
-  w,h=im.size
-  small=im.convert("L").crop((0,int(h*.045),w,int(h*.95))).resize((96,160))
-  return {"w":w,"h":h,"pixels":base64.b64encode(zlib.compress(small.tobytes())).decode()}
-def matches(a,b):
- if not isinstance(a,dict) or (a.get("w"),a.get("h"))!=(b.get("w"),b.get("h")):return False
- try:
-  x=zlib.decompress(base64.b64decode(a["pixels"]));y=zlib.decompress(base64.b64decode(b["pixels"]))
-  if len(x)!=15360 or len(y)!=15360:return False
-  differences=[abs(v-w) for v,w in zip(x,y)]
-  return sum(differences)/len(differences)<=1.0 and sum(v>12 for v in differences)/len(differences)<.002
- except (ValueError,KeyError,zlib.error):return False
-
-def region(raw,bounds):
- if not isinstance(bounds,list) or len(bounds)!=4 or any(type(v)!=int for v in bounds):raise ValueError("需要准确目标区域")
- x1,y1,x2,y2=bounds
- if not 0<=x1<x2<=1000 or not 0<=y1<y2<=1000:raise ValueError("目标区域无效")
- with Image.open(io.BytesIO(raw)) as im:
-  w,h=im.size
-  box=(x1*w//1000,y1*h//1000,max(x1*w//1000+1,x2*w//1000),max(y1*h//1000+1,y2*h//1000))
-  crop=im.convert("RGB").crop(box)
-  return {"box":bounds,"w":crop.width,"h":crop.height,"pixels":base64.b64encode(zlib.compress(crop.tobytes())).decode()}
-def region_matches(reference,raw):
- if not isinstance(reference,dict):return False
- try:
-  current=region(raw,reference["box"])
-  if (current["w"],current["h"])!=(reference["w"],reference["h"]):return False
-  a=zlib.decompress(base64.b64decode(reference["pixels"]));b=zlib.decompress(base64.b64decode(current["pixels"]))
-  if len(a)!=len(b) or not a:return False
-  diff=[abs(x-y) for x,y in zip(a,b)]
-  return sum(diff)/len(diff)<=.5 and sum(v>8 for v in diff)/len(diff)<.001
- except (ValueError,KeyError,zlib.error,TypeError):return False
-
-class SkillStore:
- def __init__(self,root=None,clock=time.monotonic):
-  self.root=Path(root or os.environ.get("EPAPER_SKILLS","/var/lib/phone-controller/skills"))
-  self.clock=clock;self.lock=threading.RLock();self.last={}
- def _path(self,device):
-  if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}",device):raise ValueError("device")
-  return self.root/(device+".json")
- def _read(self,device):
-  try:
-   p=self._path(device)
-   if p.stat().st_size>3000000:return {}
-   data=json.loads(p.read_text())
-   return data if isinstance(data,dict) and data.get("schema")==1 else {}
-  except (OSError,ValueError):return {}
- def invalidate(self,device):
-  with self.lock:self.last.pop(device,None)
- def remember(self,device,query,steps,geometry,job):
-  with self.lock:self.last[device]=(self.clock(),query,steps,geometry,job)
- def save_last(self,device):
-  with self.lock:
-   item=self.last.get(device)
-   if not item or self.clock()-item[0]>900:raise ValueError("没有最近核验成功的操作可保存")
-   _,query,steps,geometry,job=item
-   if not job.done or job.state!='done' or not job.navigation_verified:raise ValueError('操作尚未确认完成，不能保存')
-   if not steps or len(steps)>8:raise ValueError("invalid skill")
-   data=self._read(device);entries=data.get("skills",{})
-   key=hashlib.sha256(query.encode()).hexdigest()[:24]
-   entries[key]={"group":"微信","name":"打开微信找到"+query,"query":query,"steps":steps,"geometry":geometry}
-   if len(entries)>32:raise ValueError("技能已满，请先整理")
-   self.root.mkdir(mode=0o700,parents=True,exist_ok=True)
-   path=self._path(device);tmp=path.with_suffix(".tmp")
-   encoded=json.dumps({"schema":1,"skills":entries},ensure_ascii=False)
-   if len(encoded.encode())>3000000:raise ValueError("技能数据已满")
-   tmp.write_text(encoded);tmp.chmod(0o600);os.replace(tmp,path)
-   return entries[key]["name"]
- def find(self,device,query):
-  with self.lock:
-   key=hashlib.sha256(query.encode()).hexdigest()[:24]
-   entry=self._read(device).get("skills",{}).get(key)
-   if not isinstance(entry,dict) or entry.get("query")!=query:return None
-   steps=entry.get("steps")
-   return entry if isinstance(steps,list) and 0<len(steps)<=8 else None
- def list(self,device):
-  with self.lock:return [{"group":v.get("group","微信"),"name":v.get("name","")} for v in self._read(device).get("skills",{}).values() if isinstance(v,dict)]
 
 class WechatNavigator:
  def __init__(self,mailbox,store,vision=observe,frame_timeout=15):
@@ -125,6 +49,7 @@ class WechatNavigator:
   good=("HID_HOME_REPORT_SENT" if command["op"]=="hid_home" else "HID_POINTER_REPORT_SENT" if command["op"]=="hid_pointer" else "__PC_EXIT_0__")
   if output.strip()!=good:raise ValueError("板端没有确认动作完成")
   self._log(j,"receipt",op=command["op"],confirmed=True)
+  return dict(j.last_receipt)
  def _command(self,observation,query):
   screen=observation.get("screen")
   if screen=="launcher":target="wechat_app"
@@ -146,15 +71,16 @@ class WechatNavigator:
    self.m._live(j);time.sleep(.025)
   if j.pointer_protocol!="absolute-v1":raise ValueError("请先升级支持AI鼠标协议的控制板固件")
   raw,seq,sig=self._frame(j)
-  geometry=(sig["w"],sig["h"]);self._action(j,{"op":"hid_home"},sig)
-  entry=self.store.find(j.device,query);cached=entry.get("steps",[]) if entry else []
+  geometry=(sig["w"],sig["h"]);entry_receipt=self._action(j,{"op":"hid_home"},sig)
+  entry=self.store.find(j.device,WORKFLOW,{"contact":query});cached=entry.get("steps",[]) if entry else []
   trace=[];ai_calls=0;typed=False;last_seq=seq;expected_screen='launcher'
   self._log(j,"start",replay=bool(cached))
   for step in range(8):
    raw,seq,sig=self._frame(j,after=last_seq);last_seq=seq
    if (sig["w"],sig["h"])!=geometry:raise ValueError("共享画面尺寸改变，请重新开始")
-   if step<len(cached) and matches(cached[step].get("signature"),sig) and (cached[step].get("observation",{}).get("input_focused") is True or region_matches(cached[step].get("target"),raw)):
-    stored=cached[step]
+   replay_step=ReplayEngine.step({"steps":cached},step,raw)
+   if replay_step is not None:
+    stored=replay_step
     command,stage=self._command(stored.get("observation",{}),query)
     self._log(j,"cache_hit",step=step)
    else:
@@ -163,11 +89,11 @@ class WechatNavigator:
     observation=self._observe(j,raw,query);ai_calls+=1
     command,stage=self._command(observation,query)
     stored={"signature":sig,"observation":observation}
-    if command["op"]=="hid_pointer":stored["target"]=region(raw,observation["bounds"])
+    stored["target"]=region(raw,observation["bounds"] if command["op"]=="hid_pointer" else [0,45,1000,250])
    if stored.get('observation',{}).get('screen')!=expected_screen:raise ValueError('页面顺序不符，停止导航')
    trace.append(stored)
-   if command["op"]=="hid_pointer":sig["target"]=stored["target"]
-   self._action(j,command,sig)
+   sig["target"]=stored["target"]
+   stored["receipt"]=self._action(j,command,sig)
    if command["op"]=="type_text":typed=True;break
    expected_screen='wechat_home' if stage=='launcher' else 'wechat_search'
   if not typed:raise ValueError("微信导航步骤超出限制")
@@ -181,7 +107,7 @@ class WechatNavigator:
   latest,_,latest_sig=self._frame(j)
   if not matches(sig,latest_sig) or not region_matches(query_region,latest) or not region_matches(contact_region,latest):raise ValueError("结果页面已变化，请重新核验")
   with self.m.lock:
-   self.m._live(j);j.navigation_verified=True;self.store.remember(j.device,query,trace,geometry,j)
+   self.m._live(j);j.navigation_verified=True;self.store.remember(j,WORKFLOW,{"contact":query},trace,geometry,entry_receipt,{"verified":True,"terminal":WORKFLOW.terminal,"parameters":{"contact":query},"frame":seq})
   self._log(j,"verified",frame=seq,ai_calls=ai_calls,actions=len(trace)+1)
   return "已在微信搜索结果页找到"+query+"，已保留结果页，没有发送消息。"
 STORE=SkillStore()
