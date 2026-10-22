@@ -271,7 +271,17 @@ static void run(void*){
    state(ok?0:5);continue;
   }
   bool submitted=manual_submit.exchange(false);
-  stream.finished_at=esp_timer_get_time();stream.abort=cancelled||!ok||count<6400||(continuous&&!vad.send(submitted));stream.done=true;
+  bool speech=count>=6400&&(!continuous||vad.send(submitted));
+  if(!speech&&!cancelled){
+   // Nothing usable recorded (too short / VAD heard no voice): stop the live
+   // upload and end the turn silently - no error screen, no failure cue.
+   // Server-side tolerance would also absorb this, but skipping saves the
+   // radio round-trip and keeps conversation turns from half-starting.
+   stream.abort=true;stream.done=true;state(0);
+   if(continuous){conversation=false;controller_audio_prompt(controller::SpeechPrompt::STOPPED);}
+   continue;
+  }
+  stream.finished_at=esp_timer_get_time();stream.abort=cancelled||!ok;stream.done=true;
   if(!stream.abort)state(2);
   while(stream.result==0){if(cancelled)stream.abort=true;vTaskDelay(pdMS_TO_TICKS(10));}
   if(cancelled){state(0);continue;}

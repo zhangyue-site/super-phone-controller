@@ -3,6 +3,7 @@ package org.example.phonecontroller
 import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
+import android.media.projection.MediaProjectionConfig
 import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -22,14 +23,25 @@ class MainActivity: FlutterActivity() {
      } else {
       pending=result;ticket=value
       val manager=getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-      startActivityForResult(manager.createScreenCaptureIntent(), 901)
+      try {
+       val consent = if(Build.VERSION.SDK_INT>=34) manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay()) else manager.createScreenCaptureIntent()
+       startActivityForResult(consent, 901)
+      } catch(_: Exception) {
+       pending=null;ticket=null;ScreenShareService.revoke(value)
+       result.error("permission_failed", "无法请求屏幕共享，请重新开启", null)
+      }
      }
     }
-    "stop" -> { stopService(Intent(this, ScreenShareService::class.java));result.success(null) }
-    "status" -> result.success(ScreenShareService.status)
+    "stop" -> { ticket?.let { ScreenShareService.revoke(it) };ticket=null;pending?.error("cancelled","已取消屏幕共享",null);pending=null;ScreenShareService.status="已停止共享";ScreenShareService.taskStatus=""; stopService(Intent(this, ScreenShareService::class.java));result.success(null) }
+    "status" -> result.success(org.json.JSONObject().put("capture",ScreenShareService.status).put("task",ScreenShareService.taskStatus).toString())
     else -> result.notImplemented()
    }
   }
+ }
+ override fun onDestroy() {
+  ticket?.let { ScreenShareService.revoke(it) };ticket=null
+  pending?.error("cancelled","共享授权已中断，请重新开启",null);pending=null
+  super.onDestroy()
  }
  @Deprecated("Activity result is required for projection consent")
  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -38,12 +50,12 @@ class MainActivity: FlutterActivity() {
   val reply=pending;pending=null
   val capability=ticket;ticket=null
   if(resultCode!=Activity.RESULT_OK || data==null || capability==null) {
-   reply?.error("cancelled","未同意屏幕共享",null);return
+   capability?.let { ScreenShareService.revoke(it) };reply?.error("cancelled","未同意屏幕共享",null);return
   }
   val intent=Intent(this,ScreenShareService::class.java).putExtra("grant",data).putExtra("ticket",capability)
   try {
    if(Build.VERSION.SDK_INT>=26)startForegroundService(intent) else startService(intent)
    reply?.success(null)
-  } catch(e: Exception) { reply?.error("start_failed","无法启动屏幕共享",null) }
+  } catch(e: Exception) { ScreenShareService.revoke(capability);reply?.error("start_failed","无法启动屏幕共享",null) }
  }
 }

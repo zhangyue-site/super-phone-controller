@@ -125,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
                     result=CONVERSATION.mailbox.ingest_video(device,session,sequence,frame_sequence,raw,codec)
                     return self.reply(200,json.dumps(result).encode())
                 if self.path=='/dialogue/poll':
-                    return self.reply(200,json.dumps(CONVERSATION.mailbox.poll(device,session,sequence),ensure_ascii=False).encode())
+                    return self.reply(200,json.dumps(CONVERSATION.mailbox.poll(device,session,sequence,pointer_protocol=self.headers.get('X-HID-Pointer')),ensure_ascii=False).encode())
                 if self.path=='/dialogue/screen':
                     with CONVERSATION.mailbox.lock:
                         j=CONVERSATION.mailbox._job(device,session,sequence)
