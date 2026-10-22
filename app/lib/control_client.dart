@@ -23,11 +23,13 @@ class ControlClient {
             },
             body: jsonEncode(body))
         .timeout(const Duration(seconds: 20));
-    if (response.bodyBytes.length > 8192)
+    if (response.bodyBytes.length > 8192) {
       throw const FormatException('服务器响应过大');
+    }
     final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-    if (decoded is! Map<String, dynamic>)
+    if (decoded is! Map<String, dynamic>) {
       throw const FormatException('服务器响应无效');
+    }
     if (response.statusCode != 200) {
       if (response.statusCode == 403) {
         _ticket = null;
@@ -43,8 +45,9 @@ class ControlClient {
     if (info == null) throw const FormatException('请先连接控制板');
     final challenge = await _post('challenge', {'device': info.device});
     final nonce = challenge['challenge'];
-    if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce))
+    if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
       throw const FormatException('授权挑战无效');
+    }
     final bytes = Uint8List.fromList(List.generate(
         32, (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16)));
     final proof = await service.signDownloadChallenge(bytes);
@@ -60,7 +63,9 @@ class ControlClient {
         !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket) ||
         ttl is! int ||
         ttl < 1 ||
-        ttl > 300) throw const FormatException('授权范围无效');
+        ttl > 300) {
+      throw const FormatException('授权范围无效');
+    }
     _ticket = ticket;
     _expires = DateTime.now().add(Duration(seconds: ttl));
   }

@@ -31,7 +31,9 @@ class _ControlScreenState extends State<ControlScreen> {
         _stopping ||
         !_client.authorized ||
         _task['task_id'] == null ||
-        _task['terminal'] == true) return;
+        _task['terminal'] == true) {
+      return;
+    }
     _polling = true;
     final generation = _generation;
     try {
@@ -54,8 +56,9 @@ class _ControlScreenState extends State<ControlScreen> {
     });
     try {
       if (!_client.authorized) {
-        if (operation != 'prepare')
+        if (operation != 'prepare') {
           throw const FormatException('授权失效，请重新生成计划后确认');
+        }
         await _client.authorize(widget.service);
       }
       if (generation != _generation) return;
