@@ -24,7 +24,7 @@ class ScreenTests(unittest.TestCase):
  def test_no_active_task_drops_frame(self):
   ticket=self.grant()
   with patch.object(app_screen.CONVERSATION,'mailbox',Mailbox()):
-   h=Handler('/app-screen/frame',b'fake',ticket);app_screen.handle(h,self.config);self.assertEqual(h.code,202)
+   h=Handler('/app-screen/frame',b'fake',ticket);app_screen.handle(h,self.config);self.assertEqual(h.code,202);self.assertFalse(h.body["accepted"]);self.assertRegex(h.body["barrier"],r"^[0-9a-f]{32}$")
  def test_replayed_frame_rejected(self):
   ticket=self.grant()
   with patch.object(app_screen.CONVERSATION,'mailbox',Mailbox()):
