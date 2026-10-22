@@ -22,3 +22,5 @@
 现有USB网络仍沿用历史ADB TLS pipe；动作侧仅type_text，未使用ADB截图、点击或启动应用。不能将此结构描述为整个运行完全不使用ADB。若用户要求网络层也不使用ADB，需要另行完成手机App USB网络桥的适配。
 
 证据：106私有发布目录 `/opt/phone-controller-release/2026-10-21/ble-server1-first-failed.log` 与 `ble-server1-real-pass.log`。Mac同名/tmp日志可继续核对；现场手机控制未验收，不能宣称全部完成。
+
+补充：发现服务器events白名单缺少固件实际产生的touch_down/touch_up/voice_finish/ai_home，造成混合数字事件批次整体拒绝。新增协议边界回归先复现失败，再修复限定事件集；138项根测试通过。已备份并部署，备份路径 `/var/lib/phone-controller/backups/event-contract-20261022-160247`，只替换events.py并重启服务，未改其他语音逻辑。若用户先前共享过屏幕，服务重启后需重新授权。此时控制任务记录仍为空，没有执行微信搜索或发送消息。
