@@ -11,3 +11,11 @@
 云端部署备份 `/var/lib/phone-controller/backups/app-control-20261022-145632`，只补入 App 路由和相关模块，保留其他语音改动。公网未授权命令返回403。正式 Flutter CI 校验分析、客户端授权协议及页面停止响应顺序；最终构建/发布证据见补充记录。
 
 DeepSeek 审阅回执位于124私有目录 `pcflash-1.0.6-review`。首轮回答截断，不能算完整核验；第二轮完整JSON。已修复轮询成功后残留错误、中文授权提示、明确计划编号校验。其余关于 stopped 被 _sync 改写、跨设备票据匹配、双击生成/确认和晚到停止覆盖新计划的推断与实际终态分支、哈希等值校验和 busy/stopping 门控不符；不据此改坏设备级停止与防旧会话停止保护。真实手机覆盖安装、BLE授权、画面共享、HID执行及蓝牙OTA/重启确认仍待验收。
+
+## 正式构建与发布
+
+Android 1.0.6+7，包名 site.zhangyue.pcflash。CI 39737703428（App源码4cf52fe）成功：Flutter analyze、19项测试和正式签名APK构建均通过。后续仅文档及服务端提示去重，未更改该App源码。新APK 50,459,125字节，SHA256 `3ea3d697fb9bf651c80a49ba7e58cefad9e8734bf1e2ffb20ab7e1ce0aacfd74`。正式证书与1.0.5相同，审计passed；与1.0.3的21个PNG资源hash完全一致。
+
+已发布至 `https://d.zhangyue.site/apps/phone-controller-flash/`；实际商店数据 `/apps/apps.json` 公网读到1.0.6/versionCode7和相同包hash、大小，图标HTTP200、页面下载链接正确。保留其他14个App条目及旧包。商店描述已去掉过时的“只选本地文件”说明。公网完整包下载校验单独记录；慢速下载不视为哈希验证成功。
+
+覆盖安装、实际蓝牙固件传输/重启、真实手机控制与聊天入口真实消息接收仍未验收；当前不能宣称“所有功能真机通过”。设备固件当前云端候选ci67，App升级不等于已安装板端固件。
