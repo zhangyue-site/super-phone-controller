@@ -87,7 +87,7 @@ class _ControlScreenState extends State<ControlScreen> {
 
   Future<void> _stop() async {
     if (_stopping) return;
-    ++_generation;
+    final generation = ++_generation;
     setState(() {
       _stopping = true;
       _busy = false;
@@ -96,7 +96,12 @@ class _ControlScreenState extends State<ControlScreen> {
     try {
       if (!_client.authorized) await _client.authorize(widget.service);
       final result = await _client.command('stop');
-      if (mounted) setState(() => _task = result);
+      if (mounted && generation == _generation) {
+        setState(() {
+          _task = result;
+          _error = null;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _error = '停止请求未确认：$e。请使用板子上的停止按钮。');
     } finally {
@@ -153,7 +158,8 @@ class _ControlScreenState extends State<ControlScreen> {
       'stopped': '已停止',
       'expired': '已过期',
       'idle': '暂无任务',
-      'replaced': '已替换'
+      'replaced': '已替换',
+      'saved': '已存为技能'
     };
     return Scaffold(
       appBar: AppBar(title: const Text('手机控制')),
