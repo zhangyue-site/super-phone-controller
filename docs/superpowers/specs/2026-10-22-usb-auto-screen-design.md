@@ -14,3 +14,5 @@ Dart保留USB启动session和挂载代数；Android在请求与系统授权结�
 
 
 评审补充：现有boardInfo.device是epaper-01之类逻辑ID，并非USB的MAC序列号，不能伪造两者相等校验。首次由用户显式选择蓝牙板建立关联，后续同时核对保存的BLE地址和逻辑ID；此为用户配对，不宣称首次已密码学证明USB/BLE同一设备。USB权限缺失/空序列号拒绝绑定。授权requestCode持久递增以隔离Activity重建后的迟到结果；USB session在请求授权、授权结果及服务启动三个边界验证。应用级USB拔线接收器在Activity销毁后继续保护前台共享服务，停止时清除捕获与上传并撤销能力。固件升级中不自动切换页面；HID重枚举在宽限期内合并，系统USB默认打开和全屏授权不绕过。
+
+入口采用singleTask，插入时复用已有Activity，避免授权窗口位于前台时重复插入另建Activity；Flutter页面内任务与OTA忙状态继续按既有保护处理。
