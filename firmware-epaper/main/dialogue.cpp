@@ -1,8 +1,9 @@
 #include "dialogue.h"
 #include "voice.h"
 #include "remote_claim_policy.h"
-#include <atomic>
 #include "usb.h"
+#include "ota.h"
+#include "ble_ota.h"
 #include "adb_local.h"
 #include "device_config.h"
 #include "esp_http_client.h"
@@ -18,6 +19,7 @@
 #include <cmath>
 extern const char *controller_ota_endpoint();
 static char remote_lease[65]={};
+static bool remote_dialogue=false;
 static bool live(unsigned sequence){return controller_voice_cancel_sequence()<sequence;}
 static int post(const char *path,unsigned sequence,const char *body,unsigned char *out,unsigned capacity,int timeout_ms=20000){
  if(!live(sequence))return -1;
@@ -49,43 +51,26 @@ bool controller_dialogue_remote_claim(unsigned sequence){
  bool start=had_lease&&!strcmp(str(j,"op"),"start")&&controller::remote_task_id(str(j,"task_id"));
  cJSON_Delete(j);return start;
 }
-struct RemoteWatch {
- unsigned sequence;
- std::atomic<bool> stop{false},done{false};
- explicit RemoteWatch(unsigned value):sequence(value){}
-};
-static void remote_watch(void *argument){
- auto &watch=*static_cast<RemoteWatch*>(argument);
- unsigned sequence=watch.sequence;
- while(!watch.stop&&live(sequence)){
-  char response[96];int n=post("/remote/status",sequence,nullptr,(unsigned char*)response,sizeof(response)-1,1500);
-  if(n<0&&!watch.stop&&live(sequence)){
-   // Fail closed if cloud STOP visibility is lost during remote execution.
-   controller_voice_cancel();controller_release();
-  }
-  if(n>=0){
-   response[n]=0;cJSON *j=cJSON_Parse(response);
-   if(controller::remote_status_cancel(str(j,"op"))&&!watch.stop&&live(sequence)){
-    // Revokes ADB gate and HID liveness while dialogue is blocked in input.
-    // Shell EXIT trap restores IME; reconnect probe recovers a lost link.
-    controller_voice_cancel();controller_release();
-   }
-   cJSON_Delete(j);
-  }
-  for(int i=0;i<5&&!watch.stop&&live(sequence);++i)vTaskDelay(pdMS_TO_TICKS(100));
+static bool remote_status_live(unsigned sequence){
+ if(controller_ota_busy()||ble_ota_busy()){controller_voice_cancel();controller_release();return false;}
+ if(!remote_dialogue)return live(sequence);
+ char response[96];int n=post("/remote/status",sequence,nullptr,(unsigned char*)response,sizeof(response)-1,1500);
+ bool cancel=n<0;
+ if(n>=0){
+  response[n]=0;cJSON *j=cJSON_Parse(response);
+  cancel=controller::remote_status_cancel(str(j,"op"));cJSON_Delete(j);
  }
- watch.done=true;vTaskDelete(nullptr);
+ if(cancel&&live(sequence)){controller_voice_cancel();controller_release();}
+ return !cancel&&live(sequence);
 }
 bool controller_dialogue_remote_run(unsigned sequence){
- RemoteWatch watch(sequence);
- if(xTaskCreate(remote_watch,"remote_stop",8192,&watch,3,nullptr)!=pdPASS){
-  controller_voice_cancel();controller_release();return false;
- }
- bool ok=controller_dialogue_run(sequence);watch.stop=true;
- // Join before releasing the voice lease: a delayed response cannot cancel
- // a newly started local turn or retain a pointer to this stack.
- while(!watch.done)vTaskDelay(pdMS_TO_TICKS(10));
- return ok&&live(sequence);
+ // The USB-local ADB proxy supports one socket. Cloud STOP is checked
+ // synchronously between actions; never enqueue a parallel status socket
+ // behind a Chinese shell or audio HTTP stream. Local STOP still revokes the
+ // ADB gate immediately. Chinese shell EXIT/recovery retain IME restoration.
+ remote_dialogue=true;
+ bool ok=controller_dialogue_run(sequence);
+ remote_dialogue=false;return ok&&live(sequence);
 }
 static bool pointer_command(cJSON *j,controller::PointerCommand& command){
  unsigned seen=0;
@@ -123,6 +108,7 @@ bool controller_dialogue_run(unsigned sequence){
  bool success=false;int64_t until=esp_timer_get_time()+180000000;uint32_t ticket=controller_adb_ticket();
  controller_voice_state(10);
  while(live(sequence)&&esp_timer_get_time()<until){
+  if(!remote_status_live(sequence))break;
   char response[2048];int n=post("/dialogue/poll",sequence,nullptr,(unsigned char*)response,sizeof(response)-1);
   if(n<0)break;
   response[n]=0;cJSON *j=cJSON_Parse(response);if(!j)break;
@@ -145,7 +131,7 @@ bool controller_dialogue_run(unsigned sequence){
    if(pointer_count>=64)valid=false;
    // Reserve before submission: an ACK failure must never replay the action.
    if(valid)strcpy(pointer_ids[pointer_count++],id);
-   bool ok=valid&&live(sequence)&&controller_usb_ai_pointer(command,live,sequence);
+   bool ok=valid&&remote_status_live(sequence)&&controller_usb_ai_pointer(command,live,sequence);
    cJSON *ack=cJSON_CreateObject();cJSON_AddStringToObject(ack,"id",id);cJSON_AddBoolToObject(ack,"ok",ok);
    cJSON_AddStringToObject(ack,"output",ok?"HID_POINTER_REPORT_SENT":"");
    if(!ok)cJSON_AddStringToObject(ack,"error",!valid?"invalid_command":live(sequence)?"input_failed":"cancelled");
@@ -156,7 +142,7 @@ bool controller_dialogue_run(unsigned sequence){
   }
   if(!strcmp(op,"hid_home")){
    const char *id=str(j,"id");bool valid=strlen(id)==32;
-   bool ok=valid&&live(sequence)&&controller_usb_ai_home(live,sequence);
+   bool ok=valid&&remote_status_live(sequence)&&controller_usb_ai_home(live,sequence);
    cJSON *ack=cJSON_CreateObject();cJSON_AddStringToObject(ack,"id",id);cJSON_AddBoolToObject(ack,"ok",ok);
    cJSON_AddStringToObject(ack,"output",ok?"HID_HOME_REPORT_SENT":"");
    if(!ok)cJSON_AddStringToObject(ack,"error",live(sequence)?"input_failed":"cancelled");
@@ -171,7 +157,7 @@ bool controller_dialogue_run(unsigned sequence){
   const char *id=str(j,"id");if(strlen(id)!=32)valid=false;
   const char *error=valid?"cancelled":"invalid_command";
   ESP_LOGI("dialogue","Command received op=%s id=%.8s valid=%d",op,id,valid);
-  bool ok=valid&&live(sequence)&&controller_adb_execute(cmd,nullptr,output,48001,ticket,&error);
+  bool ok=valid&&remote_status_live(sequence)&&controller_adb_execute(cmd,nullptr,output,48001,ticket,&error);
   if(!ok)output[0]=0;
   cJSON *ack=cJSON_CreateObject();cJSON_AddStringToObject(ack,"id",id);cJSON_AddBoolToObject(ack,"ok",ok);cJSON_AddStringToObject(ack,"output",output);if(!ok)cJSON_AddStringToObject(ack,"error",error);
   char *body=cJSON_PrintUnformatted(ack);cJSON_Delete(ack);cJSON_Delete(j);

@@ -4,6 +4,8 @@
 #include "conversation_policy.h"
 #include "dialogue.h"
 #include "usb.h"
+#include "ota.h"
+#include "ble_ota.h"
 #include "remote_claim_policy.h"
 #include "voice_lifecycle.h"
 #include "touch.h"
@@ -29,6 +31,7 @@ static std::atomic<unsigned> conversation_turns(0);
 static controller::VoiceLifecycle lifecycle;
 // Serialize local start decisions with idle claim lease acquisition.
 static std::atomic_flag start_guard=ATOMIC_FLAG_INIT;
+static std::atomic<bool> background_http(false);
 struct StartGuard {
  bool acquired;
  StartGuard():acquired(!start_guard.test_and_set()){}
@@ -218,6 +221,7 @@ static void remote_idle(){
  unsigned epoch=0,sequence=0;
  {
   StartGuard guard;if(!guard.acquired)return;
+  if(background_http||controller_ota_busy()||ble_ota_busy())return;
   if(!controller::remote_claim_ready(lifecycle.can_start(),held,conversation,
        controller_voice_online(),controller_usb_hid_enabled(),controller_usb_ready()))return;
   if(diagnostic||prepare_only||pending_prompt)return;
@@ -380,3 +384,10 @@ void controller_voice_conversation(){
  if(conversation)return;
  conversation_epoch.fetch_add(1);conversation_turns=0;conversation=true;prepare_only=false;begin_voice_request();
 }
+
+bool controller_voice_transport_busy(){return lifecycle.busy.load();}
+bool controller_voice_background_http_begin(){
+ StartGuard guard;if(!guard.acquired||background_http||lifecycle.busy||held||conversation||prepare_only||diagnostic)return false;
+ background_http=true;return true;
+}
+void controller_voice_background_http_end(){background_http=false;}

@@ -208,7 +208,7 @@ static bool paint(epaper_driver_display &display,const uint8_t *frame,bool full)
  }else memcpy(frame+176*25,clock_unknown,300);
  memcpy(frame+188*25,mode==2?check_hint:mode==1?voice_hint:footer_hint,300); // Two full twelve-row lines fit below the controls.
 }
-bool controller_voice_online(){return online.load();}
+bool controller_voice_online(){return online.load()&&!stop_pending.load();}
 static uint8_t dialogue_frame[5000];
 static std::atomic<bool> dialogue_frame_valid(false);
 static portMUX_TYPE dialogue_mux=portMUX_INITIALIZER_UNLOCKED;
@@ -322,7 +322,7 @@ static portMUX_TYPE cache_mux=portMUX_INITIALIZER_UNLOCKED;
 static void telemetry_task(void*){
  auto *fresh=(uint8_t*)malloc(5000);
  for(;;){
-  if(!controller_ota_busy()){
+  if(!controller_ota_busy()&&controller_voice_background_http_begin()){
    if(online && stop_pending.exchange(false) && !request("/stop",nullptr))stop_pending=true;
    int selected=page.load();
    if(online&&fresh&&(selected==0||selected==1)){
@@ -333,6 +333,7 @@ static void telemetry_task(void*){
     }
    }
    upload_events();
+   controller_voice_background_http_end();
   }
   vTaskDelay(pdMS_TO_TICKS(5000));
  }
