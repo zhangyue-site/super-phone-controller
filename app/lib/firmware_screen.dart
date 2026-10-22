@@ -1,4 +1,5 @@
 import 'screen_task_status.dart';
+import 'control_screen.dart';
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -255,7 +256,16 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('选择固件'),
+        title: const Text('控制板'),
+        actions: [
+          TextButton.icon(
+              onPressed: _busy || !_connected
+                  ? null
+                  : () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => ControlScreen(service: widget.service))),
+              icon: const Icon(Icons.phone_android),
+              label: const Text('手机控制'))
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(22),
           child: Padding(

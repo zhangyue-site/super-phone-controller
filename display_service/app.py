@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse,parse_qs
 from . import events,firmware,app_ota,app_screen
 from .conversation import CONVERSATION
-from . import remote_http
+from . import remote_http,app_control
 from .audio_stream import read_chunks
 from .model import quota_rows
 from .voice import validate_pcm,recognize
@@ -63,6 +63,7 @@ class Handler(BaseHTTPRequestHandler):
         if app_ota.handle(self,CONFIG):return
         if app_screen.handle(self,CONFIG):return
         if remote_http.handle(self,CONFIG):return
+        if app_control.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         parsed=urlparse(self.path)
@@ -90,6 +91,7 @@ class Handler(BaseHTTPRequestHandler):
         if app_ota.handle(self,CONFIG):return
         if app_screen.handle(self,CONFIG):return
         if remote_http.handle(self,CONFIG):return
+        if app_control.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         if self.path=='/firmware/report':
