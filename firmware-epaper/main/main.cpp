@@ -316,6 +316,7 @@ void controller_diagnostic_state(char *out,unsigned size){
  snprintf(out,size,"{\"usb\":%d,\"peer\":%d,\"adb\":%d,\"adbError\":%d,\"net\":%d,\"online\":%d,\"server\":%d,\"chat\":%d,\"asr\":%d,\"hid\":%d,\"wifi\":%d,\"page\":%d,\"voice\":%d,\"screenError\":%d}",
  controller_usb_ready(),controller_usb_net_peer()!=0,controller_adb_stage(),controller_adb_error(),controller_usb_net_stage(),online.load(),check_server.load(),check_chat.load(),check_asr.load(),controller_usb_hid_enabled(),wifi_enabled.load(),page.load(),controller_voice_stage(),screen_failed.load());
 }
+extern "C" void controller_ble_diagnostic_state(char *out,unsigned size){controller_diagnostic_state(out,size);}
 static uint8_t cached_screens[2][5000];
 static bool cached_valid[2]={false,false};
 static portMUX_TYPE cache_mux=portMUX_INITIALIZER_UNLOCKED;
