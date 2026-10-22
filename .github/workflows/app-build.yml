@@ -9,15 +9,15 @@ on:
         default: android
         type: choice
         options: [android, ios, both]
-  push:
-    paths:
-      - 'app/**'
-      - '.github/workflows/app-build.yml'
+
+concurrency:
+  group: spc-app-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   android:
     # Android 在 ubuntu 上构建，公开仓库免费，私有仓库按实际分钟计费。
-    if: ${{ inputs.platform == 'android' || inputs.platform == 'both' || github.event_name == 'push' }}
+    if: ${{ inputs.platform == 'android' || inputs.platform == 'both' }}
     runs-on: ubuntu-latest
     defaults:
       run:
