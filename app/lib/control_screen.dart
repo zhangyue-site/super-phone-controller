@@ -6,13 +6,14 @@ import 'screen_share.dart';
 
 class ControlScreen extends StatefulWidget {
   final BleOtaService service;
-  const ControlScreen({super.key, required this.service});
+  final ControlClient? client;
+  const ControlScreen({super.key, required this.service, this.client});
   @override
   State<ControlScreen> createState() => _ControlScreenState();
 }
 
 class _ControlScreenState extends State<ControlScreen> {
-  final _client = ControlClient();
+  late final ControlClient _client;
   final _text = TextEditingController();
   Map<String, dynamic> _task = {};
   String? _error;
@@ -22,6 +23,7 @@ class _ControlScreenState extends State<ControlScreen> {
   @override
   void initState() {
     super.initState();
+    _client = widget.client ?? ControlClient();
     _timer = Timer.periodic(const Duration(seconds: 2), (_) => _poll());
   }
 
@@ -39,7 +41,12 @@ class _ControlScreenState extends State<ControlScreen> {
     try {
       final result =
           await _client.command('status', taskId: _task['task_id'] as String);
-      if (mounted && generation == _generation) setState(() => _task = result);
+      if (mounted && generation == _generation) {
+        setState(() {
+          _task = result;
+          _error = null;
+        });
+      }
     } catch (e) {
       if (mounted && generation == _generation) setState(() => _error = '$e');
     } finally {
@@ -65,7 +72,12 @@ class _ControlScreenState extends State<ControlScreen> {
       final result = await _client.command(operation,
           text: operation == 'prepare' ? _text.text.trim() : null,
           taskId: operation == 'prepare' ? null : _task['task_id'] as String?);
-      if (mounted && generation == _generation) setState(() => _task = result);
+      if (mounted && generation == _generation) {
+        setState(() {
+          _task = result;
+          _error = null;
+        });
+      }
     } catch (e) {
       if (mounted && generation == _generation) setState(() => _error = '$e');
     } finally {
