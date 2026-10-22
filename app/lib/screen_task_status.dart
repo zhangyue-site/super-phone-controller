@@ -52,10 +52,20 @@ class ScreenTaskStatus {
 
   String get taskLabel => switch (state) {
         'idle' => '等待语音任务',
+        'thinking' => '正在理解任务',
         'running' => '任务执行中',
-        'succeeded' || 'success' || 'verified' || 'completed' => '任务已完成',
-        'failed' => '任务失败',
+        'verifying' => '正在核验结果',
+        'speaking' => '正在播报结果',
+        'waiting' => '等待控制板或新画面',
+        'done' ||
+        'succeeded' ||
+        'success' ||
+        'verified' ||
+        'completed' =>
+          '任务已完成',
+        'error' || 'failed' => '任务失败',
         'cancelled' => '任务已取消',
+        'stopped' => '任务已停止',
         '' => '等待任务状态',
         _ => '任务：$state',
       };

@@ -79,6 +79,7 @@ class SkillStore:
    if receipt.get("ok") is not True or receipt.get("op") not in ("hid_pointer","type_text"):raise ValueError("缺少动作成功回执")
    if not re.fullmatch(r"[0-9a-f]{32}",receipt.get("id","")):raise ValueError("动作关联ID无效")
    if "signature" not in step or "target" not in step:raise ValueError("缺少画面与目标检查条件")
+  print('SKILL_COLLECT device=%s workflow=%s turn=%s verified=true'%(job.device,spec.id,getattr(job,'sequence',0)),flush=True)
   with self.lock:self.last[job.device]=(self.clock(),job,spec,parameters,copy.deepcopy(steps),geometry,copy.deepcopy(entry_receipt),copy.deepcopy(verification))
  def save_last(self,device):
   with self.lock:
@@ -98,6 +99,7 @@ class SkillStore:
    encoded=json.dumps({"schema":2,"collector":COLLECTOR["id"],"skills":entries},ensure_ascii=False)
    if len(encoded.encode())>3000000:raise ValueError("技能数据已满")
    tmp.write_text(encoded);tmp.chmod(0o600);os.replace(tmp,path)
+   print("SKILL_COMPILE device=%s kind=specialized workflow=%s parameters=%s"%(device,spec.id,",".join(spec.parameters)),flush=True)
    return name
  def find(self,device,spec,parameters):
   parameters=spec.bind(parameters)
