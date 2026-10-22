@@ -1,3 +1,4 @@
+import 'usb_launch.dart';
 import 'screen_task_status.dart';
 import 'control_screen.dart';
 import 'dart:async';
@@ -22,11 +23,15 @@ import 'widgets.dart';
 class FirmwareScreen extends StatefulWidget {
   final BleOtaService service;
   final BluetoothDevice device;
+  final UsbAttachment? usbAttachment;
+  final bool Function()? isUsbCurrent;
 
   const FirmwareScreen({
     super.key,
     required this.service,
     required this.device,
+    this.usbAttachment,
+    this.isUsbCurrent,
   });
 
   @override
@@ -43,6 +48,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
   String? _error;
   String _deviceVersion = '';
   bool _connected = false;
+  bool _autoShareAttempted = false;
   ScreenTaskStatus _screenStatus = const ScreenTaskStatus(capture: '未共享');
   Timer? _screenTimer;
   StreamSubscription? _connectionSub;
@@ -88,12 +94,28 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       }
       final info = await widget.service.readInfo();
       if (!mounted) return;
+      final usb = widget.usbAttachment;
+      final usbCurrent = widget.isUsbCurrent?.call() == true;
+      if (usb != null) {
+        if (info == null || (!usbCurrent && !_autoShareAttempted)) {
+          throw StateError('USB连接已改变或控制板不支持身份读取，请重新连接');
+        }
+        usb.validateBoard(widget.device.remoteId.str, info.device);
+        if (usbCurrent && !usb.isBound) {
+          await UsbLaunch.bind(usb, widget.device.remoteId.str, info.device);
+        }
+        if (!mounted) return;
+      }
       setState(() {
         _deviceVersion = info?.version ?? _deviceVersion;
         _chunkSize = chunk;
         _connected = true;
         _busy = false;
       });
+      if (usb != null && usbCurrent && !_autoShareAttempted) {
+        _autoShareAttempted = true;
+        await _shareScreen(automatic: true);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -111,29 +133,43 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     super.dispose();
   }
 
-  Future<void> _shareScreen() async {
-    if (_busy || !_connected) return;
-    final accepted = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-                title: const Text('共享屏幕给你的 AI'),
-                content: const Text(
-                    '当前手机画面将传给云端 AI。操作由控制板 HID 完成，App 只提供画面。请选择共享整个屏幕，才能在桌面和微信之间导航。你可随时从系统投屏入口或通知停止；一次共享约 4 分钟。'),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('取消')),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('继续系统确认'))
-                ]));
-    if (accepted != true || !mounted) return;
+  Future<void> _shareScreen({bool automatic = false}) async {
+    if (_busy || !_connected || !mounted) return;
+    if (automatic && widget.isUsbCurrent?.call() != true) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      await ScreenShare.start(widget.service);
+      if (await ScreenShare.isActive()) return;
+      if (!mounted) return;
+      final accepted = automatic ||
+          await showDialog<bool>(
+                context: context,
+                builder: (dialogContext) => AlertDialog(
+                  title: const Text('共享屏幕给你的 AI'),
+                  content: const Text(
+                      '当前手机画面将传给云端 AI。操作由控制板 HID 完成，App 只提供画面。请选择共享整个屏幕，才能在桌面和微信之间导航。你可随时从系统投屏入口或通知停止；一次共享约 4 分钟。'),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(dialogContext, false),
+                        child: const Text('取消')),
+                    FilledButton(
+                        onPressed: () => Navigator.pop(dialogContext, true),
+                        child: const Text('继续系统确认')),
+                  ],
+                ),
+              ) ==
+              true;
+      if (!accepted || !mounted) return;
+      await ScreenShare.start(
+        widget.service,
+        usbSession: widget.usbAttachment?.session,
+        isCurrent: () =>
+            mounted &&
+            (widget.usbAttachment == null ||
+                widget.isUsbCurrent?.call() == true),
+      );
       if (mounted) {
         setState(
             () => _screenStatus = const ScreenTaskStatus(capture: '正在启动共享'));
@@ -299,6 +335,12 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (widget.usbAttachment != null)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: Text(
+                  'USB控制板已识别。确认系统“共享整个屏幕”后，画面将上传云端AI。取消后可手动重新开启；拔出控制板会停止共享。HID许可仍按板端提示开启。'),
+            ),
           if (_error != null) ...[
             InfoBanner(
                 icon: Icons.error_outline,
