@@ -34,3 +34,9 @@ test('installed entry registers deterministic command and lifecycle',async()=>{
  let command,service; register({pluginConfig:{bridgeConfigPath:path,statePath:dir+'/state'},logger:{warn(){}},config:{},runtime:{channel:{outbound:{loadAdapter(){throw Error('must not send');}}}},registerCommand:c=>command=c,registerService:s=>service=s});
  assert.equal(command.name,'phone');assert.equal(command.requireAuth,true);assert.deepEqual(command.channels,['openclaw-weixin','telegram']);assert.equal(typeof service.start,'function');assert.equal(typeof service.stop,'function');
 });
+
+test('manifest activates runtime command and durable result service on gateway startup',async()=>{
+ const {readFileSync}=await import('node:fs');const m=JSON.parse(readFileSync(new URL('./openclaw.plugin.json',import.meta.url),'utf8'));
+ assert.equal(m.activation?.onStartup,true);assert.ok(m.activation.onCommands.includes('phone'));
+ assert.ok(m.commandAliases.some(x=>x.name==='phone'&&x.kind==='runtime-slash'));
+});

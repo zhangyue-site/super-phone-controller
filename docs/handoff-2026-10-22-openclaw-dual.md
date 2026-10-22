@@ -23,3 +23,7 @@ OpenClaw openclaw-phone 0.1.0 已安装、启用，注册 /phone 命令和持久
 
 ## 回退
 在线服务备份 /var/lib/phone-controller/backups/remote-20261022-122130，新增systemd配置50-openclaw-remote.conf可关闭EPAPER_REMOTE_CONTROL；保留其他语音修复。OpenClaw工作区AGENTS已补S3/微信找联系人任务的专用路由，备份AGENTS.md.before-s3-phone-20261022；不调用旧ADB点击工具。OpenClaw只关闭openclaw-phone入口，不回退其他插件/账号；安装前配置备份在同目录openclaw.json.bak-phone-bridge-20261022。固件私有发布保留previous.json，不强制刷板。
+
+## 真实入口复测修复（14:36后）
+用户报告两个入口没有正常回复。根因复现：使用实际OpenClaw启动规划器读取部署配置，openclaw-phone不在pluginIds中；原manifest没有activation.onStartup和runtime-slash命令归属，配置enabled不等于加载。已补activation.onStartup=true、onCommands=['phone']及commandAliases runtime-slash phone。新增回归先失败再通过，现6项Node测试通过，跨语言HTTP三项通过。
+实际启动规划器修复后包含openclaw-phone，网关14:36:12记录phone runtime initialized，14:36:16监听插件列表包含openclaw-phone；14:41:12窄范围插件替换成功。补充不含身份/任务文本的入口与处理阶段日志。CLI commands.list的WebSocket诊断连接超时，不能把该项写成已验证；网关HTTP health为200且运行中。真实私聊仍需新命令进入日志并返回正常状态，不能将普通AI回复当作phone控制通路成功。

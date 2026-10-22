@@ -20,7 +20,7 @@ export function parse(args = '') {
   if (!s || /^(confirm|确认)(?:\s|$)/i.test(s) || s.length > 2000) throw Error('用法：/phone 任务；/phone 确认 任务编号；/phone 状态；/phone 停止；/phone 存为技能。');
   return { operation:'prepare', text:s };
 }
-export function createBridge({ config, statePath, request = fetch, send, warn = () => {} }) {
+export function createBridge({ config, statePath, request = fetch, send, warn = () => {}, audit = () => {} }) {
   let watches = [];
   try { watches = JSON.parse(readFileSync(statePath,'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   if (!Array.isArray(watches)) throw Error('Invalid watcher state');
@@ -58,16 +58,20 @@ export function createBridge({ config, statePath, request = fetch, send, warn = 
   // Restart after an ambiguous send never duplicates a recipient-visible message.
   watches = watches.filter(w=>w.delivery !== 'dispatching');
   async function handler(ctx) {
+    let phase="identity";
+    const channel=["telegram","openclaw-weixin"].includes(ctx.channelId||ctx.channel)?(ctx.channelId||ctx.channel):"unknown";
+    audit(`phone ingress channel=${channel} authorized=${ctx.isAuthorizedSender===true} sender=${Boolean(ctx.senderId)} account=${Boolean(ctx.accountId)}`);
     try {
-      const p = identity(ctx), cmd = parse(ctx.args);
+      const p = identity(ctx), cmd = parse(ctx.args);phase="bridge";
       if (['status','save'].includes(cmd.operation) && !cmd.task_id) cmd.task_id = watches.findLast(w=>w.conversation===p.conversation && w.channel===p.channel)?.task_id;
       const r = await call(p,cmd);
       if (r.task_id && ID.test(r.task_id) && !r.terminal && ['prepare','confirm'].includes(cmd.operation)) {
         if (!watches.some(w=>w.task_id===r.task_id)) watches.push({...p,task_id:r.task_id});
         persist();
       }
+      audit(`phone handled channel=${p.channel} operation=${cmd.operation} state=${r.state||"unknown"}`);
       return {text:r.reply};
-    } catch(e) { return {text: e.message.startsWith('仅') || e.message.startsWith('无法') || e.message.startsWith('此') || e.message.startsWith('用法') || e.message.startsWith('手机') ? e.message : '手机控制暂不可用，请稍后重试。'}; }
+    } catch(e) { audit(`phone rejected channel=${channel} phase=${phase}`);return {text: e.message.startsWith('仅') || e.message.startsWith('无法') || e.message.startsWith('此') || e.message.startsWith('用法') || e.message.startsWith('手机') ? e.message : '手机控制暂不可用，请稍后重试。'}; }
   }
   return {handler,tick};
 }
@@ -76,12 +80,13 @@ export default function register(api) {
   if ((statSync(configPath).mode & 0o077) !== 0) throw Error('Bridge config must be private (0600)');
   const config = JSON.parse(readFileSync(configPath,'utf8'));
   if (typeof config.token !== 'string' || config.token.length < 43 || !Array.isArray(config.bindings)) throw Error('Invalid private bridge config');
-  const bridge = createBridge({config,statePath:api.pluginConfig?.statePath || '/var/lib/phone-controller/openclaw-watchers.json',warn: m=>api.logger.warn(m),send:async (w,text)=>{
+  const bridge = createBridge({config,statePath:api.pluginConfig?.statePath || '/var/lib/phone-controller/openclaw-watchers.json',warn: m=>api.logger.warn(m),audit:m=>api.logger.info?.(m),send:async (w,text)=>{
     const adapter = await api.runtime.channel.outbound.loadAdapter(w.channel);
     if (!adapter?.sendText) throw Error('Channel outbound unavailable');
     await adapter.sendText({cfg:api.config,to:w.to,accountId:w.accountId,text});
   }});
   api.registerCommand({name:'phone',description:'手机任务预览、确认、状态和停止',acceptsArgs:true,requireAuth:true,channels:['openclaw-weixin','telegram'],handler:bridge.handler});
+  api.logger.info?.('phone runtime initialized; private command and result service registered');
   let timer;
   api.registerService({id:'phone-result-watchers',start:()=>{timer=setInterval(()=>void bridge.tick(),2000);timer.unref?.();void bridge.tick();},stop:()=>clearInterval(timer)});
 }
