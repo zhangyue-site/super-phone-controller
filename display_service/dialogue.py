@@ -78,6 +78,13 @@ class Job:
  audio:bytes=b''
  reply:str=''
  video:bytes=b''
+ video_source:str=''
+ video_barrier:str=field(default_factory=lambda:uuid.uuid4().hex)
+ screen_session:str=''
+ pointer_protocol:str=''
+ fenced:bool=False
+ navigation_verified:bool=False
+ last_receipt:dict=field(default_factory=dict)
  video_sequence:int=0
  video_received:float=0
  video_width:int=0
@@ -111,9 +118,11 @@ class Mailbox:
    self._live(j)
    if j.command:raise ValueError('command busy')
    j.result=None;j.delivered=False;j.command=dict(command,id=uuid.uuid4().hex);j.event.clear()
- def poll(self,device,session,seq):
+   print('PHONE_COMMAND device=%s turn=%d id=%s op=%s'%(j.device,j.sequence,j.command['id'][:8],command['op']),flush=True)
+ def poll(self,device,session,seq,pointer_protocol=None):
   with self.lock:
    j=self._job(device,session,seq);j.touched=self.clock()
+   if pointer_protocol=='absolute-v1':j.pointer_protocol=pointer_protocol
    if j.command and not j.delivered:j.delivered=True;return dict(j.command)
    return {'op':'done' if j.done else 'wait','state':j.state,'reply':j.reply,'audio':bool(j.audio),'speechError':j.speech_error}
  def ack(self,device,session,seq,ident,ok,output,error=''):
@@ -122,7 +131,11 @@ class Mailbox:
    j=self._job(device,session,seq)
    if not j.command or not j.delivered or ident!=j.command['id']:raise ValueError('stale acknowledgement')
    if not isinstance(output,str) or len(output.encode())>(786432 if j.command['op']=='screenshot' else 48000):raise ValueError('command output size')
-   j.result=(ok,output,error);j.command=None;j.touched=self.clock();j.event.set()
+   print('PHONE_RECEIPT device=%s turn=%d id=%s ok=%s'%(device,seq,ident[:8],ok),flush=True)
+   j.last_receipt={'id':ident,'op':j.command['op'],'ok':ok,'barrier_before':j.video_barrier}
+   j.result=(ok,output,error);j.command=None;j.touched=self.clock()
+   if j.fenced:j.video_barrier=uuid.uuid4().hex;j.video=b''
+   j.event.set()
  def execute(self,j,command):
   self.offer(j,command)
   until=self.clock()+35
@@ -140,17 +153,19 @@ class Mailbox:
    j=self.jobs.get(device)
    if j and (session is None or (j.session==session and j.sequence<=sequence)):
     j.cancelled=True;j.audio=b'';j.video=b'';j.event.set()
- def ingest_video(self,device,session,seq,frame_sequence,payload,codec,decoder=None):
+ def ingest_video(self,device,session,seq,frame_sequence,payload,codec,decoder=None,expected_barrier=None,source='bridge_declared'):
   from .bridge_video import decode
   if type(frame_sequence)!=int or not 1<=frame_sequence<=2147483647:raise ValueError('frame sequence')
   with self.lock:
    j=self._job(device,session,seq)
+   if j.fenced and expected_barrier!=j.video_barrier:raise ValueError('capture barrier required')
+   if expected_barrier is not None and expected_barrier!=j.video_barrier:raise ValueError('capture superseded')
    if j.done or frame_sequence<=j.video_sequence:raise ValueError('stale video')
-   j.video_sequence=frame_sequence;j.video=b'';received=self.clock()
+   j.video_sequence=frame_sequence;j.video=b'';received=self.clock();barrier=j.video_barrier
   jpeg,width,height=(decoder or decode)(payload,codec)
   with self.lock:
-   if self._job(device,session,seq) is not j or j.done or j.video_sequence!=frame_sequence or self.clock()-received>8:raise ValueError('video superseded')
-   j.video=jpeg;j.video_width=width;j.video_height=height;j.video_received=received;j.touched=self.clock()
+   if self._job(device,session,seq) is not j or j.done or j.video_sequence!=frame_sequence or j.video_barrier!=barrier or self.clock()-received>8:raise ValueError('video superseded')
+   j.video=jpeg;j.video_source=source;j.video_width=width;j.video_height=height;j.video_received=received;j.touched=self.clock()
    return dict(accepted=True,frame=frame_sequence,width=width,height=height,source='bridge_declared',phone_execution=False)
  def latest_video(self,j,max_age=2):
   with self.lock:

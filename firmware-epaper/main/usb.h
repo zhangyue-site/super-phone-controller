@@ -17,3 +17,6 @@ bool controller_usb_phone_key(bool home);
 
 // One-shot AI Home request; true means a USB press/release report was submitted, not observed UI success.
 bool controller_usb_ai_home(bool (*live)(unsigned),unsigned sequence);
+
+#include "hid_pointer_policy.h"
+bool controller_usb_ai_pointer(const controller::PointerCommand& command,bool (*live)(unsigned),unsigned sequence);
