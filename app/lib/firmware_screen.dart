@@ -304,7 +304,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
                           Text(_screenStatus.reply),
                         if (_screenStatus.state.isNotEmpty &&
                             !_screenStatus.pointerReady)
-                          const Text('控制板尚未就绪：请确认固件支持绝对鼠标并在板端同意 HID 控制'),
+                          const Text('等待控制板协议确认；开始操作前请在板端同意 HID 控制'),
                         for (final skill in _screenStatus.skills)
                           Text('技能：$skill'),
                         const Text(

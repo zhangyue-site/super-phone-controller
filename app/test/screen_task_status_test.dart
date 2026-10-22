@@ -47,4 +47,24 @@ void main() {
         ScreenTaskStatus.parse(envelope({...valid, 'state': 'failed'}));
     expect(status.taskLabel, '任务失败');
   });
+  test('actual server states have distinct localized task labels', () {
+    const labels = {
+      'thinking': '正在理解任务',
+      'running': '任务执行中',
+      'verifying': '正在核验结果',
+      'speaking': '正在播报结果',
+      'done': '任务已完成',
+      'error': '任务失败',
+      'waiting': '等待控制板或新画面',
+      'idle': '等待语音任务',
+      'stopped': '任务已停止',
+    };
+    for (final entry in labels.entries) {
+      final status =
+          ScreenTaskStatus.parse(envelope({...valid, 'state': entry.key}));
+      expect(status.taskLabel, entry.value, reason: entry.key);
+      expect(status.capture, contains('已上传'));
+      expect(status.pointerReady, isFalse);
+    }
+  });
 }
