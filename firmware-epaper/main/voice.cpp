@@ -3,6 +3,8 @@
 #include "audio_output_policy.h"
 #include "conversation_policy.h"
 #include "dialogue.h"
+#include "usb.h"
+#include "remote_claim_policy.h"
 #include "voice_lifecycle.h"
 #include "touch.h"
 #include "adb_local.h"
@@ -25,6 +27,13 @@
 static std::atomic<bool> held(false),cancelled(false),conversation(false);
 static std::atomic<unsigned> conversation_turns(0);
 static controller::VoiceLifecycle lifecycle;
+// Serialize local start decisions with idle claim lease acquisition.
+static std::atomic_flag start_guard=ATOMIC_FLAG_INIT;
+struct StartGuard {
+ bool acquired;
+ StartGuard():acquired(!start_guard.test_and_set()){}
+ ~StartGuard(){if(acquired)start_guard.clear();}
+};
 static auto &conversation_epoch=lifecycle.epoch;
 static auto &stage=lifecycle.stage;
 static std::atomic<uint32_t> adb_consent(0);
@@ -204,10 +213,35 @@ static void play_prompt(int prompt){
  if(prompt>=1&&prompt<=5)controller_audio_play_pcm(starts[prompt],ends[prompt]-starts[prompt]);
 }
 void controller_voice_state(int value){state(value);}
+static void remote_idle(){
+#if CONFIG_CONTROLLER_USB_LOCAL
+ unsigned epoch=0,sequence=0;
+ {
+  StartGuard guard;if(!guard.acquired)return;
+  if(!controller::remote_claim_ready(lifecycle.can_start(),held,conversation,
+       controller_voice_online(),controller_usb_hid_enabled(),controller_usb_ready()))return;
+  if(diagnostic||prepare_only||pending_prompt)return;
+  lifecycle.busy=true;epoch=conversation_epoch.load();
+  cancelled=false;sequence=next_sequence.fetch_add(1);
+ }
+ {
+  controller::VoiceLifecycle::Lease lease(lifecycle);
+  bool claimed=controller_dialogue_remote_claim(sequence);
+  if(!claimed||cancelled||!lifecycle.current(epoch))return;
+  // Do not enable USB or ADB here: both retain their existing local consent.
+  if(!controller_usb_hid_enabled()||!controller_usb_ready()){
+   controller_voice_cancel();controller_release();return;
+  }
+  bool ok=controller_dialogue_remote_run(sequence);
+  if(cancelled||!lifecycle.current(epoch))return;
+  state(ok?3:5);if(ok)controller_voice_changed(true);
+ }
+#endif
+}
 static void run(void*){
  auto pcm=(int16_t*)heap_caps_malloc(320000,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
  for(;;){
-  ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+  if(!ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(3000))){remote_idle();continue;}
   int prompt=pending_prompt.exchange(0);
   if(prompt && (!held||prompt==(int)controller::SpeechPrompt::CLICK)){play_prompt(prompt);if(held)xTaskNotifyGive(worker);continue;}
   unsigned turn_epoch=conversation_epoch.load();
@@ -312,11 +346,13 @@ static void begin_voice_request(){
  manual_submit=false;adb_consent=controller_adb_ticket();record_sequence=next_sequence.fetch_add(1);cancelled=false;held=true;xTaskNotifyGive(worker);
 }
 void controller_voice_prepare(){
+ StartGuard guard;if(!guard.acquired)return;
  if(!lifecycle.can_start())return;
  prepare_only=true;begin_voice_request();
 }
 void controller_voice_hold(bool value){
  if(!value){held=false;return;}
+ StartGuard guard;if(!guard.acquired)return;
  if(!lifecycle.can_start())return;
  conversation=false;conversation_epoch.fetch_add(1);prepare_only=false;begin_voice_request();
 }
@@ -332,13 +368,14 @@ int controller_voice_stage(){
  return stage.load();
 }
 
-void controller_voice_test(){if(!lifecycle.can_start())return;controller_audio_interrupt();cancelled=false;diagnostic=true;xTaskNotifyGive(worker);}
+void controller_voice_test(){StartGuard guard;if(!guard.acquired||!lifecycle.can_start())return;controller_audio_interrupt();cancelled=false;diagnostic=true;xTaskNotifyGive(worker);}
 
 const char *controller_voice_session(){return session;}
 unsigned controller_voice_cancel_sequence(){return cancel_sequence.load();}
 
 bool controller_voice_conversing(){return conversation.load();}
 void controller_voice_conversation(){
+ StartGuard guard;if(!guard.acquired)return;
  if(!lifecycle.can_start())return;
  if(conversation)return;
  conversation_epoch.fetch_add(1);conversation_turns=0;conversation=true;prepare_only=false;begin_voice_request();

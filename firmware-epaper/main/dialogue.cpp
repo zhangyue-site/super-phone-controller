@@ -1,5 +1,7 @@
 #include "dialogue.h"
 #include "voice.h"
+#include "remote_claim_policy.h"
+#include <atomic>
 #include "usb.h"
 #include "adb_local.h"
 #include "device_config.h"
@@ -15,15 +17,17 @@
 #include <cstdlib>
 #include <cmath>
 extern const char *controller_ota_endpoint();
+static char remote_lease[65]={};
 static bool live(unsigned sequence){return controller_voice_cancel_sequence()<sequence;}
-static int post(const char *path,unsigned sequence,const char *body,unsigned char *out,unsigned capacity){
+static int post(const char *path,unsigned sequence,const char *body,unsigned char *out,unsigned capacity,int timeout_ms=20000){
  if(!live(sequence))return -1;
  char url[256],auth[128],seq[16];snprintf(url,sizeof(url),"%s%s",controller_ota_endpoint(),path);
  snprintf(auth,sizeof(auth),"Bearer %s",DISPLAY_TOKEN);snprintf(seq,sizeof(seq),"%u",sequence);
- esp_http_client_config_t cfg={};cfg.url=url;cfg.common_name="erweima.zhangyue.site";cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.timeout_ms=20000;cfg.disable_auto_redirect=true;
+ esp_http_client_config_t cfg={};cfg.url=url;cfg.common_name="erweima.zhangyue.site";cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.timeout_ms=timeout_ms;cfg.disable_auto_redirect=true;
  auto c=esp_http_client_init(&cfg);if(!c)return -1;
  esp_http_client_set_method(c,HTTP_METHOD_POST);esp_http_client_set_header(c,"Authorization",auth);esp_http_client_set_header(c,"Host","erweima.zhangyue.site");
  esp_http_client_set_header(c,"X-HID-Pointer","absolute-v1");esp_http_client_set_header(c,"Connection","close");esp_http_client_set_header(c,"X-Voice-Session",controller_voice_session());esp_http_client_set_header(c,"X-Voice-Sequence",seq);esp_http_client_set_header(c,"Content-Type","application/json");
+ if(!strcmp(path,"/remote/claim")&&remote_lease[0])esp_http_client_set_header(c,"X-Remote-Lease",remote_lease);
  unsigned length=body?strlen(body):0;bool ok=esp_http_client_open(c,length)==ESP_OK;
  unsigned sent=0;while(ok&&sent<length&&live(sequence)){int n=esp_http_client_write(c,body+sent,length-sent);if(n<=0){ok=false;break;}sent+=n;}
  int used=0;
@@ -33,6 +37,56 @@ static int post(const char *path,unsigned sequence,const char *body,unsigned cha
  esp_http_client_close(c);esp_http_client_cleanup(c);return ok&&live(sequence)?used:-1;
 }
 static const char *str(cJSON *j,const char *key){auto v=cJSON_GetObjectItemCaseSensitive(j,key);return cJSON_IsString(v)?v->valuestring:"";}
+// A lost claim response is never replayed; only validated dialogue commands execute.
+bool controller_dialogue_remote_claim(unsigned sequence){
+ bool had_lease=remote_lease[0]!=0;
+ char response[192];int n=post("/remote/claim",sequence,"{\"ready\":true}",(unsigned char*)response,sizeof(response)-1,2500);
+ if(n<0)return false;
+ response[n]=0;cJSON *j=cJSON_Parse(response);if(!j)return false;
+ const char *lease=str(j,"lease");bool valid_lease=strlen(lease)==64;
+ for(unsigned i=0;valid_lease&&i<64;++i)valid_lease=(lease[i]>='0'&&lease[i]<='9')||(lease[i]>='a'&&lease[i]<='f');
+ if(valid_lease)memcpy(remote_lease,lease,65);
+ bool start=had_lease&&!strcmp(str(j,"op"),"start")&&controller::remote_task_id(str(j,"task_id"));
+ cJSON_Delete(j);return start;
+}
+struct RemoteWatch {
+ unsigned sequence;
+ std::atomic<bool> stop{false},done{false};
+ explicit RemoteWatch(unsigned value):sequence(value){}
+};
+static void remote_watch(void *argument){
+ auto &watch=*static_cast<RemoteWatch*>(argument);
+ unsigned sequence=watch.sequence;
+ while(!watch.stop&&live(sequence)){
+  char response[96];int n=post("/remote/status",sequence,nullptr,(unsigned char*)response,sizeof(response)-1,1500);
+  if(n<0&&!watch.stop&&live(sequence)){
+   // Fail closed if cloud STOP visibility is lost during remote execution.
+   controller_voice_cancel();controller_release();
+  }
+  if(n>=0){
+   response[n]=0;cJSON *j=cJSON_Parse(response);
+   if(controller::remote_status_cancel(str(j,"op"))&&!watch.stop&&live(sequence)){
+    // Revokes ADB gate and HID liveness while dialogue is blocked in input.
+    // Shell EXIT trap restores IME; reconnect probe recovers a lost link.
+    controller_voice_cancel();controller_release();
+   }
+   cJSON_Delete(j);
+  }
+  for(int i=0;i<5&&!watch.stop&&live(sequence);++i)vTaskDelay(pdMS_TO_TICKS(100));
+ }
+ watch.done=true;vTaskDelete(nullptr);
+}
+bool controller_dialogue_remote_run(unsigned sequence){
+ RemoteWatch watch(sequence);
+ if(xTaskCreate(remote_watch,"remote_stop",8192,&watch,3,nullptr)!=pdPASS){
+  controller_voice_cancel();controller_release();return false;
+ }
+ bool ok=controller_dialogue_run(sequence);watch.stop=true;
+ // Join before releasing the voice lease: a delayed response cannot cancel
+ // a newly started local turn or retain a pointer to this stack.
+ while(!watch.done)vTaskDelay(pdMS_TO_TICKS(10));
+ return ok&&live(sequence);
+}
 static bool pointer_command(cJSON *j,controller::PointerCommand& command){
  unsigned seen=0;
  for(cJSON *v=j->child;v;v=v->next){
@@ -73,6 +127,7 @@ bool controller_dialogue_run(unsigned sequence){
   if(n<0)break;
   response[n]=0;cJSON *j=cJSON_Parse(response);if(!j)break;
   const char *op=str(j,"op");
+  if(!strcmp(op,"cancelled")){cJSON_Delete(j);controller_voice_cancel();controller_release();break;}
   if(!strcmp(op,"wait")){cJSON_Delete(j);vTaskDelay(pdMS_TO_TICKS(200));continue;}
   if(!strcmp(op,"done")){
    success=!strcmp(str(j,"state"),"done");bool audio=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j,"audio"));cJSON_Delete(j);

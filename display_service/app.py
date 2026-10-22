@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse,parse_qs
 from . import events,firmware,app_ota,app_screen
 from .conversation import CONVERSATION
+from . import remote_http
 from .audio_stream import read_chunks
 from .model import quota_rows
 from .voice import validate_pcm,recognize
@@ -21,6 +22,14 @@ INTERACTIONS={}
 VOICE_BUSY=set()
 VOICE_GENERATION={}
 VOICE_CANCELLED={}
+
+
+def _remote_cancel_voice(device):
+    VOICE_GENERATION[device]=VOICE_GENERATION.get(device,0)+1
+remote_http.REMOTE.runtime_lock=LOCK
+remote_http.REMOTE.voice_busy=lambda device:device in VOICE_BUSY
+remote_http.REMOTE.cancel_voice=_remote_cancel_voice
+remote_http.REMOTE.turn_allowed=lambda device,session,seq:seq>VOICE_CANCELLED.get(device,{}).get(session,0)
 
 
 def snapshot():
@@ -53,6 +62,7 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(10)
         if app_ota.handle(self,CONFIG):return
         if app_screen.handle(self,CONFIG):return
+        if remote_http.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         parsed=urlparse(self.path)
@@ -79,6 +89,7 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(10)
         if app_ota.handle(self,CONFIG):return
         if app_screen.handle(self,CONFIG):return
+        if remote_http.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         if self.path=='/firmware/report':
@@ -199,6 +210,7 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:VOICE_BUSY.discard(device)
         if self.path!='/stop':return self.reply(404,b'{}')
         CONVERSATION.mailbox.cancel(device,session,sequence)
+        if os.environ.get('EPAPER_REMOTE_CONTROL')=='1':remote_http.REMOTE.stop_board(device,session,sequence)
         with LOCK:
             VOICE_GENERATION[device]=VOICE_GENERATION.get(device,0)+1
             if valid_session:
