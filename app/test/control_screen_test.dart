@@ -8,6 +8,9 @@ import 'package:pcflash/control_client.dart';
 import 'package:pcflash/control_screen.dart';
 import 'control_client_test.dart' show FakeBoard;
 
+http.Response reply(String body, int status) => http.Response(body, status,
+    headers: {'content-type': 'application/json; charset=utf-8'});
+
 void main() {
   testWidgets(
       'preview never confirms automatically; STOP wins over late confirm',
@@ -17,10 +20,10 @@ void main() {
     final client = ControlClient(client: MockClient((request) async {
       final body = jsonDecode(request.body) as Map;
       if (request.url.path.endsWith('/challenge')) {
-        return http.Response(jsonEncode({'challenge': 'a' * 64}), 200);
+        return reply(jsonEncode({'challenge': 'a' * 64}), 200);
       }
       if (request.url.path.endsWith('/authorize')) {
-        return http.Response(
+        return reply(
             jsonEncode({
               'ticket': 't' * 43,
               'scope': 'phone-commands',
@@ -31,7 +34,7 @@ void main() {
       final op = body['operation'] as String;
       operations.add(op);
       if (op == 'confirm') return confirm.future;
-      return http.Response(
+      return reply(
           jsonEncode({
             'task_id': 'c' * 32,
             'state': op == 'stop' ? 'stopped' : 'pending',
@@ -59,7 +62,7 @@ void main() {
     expect(operations, ['prepare', 'confirm', 'stop']);
     expect(find.text('已停止'), findsOneWidget);
     confirm.complete(
-        http.Response(jsonEncode({'state': 'queued', 'reply': '晚到的确认'}), 200));
+        reply(jsonEncode({'state': 'queued', 'reply': '晚到的确认'}), 200));
     await tester.pumpAndSettle();
     expect(find.text('晚到的确认'), findsNothing);
     expect(find.text('已停止'), findsOneWidget);
