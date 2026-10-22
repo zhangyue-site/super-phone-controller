@@ -20,6 +20,10 @@ env:
   # 3) mbedtls/sha256.h 不再提供 → 改用 psa/crypto.h 的 PSA 哈希 API
   # 4) device_config.h 是 .gitignore 的本机配置 → 由 secrets 生成
   # 5) 产物容器是 espressif/idf，用 root 跑会产出 root 属主的 build/
+concurrency:
+  group: spc-esp-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
