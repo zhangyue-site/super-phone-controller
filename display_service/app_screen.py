@@ -76,7 +76,7 @@ def handle(handler,config):
    with mailbox.lock:
     j=mailbox.jobs.get(device)
     if j is None or j.done or j.cancelled:
-     handler.reply(202,b'{"accepted":false,"reason":"no active voice task"}');return True
+     handler.reply(202,b'{"accepted":false,"reason":"no active voice task","barrier":"00000000000000000000000000000000"}');return True
     if j.screen_session and j.screen_session!=ticket:raise ValueError('screen session changed')
     j.screen_session=ticket
     if j.fenced and handler.headers.get('X-Screen-Barrier','')!=j.video_barrier:
