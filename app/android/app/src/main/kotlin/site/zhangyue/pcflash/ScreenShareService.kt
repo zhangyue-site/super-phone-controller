@@ -20,6 +20,8 @@ import javax.net.ssl.HttpsURLConnection
 
 class ScreenShareService: Service() {
  companion object {
+ @Volatile var active=false
+ @Volatile var usbOwnerSerial: String?=null
  @Volatile var status="未共享"
  @Volatile var taskStatus=""
  fun revoke(capability: String) { if(capability.isEmpty())return;Thread {
@@ -85,11 +87,13 @@ class ScreenShareService: Service() {
  override fun onBind(intent: Intent?)=null
  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
   if(intent?.action=="STOP"){status="已停止共享";stopSelf();return START_NOT_STICKY}
-  if(running){intent?.getStringExtra("ticket")?.let { revoke(it) };status="请先停止共享，再重新开启";running=false;stopSelf();return START_NOT_STICKY}
+  if(running || active){intent?.getStringExtra("ticket")?.let { revoke(it) };return START_NOT_STICKY}
   val value=intent?.getStringExtra("ticket")
   @Suppress("DEPRECATION") val grant=intent?.getParcelableExtra<Intent>("grant")
   if(value==null || grant==null){stopSelf();return START_NOT_STICKY}
-  ticket=value
+  val usbSession=intent?.getStringExtra("usbSession")
+  if(usbSession!=null && !UsbLaunchBridge.matches(usbSession)){revoke(value);status="控制板已拔出，请重新共享";stopSelf();return START_NOT_STICKY}
+  ticket=value;usbOwnerSerial=UsbLaunchBridge.serialFor(usbSession);active=true
   val nm=getSystemService(NOTIFICATION_SERVICE) as NotificationManager
   if(Build.VERSION.SDK_INT>=26)nm.createNotificationChannel(NotificationChannel("screen", "AI屏幕共享", NotificationManager.IMPORTANCE_LOW))
   val stop=PendingIntent.getService(this,0,Intent(this,ScreenShareService::class.java).setAction("STOP"),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -157,6 +161,7 @@ class ScreenShareService: Service() {
   return START_NOT_STICKY
  }
  override fun onDestroy() {
+  active=false;usbOwnerSerial=null
   running=false;connection?.disconnect()
   display?.release();display=null;reader?.close();reader=null
   val old=projection;projection=null;old?.stop();worker?.quitSafely();worker=null
