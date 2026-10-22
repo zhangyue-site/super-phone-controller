@@ -7,7 +7,7 @@ SVC="6f6f7461-2d6f-7461-0000-000000000001"
 CTRL=SVC[:-1]+"2";STAT=SVC[:-1]+"3";INFO=SVC[:-1]+"4";AUTH=SVC[:-1]+"5"
 BASE="https://controller.example.invalid/phone-controller/app-ota/"
 def http(path,obj=None,ticket=None):
- args=["curl","--max-time","30","-fsS","--config","-",BASE+path]
+ args=["curl","--max-time","120","-fsS","--config","-",BASE+path]
  cfg=""
  if ticket:cfg='header = "Authorization: Bearer '+ticket+'"\n'
  if obj is not None:args+=["-H","Content-Type: application/json","--data-binary",json.dumps(obj)]
@@ -38,15 +38,19 @@ async def main(args):
   if args.download_only:
    print("DOWNLOAD_ONLY_NO_FLASH",flush=True);return
   version,elf=target(data)
-  state=[0,0,0,0];ready=asyncio.Event();receiving=asyncio.Event()
+  state=[0,0,0,0];terminal=[];ready=asyncio.Event();receiving=asyncio.Event();began=time.monotonic();last_status=[None,None]
   def notify(_,raw):
    state[:]=raw
+   key=(raw[0],raw[1]//10)
+   if key!=tuple(last_status) or raw[2]:
+    print("BLE_STATUS",list(raw),"elapsed",round(time.monotonic()-began,1),flush=True);last_status[:]=key
    if raw[0]==1:receiving.set()
-   if raw[0] in (3,4):ready.set()
+   if raw[0] in (3,4) and not terminal:terminal[:]=raw;ready.set()
   await client.start_notify(STAT,notify)
   await client.write_gatt_char(CTRL,b"\x01"+len(data).to_bytes(4,"little")+hashlib.sha256(data).digest(),response=True)
   await asyncio.wait_for(receiving.wait(),10)
-  chunk=min(244,client.mtu_size-4);last=-1;started=time.monotonic()
+  chunk=min(511,client.mtu_size-4);last=-1;started=time.monotonic()
+  print("BLE_MTU",client.mtu_size,"chunk",chunk,flush=True)
   try:
    for offset in range(0,len(data),chunk):
     if state[0]==4:raise RuntimeError("Board transfer error "+str(state[2]))
@@ -56,7 +60,7 @@ async def main(args):
      last=pct//10;print("BLE_TRANSFER",min(100,pct),flush=True)
    await client.write_gatt_char(CTRL,b"\x03",response=True)
    await asyncio.wait_for(ready.wait(),25)
-   if state[0]!=3 or state[2]!=0:raise RuntimeError("Board verification failed "+str(state))
+   if not terminal or terminal[0]!=3 or terminal[2]!=0:raise RuntimeError("Board verification failed "+str(terminal))
    print("BLE_IMAGE_VERIFIED",version,"seconds",round(time.monotonic()-started,1),flush=True)
   except BaseException:
    try:await client.write_gatt_char(CTRL,b"\x04",response=True)
