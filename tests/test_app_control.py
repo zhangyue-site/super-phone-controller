@@ -28,6 +28,7 @@ class AppControlTests(http_tests.RemoteHttpTests):
  def test_preview_confirm_claim_stop_and_private_result(self):
   ticket=self.grant()
   code,plan=self.command(ticket,'prepare',text='打开微信找到测试联系人');self.assertEqual(code,200);self.assertEqual(plan['state'],'pending');self.assertFalse(self.mailbox.jobs)
+  self.assertEqual(plan['reply'].count('请在两分钟内点击'),1)
   self.assertNotIn('/phone',self.command(ticket,'status')[1]['reply'])
   self.assertEqual(self.bridge('confirm',task_id=plan['task_id'])[0],409)
   self.assertEqual(self.command(ticket,'confirm',task_id=plan['task_id'])[1]['state'],'queued')
