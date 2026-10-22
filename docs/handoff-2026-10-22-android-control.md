@@ -19,3 +19,5 @@ Android 1.0.6+7，包名 site.zhangyue.pcflash。CI 39737703428（App源码4cf52
 已发布至 `https://d.zhangyue.site/apps/phone-controller-flash/`；实际商店数据 `/apps/apps.json` 公网读到1.0.6/versionCode7和相同包hash、大小，图标HTTP200、页面下载链接正确。保留其他14个App条目及旧包。商店描述已去掉过时的“只选本地文件”说明。公网完整包下载校验单独记录；慢速下载不视为哈希验证成功。
 
 覆盖安装、实际蓝牙固件传输/重启、真实手机控制与聊天入口真实消息接收仍未验收；当前不能宣称“所有功能真机通过”。设备固件当前云端候选ci67，App升级不等于已安装板端固件。
+
+公网完整下载已通过：从HTTPS正式APK地址断点续传取得全部50,459,125字节，SHA256与CI包一致。124证据 `/var/lib/download-publisher/pcflash-1.0.6-review/public-download-verification.json`。公网速度慢曾超时，续传后成功；不代表真实安装或OTA验收。
