@@ -25,7 +25,7 @@ class UsbAppContractTest(unittest.TestCase):
         feature = next(x for x in manifest.findall('uses-feature') if x.get(ANDROID + 'name') == 'android.hardware.usb.host')
         self.assertEqual(feature.get(ANDROID + 'required'), 'false')
         activity = next(x for x in manifest.findall('application/activity') if x.get(ANDROID + 'name') == '.MainActivity')
-        self.assertEqual(activity.get(ANDROID + 'launchMode'), 'singleTop')
+        self.assertEqual(activity.get(ANDROID + 'launchMode'), 'singleTask')
         self.assertTrue(any(x.get(ANDROID + 'name') == 'android.hardware.usb.action.USB_DEVICE_ATTACHED' for x in activity.findall('intent-filter/action')))
         meta = next(x for x in activity.findall('meta-data') if x.get(ANDROID + 'name') == 'android.hardware.usb.action.USB_DEVICE_ATTACHED')
         self.assertEqual(meta.get(ANDROID + 'resource'), '@xml/usb_board_filter')
