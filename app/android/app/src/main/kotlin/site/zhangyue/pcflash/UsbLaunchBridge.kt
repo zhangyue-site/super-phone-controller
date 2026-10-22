@@ -37,10 +37,11 @@ object UsbLaunchBridge {
   val receiver=object: BroadcastReceiver() {
    override fun onReceive(context: Context,intent: Intent) {
     val oldSerial=serial?:return
+    val oldSession=session?:return
     if(intent.action!=UsbManager.ACTION_USB_DEVICE_DETACHED)return
     // A HID mode switch briefly re-enumerates the same physical device.
     handler.postDelayed({
-     if(serial==oldSerial && live(oldSerial)==null) {
+     if(session==oldSession && serial==oldSerial && live(oldSerial)==null) {
       val old=session;serial=null;session=null;error=null
       if(ScreenShareService.usbOwnerSerial==oldSerial) {
        ScreenShareService.status="控制板已拔出，屏幕共享已停止"
