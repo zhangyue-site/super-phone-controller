@@ -1,0 +1,71 @@
+name: Controller server iOS release
+run-name: ${{ inputs.release_id || 'Manual iOS build' }}
+on:
+  workflow_dispatch:
+    inputs:
+      build_name:
+        required: true
+        type: string
+      build_number:
+        required: true
+        type: string
+      platform:
+        type: choice
+        options: [ios]
+        default: ios
+      release_id:
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  ios:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: app
+    env:
+      RELEASE_VERSION: ${{ inputs.build_name }}
+      RELEASE_BUILD: ${{ inputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26
+        run: |
+          xcode=$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)
+          [ -n "$xcode" ] || { echo 'Xcode 26 missing'; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.0
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos
+      - name: Run repository tests when available
+        run: |
+          if [ -d test ]; then flutter test; else echo 'No repository tests defined'; fi
+      - name: Prepare iOS distribution settings
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import plistlib
+          p=Path('ios/Runner.xcodeproj/project.pbxproj')
+          s=p.read_text().replace('IPHONEOS_DEPLOYMENT_TARGET = 12.0;', 'IPHONEOS_DEPLOYMENT_TARGET = 15.0;')
+          p.write_text(s)
+          p=Path('ios/Runner/Info.plist')
+          d=plistlib.loads(p.read_bytes());d['ITSAppUsesNonExemptEncryption']=False
+          p.write_bytes(plistlib.dumps(d,fmt=plistlib.FMT_XML))
+          PY
+      - name: Build unsigned device IPA
+        run: |
+          flutter build ios --release --no-codesign --build-name "$RELEASE_VERSION" --build-number "$RELEASE_BUILD"
+          mkdir Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry pcflash-ios-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pcflash-ios-unsigned-${{ inputs.build_name }}-${{ inputs.build_number }}
+          path: app/pcflash-ios-unsigned.ipa
+          retention-days: 7
