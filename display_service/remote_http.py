@@ -10,6 +10,9 @@ def screen_ready(device):
   app_screen.AUTHORITY._prune(app_screen.AUTHORITY.clock())
   return any(item[1]==device for item in app_screen.AUTHORITY.tickets.values())
 def binding_allowed(owner):
+ if owner[0]=='android-app':
+  from . import app_control
+  return app_control.binding_allowed(owner)
  try:
   config=json.loads(CONFIG.read_text())
   return any(list(owner)==[b.get(k) for k in ('channel','sender','conversation','device')] for b in config.get('bindings',[]))
