@@ -50,10 +50,13 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
   @override
   void initState() {
     super.initState();
-    _deviceVersion = _parseVersion(widget.device.platformName);
+    _deviceVersion = ''; // Advertising names are not running-version evidence.
     _connectionSub = widget.device.connectionState.listen((state) {
       if (mounted && state != BluetoothConnectionState.connected) {
-        setState(() => _connected = false);
+        setState(() {
+          _connected = false;
+          _deviceVersion = '';
+        });
       }
     });
     _screenTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
@@ -70,16 +73,12 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     _prepare();
   }
 
-  String _parseVersion(String name) {
-    final i = name.indexOf('-');
-    return i > 0 ? name.substring(i + 1) : '';
-  }
-
   Future<void> _prepare() async {
     setState(() {
       _busy = true;
       _error = null;
       _connected = false;
+      _deviceVersion = '';
     });
     try {
       final chunk = await widget.service.connect(widget.device);
@@ -244,7 +243,21 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         chunkSize: _chunkSize,
       ),
     ));
-    if (mounted && !_connected) await _prepare();
+    // OTA may already have reconnected; always refresh the running version.
+    if (!mounted) return;
+    setState(() => _deviceVersion = '');
+    if (!_connected) {
+      await _prepare();
+    } else {
+      try {
+        final board = await widget.service.readInfo();
+        if (mounted && board != null) {
+          setState(() => _deviceVersion = board.version);
+        }
+      } catch (_) {
+        if (mounted) setState(() => _error = '请重新连接以核对升级后的版本');
+      }
+    }
   }
 
   bool get _sameVersion =>
@@ -274,7 +287,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
               alignment: Alignment.centerLeft,
               child: Text(
                 _deviceVersion.isEmpty
-                    ? widget.device.remoteId.str
+                    ? '目标设备 · 版本待核实'
                     : '目标设备 · 当前 $_deviceVersion',
                 style: AppTheme.mono
                     .copyWith(color: AppTheme.textDim, fontSize: 12),

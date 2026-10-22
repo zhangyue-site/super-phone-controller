@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.media.projection.MediaProjectionConfig
+import android.net.Uri
 import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -14,6 +15,24 @@ class MainActivity: FlutterActivity() {
  private var ticket: String? = null
  override fun configureFlutterEngine(engine: FlutterEngine) {
   super.configureFlutterEngine(engine)
+  MethodChannel(engine.dartExecutor.binaryMessenger, "pcflash/app").setMethodCallHandler { call, result ->
+   when(call.method) {
+    "info" -> {
+     @Suppress("DEPRECATION")
+     val info=packageManager.getPackageInfo(packageName,0)
+     @Suppress("DEPRECATION")
+     val code=if(Build.VERSION.SDK_INT>=28) info.longVersionCode else info.versionCode.toLong()
+     result.success(mapOf("versionName" to info.versionName, "versionCode" to code))
+    }
+    "openDownload" -> {
+     try {
+      startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://d.zhangyue.site/apps/phone-controller-flash/")))
+      result.success(null)
+     } catch(_: Exception) { result.error("browser_unavailable","无法打开官方下载页",null) }
+    }
+    else -> result.notImplemented()
+   }
+  }
   MethodChannel(engine.dartExecutor.binaryMessenger, "pcflash/screen").setMethodCallHandler { call, result ->
    when(call.method) {
     "start" -> {

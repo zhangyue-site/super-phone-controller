@@ -1,3 +1,4 @@
+import 'app_release.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -155,6 +156,10 @@ class _DeviceScreenState extends State<DeviceScreen> {
       appBar: AppBar(
         title: const Text('控制板升级'),
         actions: [
+          IconButton(
+              tooltip: 'App 版本与更新',
+              onPressed: () => AppRelease.show(context),
+              icon: const Icon(Icons.info_outline)),
           IconButton(
             tooltip: '重新扫描',
             onPressed: _scanning ? null : _checkBluetooth,
