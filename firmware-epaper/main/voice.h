@@ -40,3 +40,8 @@ bool controller_voice_conversing();
 
 // End only this recording; keep the conversation and ADB task permission.
 bool controller_voice_finish();
+
+// Prevent telemetry from opening a second single-proxy socket during voice/remote work.
+bool controller_voice_transport_busy();
+bool controller_voice_background_http_begin();
+void controller_voice_background_http_end();
