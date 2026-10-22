@@ -13,23 +13,52 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mode_consent.h"
+#include "freertos/semphr.h"
 
 static std::atomic<bool> enabled(controller::hid_on_boot()), requested(false), release_pending(false);
 static const uint8_t report_descriptor[]={
  TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(1)),
  TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(2)),
- TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(3))
+ TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(3)),
+ // Absolute mouse ID4: five buttons, normalized absolute X/Y, relative wheel/pan.
+ 0x05,0x01,0x09,0x02,0xa1,0x01,0x85,0x04,0x09,0x01,0xa1,0x00,
+ 0x05,0x09,0x19,0x01,0x29,0x05,0x15,0x00,0x25,0x01,0x95,0x05,0x75,0x01,0x81,0x02,
+ 0x95,0x01,0x75,0x03,0x81,0x01,
+ 0x05,0x01,0x09,0x30,0x09,0x31,0x15,0x00,0x26,0xff,0x7f,0x75,0x10,0x95,0x02,0x81,0x02,
+ 0x09,0x38,0x15,0x81,0x25,0x7f,0x75,0x08,0x95,0x01,0x81,0x06,
+ 0x05,0x0c,0x0a,0x38,0x02,0x95,0x01,0x81,0x06,0xc0,0xc0
 };
 static char serial_number[13],network_mac[13];
 static std::atomic<int> mouse_command(0);
-static bool mouse_down=false,consumer_down=false;
+static std::atomic<bool> mouse_down(false),consumer_down(false);
+static SemaphoreHandle_t pointer_mutex=nullptr;
+static controller::PointerSequence pointer_sequence;
+static std::atomic<bool> pointer_active(false);
+static bool (*pointer_live)(unsigned)=nullptr;
+static unsigned pointer_voice_sequence=0;
+// All absolute reports and state transitions occur in the USB service task.
+static bool pointer_service(){
+ if(!pointer_mutex||xSemaphoreTake(pointer_mutex,0)!=pdTRUE)return pointer_active.load();
+ if(pointer_active){
+  if(!enabled||!tud_mounted())pointer_sequence.detached();
+  else {
+   if(!requested||!pointer_live||!pointer_live(pointer_voice_sequence))pointer_sequence.cancel();
+   controller::PointerReport report;
+   uint32_t now=xTaskGetTickCount()*portTICK_PERIOD_MS;
+   if(tud_hid_ready()&&pointer_sequence.next(now,report)&&
+      tud_hid_abs_mouse_report(4,report.buttons,report.x,report.y,0,0))pointer_sequence.submitted(now);
+  }
+  pointer_active=pointer_sequence.active();
+ }
+ bool active=pointer_active.load();xSemaphoreGive(pointer_mutex);return active;
+}
 // 0 idle, 1 pending, 2 press submitted, 3 released, -1 failed/cancelled.
 static std::atomic<int> ai_home_state(0);
 static std::atomic_flag ai_home_busy=ATOMIC_FLAG_INIT;
 bool controller_usb_ai_home(bool (*live)(unsigned),unsigned sequence){
  if(ai_home_busy.test_and_set())return false;
  bool ok=false;
- if(enabled&&requested&&tud_mounted()&&live(sequence)){
+ if(enabled&&requested&&tud_mounted()&&!pointer_active&&!mouse_command.load()&&!mouse_down&&!consumer_down&&live(sequence)){
   int state=ai_home_state.load();
   if(state==0||state==3||state==-1){
    ai_home_state=1;
@@ -48,13 +77,51 @@ bool controller_usb_ai_home(bool (*live)(unsigned),unsigned sequence){
  ai_home_busy.clear();return ok&&live(sequence);
 }
 bool controller_usb_phone_key(bool home){
- if(!enabled||!requested||!tud_mounted())return false;
- int empty=0;return mouse_command.compare_exchange_strong(empty,home?6:7);
+ if(ai_home_busy.test_and_set())return false;
+ bool ok=false;int empty=0;
+ if(enabled&&requested&&tud_mounted()&&!pointer_active)ok=mouse_command.compare_exchange_strong(empty,home?6:7);
+ ai_home_busy.clear();return ok;
 }
 bool controller_usb_mouse(int dx,int dy,bool click){
- if(!enabled||!requested||!tud_mounted()||dx < -64||dx > 64||dy < -64||dy > 64)return false;
- int value=click?1:dx<0?2:dx>0?3:dy<0?4:dy>0?5:0;
- int empty=0;return value&&mouse_command.compare_exchange_strong(empty,value);
+ if(ai_home_busy.test_and_set())return false;
+ bool ok=false;
+ if(enabled&&requested&&tud_mounted()&&!pointer_active&&dx>=-64&&dx<=64&&dy>=-64&&dy<=64){
+  int value=click?1:dx<0?2:dx>0?3:dy<0?4:dy>0?5:0;int empty=0;
+  ok=value&&mouse_command.compare_exchange_strong(empty,value);
+ }
+ ai_home_busy.clear();return ok;
+}
+bool controller_usb_ai_pointer(const controller::PointerCommand& command,bool (*live)(unsigned),unsigned sequence){
+ if(!live||!pointer_mutex||ai_home_busy.test_and_set())return false;
+ bool started=false,ok=false;
+ if(xSemaphoreTake(pointer_mutex,pdMS_TO_TICKS(100))==pdTRUE){
+  if(enabled&&requested&&tud_mounted()&&live(sequence)&&!pointer_active&&
+     !mouse_command.load()&&!mouse_down&&!consumer_down&&ai_home_state.load()!=1&&ai_home_state.load()!=2){
+   bool drag=command.kind==controller::PointerKind::drag;
+   if(controller::valid_pointer(command,drag,drag,drag)){
+    pointer_live=live;pointer_voice_sequence=sequence;started=pointer_sequence.begin(command);pointer_active=started;
+   }
+  }
+  xSemaphoreGive(pointer_mutex);
+ }
+ if(started){
+  for(int i=0;i<350;++i){
+   if(xSemaphoreTake(pointer_mutex,pdMS_TO_TICKS(20))==pdTRUE){
+    if(!live(sequence)||!enabled||!requested||i==349)pointer_sequence.cancel();
+    bool active=pointer_sequence.active();ok=pointer_sequence.success();
+    // Cancel may require release: retain ownership until USB service submits it.
+    if(active)pointer_active=true;
+    xSemaphoreGive(pointer_mutex);
+    if(!active||!live(sequence)||i==349)break;
+   }
+   vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  // Even if every timed lock failed, timeout must revoke queued work.
+  xSemaphoreTake(pointer_mutex,portMAX_DELAY);
+  if(pointer_sequence.active()){pointer_sequence.cancel();ok=false;pointer_active=pointer_sequence.active();}
+  xSemaphoreGive(pointer_mutex);
+ }
+ ai_home_busy.clear();return ok&&live(sequence);
 }
 static std::atomic<bool> switching(false);
 #if CONFIG_TINYUSB_NET_MODE_NCM
@@ -98,6 +165,12 @@ void controller_release(){release_pending=true;}
 void controller_usb_request_mode(bool value){requested=value;}
 static void release_reports(){
  mouse_command=0;mouse_down=false;consumer_down=false;
+ if(pointer_mutex&&xSemaphoreTake(pointer_mutex,pdMS_TO_TICKS(100))==pdTRUE){
+  if(pointer_active)pointer_sequence.cancel();
+  xSemaphoreGive(pointer_mutex);
+ }
+ // Retry absolute releases in the normal service if the endpoint is busy.
+ pointer_service();
  if(ai_home_state.load()==1||ai_home_state.load()==2)ai_home_state=-1;
  if(!enabled)return;
  uint8_t keys[6]={};
@@ -138,6 +211,7 @@ static void install(bool hid){
  enabled=hid;
 }
 void controller_usb_start(){
+ pointer_mutex=xSemaphoreCreateMutex();configASSERT(pointer_mutex);
  uint8_t mac[6];ESP_ERROR_CHECK(esp_read_mac(mac,ESP_MAC_BASE));
  snprintf(serial_number,sizeof(serial_number),"%02X%02X%02X%02X%02X%02X",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
  controller_usb_net_init();controller_usb_net_mac_string(network_mac);
@@ -148,19 +222,20 @@ void controller_usb_start(){
 void controller_usb_service(){
  controller_usb_net_service();
  if(release_pending.exchange(false))release_reports();
+ bool absolute_busy=pointer_service();
  bool target=requested.load();
  if(target==enabled.load()){
-  if(enabled&&tud_mounted()&&tud_hid_ready()){
+  if(enabled&&tud_mounted()&&tud_hid_ready()&&xSemaphoreTake(pointer_mutex,0)==pdTRUE){
    if(consumer_down){uint16_t usage=0;bool released=tud_hid_report(3,&usage,sizeof(usage));if(released){consumer_down=false;if(ai_home_state.load()==2)ai_home_state=3;}}
    else if(mouse_down){tud_hid_mouse_report(2,0,0,0,0,0);mouse_down=false;}
-   else{
+   else if(!absolute_busy&&!pointer_active){
     int pending=1;
     if(requested.load()&&ai_home_state.compare_exchange_strong(pending,2)){
      uint16_t usage=0x0223;
      bool sent=tud_hid_report(3,&usage,sizeof(usage));
      consumer_down=sent;if(!sent)ai_home_state=-1;
      controller_event("ai_home",-1,0,0,sent?1:0);
-     return;
+     xSemaphoreGive(pointer_mutex);return;
     }
     int command=mouse_command.exchange(0);
     if(command&&requested.load()){
@@ -170,6 +245,7 @@ void controller_usb_service(){
      mouse_down=sent&&command==1;controller_event("mouse",-1,command,0,sent?1:0);
     }
    }
+   xSemaphoreGive(pointer_mutex);
   }
   return;
  }

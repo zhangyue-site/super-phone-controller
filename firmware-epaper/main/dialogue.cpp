@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 extern const char *controller_ota_endpoint();
 static bool live(unsigned sequence){return controller_voice_cancel_sequence()<sequence;}
 static int post(const char *path,unsigned sequence,const char *body,unsigned char *out,unsigned capacity){
@@ -22,7 +23,7 @@ static int post(const char *path,unsigned sequence,const char *body,unsigned cha
  esp_http_client_config_t cfg={};cfg.url=url;cfg.common_name="erweima.zhangyue.site";cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.timeout_ms=20000;cfg.disable_auto_redirect=true;
  auto c=esp_http_client_init(&cfg);if(!c)return -1;
  esp_http_client_set_method(c,HTTP_METHOD_POST);esp_http_client_set_header(c,"Authorization",auth);esp_http_client_set_header(c,"Host","erweima.zhangyue.site");
- esp_http_client_set_header(c,"Connection","close");esp_http_client_set_header(c,"X-Voice-Session",controller_voice_session());esp_http_client_set_header(c,"X-Voice-Sequence",seq);esp_http_client_set_header(c,"Content-Type","application/json");
+ esp_http_client_set_header(c,"X-HID-Pointer","absolute-v1");esp_http_client_set_header(c,"Connection","close");esp_http_client_set_header(c,"X-Voice-Session",controller_voice_session());esp_http_client_set_header(c,"X-Voice-Sequence",seq);esp_http_client_set_header(c,"Content-Type","application/json");
  unsigned length=body?strlen(body):0;bool ok=esp_http_client_open(c,length)==ESP_OK;
  unsigned sent=0;while(ok&&sent<length&&live(sequence)){int n=esp_http_client_write(c,body+sent,length-sent);if(n<=0){ok=false;break;}sent+=n;}
  int used=0;
@@ -32,9 +33,39 @@ static int post(const char *path,unsigned sequence,const char *body,unsigned cha
  esp_http_client_close(c);esp_http_client_cleanup(c);return ok&&live(sequence)?used:-1;
 }
 static const char *str(cJSON *j,const char *key){auto v=cJSON_GetObjectItemCaseSensitive(j,key);return cJSON_IsString(v)?v->valuestring:"";}
+static bool pointer_command(cJSON *j,controller::PointerCommand& command){
+ unsigned seen=0;
+ for(cJSON *v=j->child;v;v=v->next){
+  if(!v->string)return false;
+  const char *keys[]={"op","id","kind","x","y","x2","y2","duration_ms"};
+  unsigned bit=0;for(unsigned i=0;i<8;++i)if(!strcmp(v->string,keys[i]))bit=1u<<i;
+  if(!bit||(seen&bit))return false;
+  seen|=bit;
+ }
+ if((seen&31)!=31)return false;
+ const char *id=str(j,"id");if(strlen(id)!=32)return false;
+ for(unsigned i=0;i<32;++i)if(!((id[i]>='0'&&id[i]<='9')||(id[i]>='a'&&id[i]<='f')))return false;
+ const char *kind=str(j,"kind");
+ if(!strcmp(kind,"move"))command.kind=controller::PointerKind::move;
+ else if(!strcmp(kind,"click"))command.kind=controller::PointerKind::click;
+ else if(!strcmp(kind,"drag"))command.kind=controller::PointerKind::drag;
+ else return false;
+ auto number=[j](const char *name,int& out){
+  cJSON *v=cJSON_GetObjectItemCaseSensitive(j,name);
+  if(!cJSON_IsNumber(v)||!std::isfinite(v->valuedouble)||v->valuedouble<0||v->valuedouble>32767||std::floor(v->valuedouble)!=v->valuedouble)return false;
+  out=(int)v->valuedouble;return true;
+ };
+ if(!number("x",command.x)||!number("y",command.y))return false;
+ if((seen&32)&&!number("x2",command.x2))return false;
+ if((seen&64)&&!number("y2",command.y2))return false;
+ if((seen&128)&&!number("duration_ms",command.duration_ms))return false;
+ return controller::valid_pointer(command,seen&32,seen&64,seen&128);
+}
 bool controller_dialogue_run(unsigned sequence){
+ auto pointer_ids=(char (*)[33])heap_caps_calloc(64,33,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);unsigned pointer_count=0;
+ if(!pointer_ids)return false;
  auto output=(char*)heap_caps_malloc(48001,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
- if(!output)return false;
+ if(!output){free(pointer_ids);return false;}
  bool success=false;int64_t until=esp_timer_get_time()+180000000;uint32_t ticket=controller_adb_ticket();
  controller_voice_state(10);
  while(live(sequence)&&esp_timer_get_time()<until){
@@ -52,6 +83,21 @@ bool controller_dialogue_run(unsigned sequence){
     if(pcm){int size=post("/dialogue/audio",sequence,nullptr,pcm,960001);if(size>0&&size<=960000&&!(size%2)&&live(sequence)){if(!controller_audio_play_pcm(pcm,size))success=false;}else success=false;free(pcm);}else success=false;
    }
    break;
+  }
+  if(!strcmp(op,"hid_pointer")){
+   controller::PointerCommand command{};const char *id=str(j,"id");bool valid=pointer_command(j,command);
+   if(valid){for(unsigned i=0;i<pointer_count;++i)if(!strcmp(pointer_ids[i],id))valid=false;}
+   if(pointer_count>=64)valid=false;
+   // Reserve before submission: an ACK failure must never replay the action.
+   if(valid)strcpy(pointer_ids[pointer_count++],id);
+   bool ok=valid&&live(sequence)&&controller_usb_ai_pointer(command,live,sequence);
+   cJSON *ack=cJSON_CreateObject();cJSON_AddStringToObject(ack,"id",id);cJSON_AddBoolToObject(ack,"ok",ok);
+   cJSON_AddStringToObject(ack,"output",ok?"HID_POINTER_REPORT_SENT":"");
+   if(!ok)cJSON_AddStringToObject(ack,"error",!valid?"invalid_command":live(sequence)?"input_failed":"cancelled");
+   char *body=cJSON_PrintUnformatted(ack);cJSON_Delete(ack);cJSON_Delete(j);
+   char result[128];bool sent=body&&post("/dialogue/result",sequence,body,(unsigned char*)result,sizeof(result))>=0;free(body);
+   if(!sent)break;
+   continue;
   }
   if(!strcmp(op,"hid_home")){
    const char *id=str(j,"id");bool valid=strlen(id)==32;
@@ -78,5 +124,5 @@ bool controller_dialogue_run(unsigned sequence){
   ESP_LOGI("dialogue","Command result ok=%d error=%s ack=%d",ok,ok?"":error,sent);
   if(!sent)break;
  }
- free(output);return success&&live(sequence);
+ free(pointer_ids);free(output);return success&&live(sequence);
 }
