@@ -114,4 +114,6 @@ class RemoteTests(unittest.TestCase):
   lease=self.r.claim('board','b'*16,2,True,'absolute-v1')['lease']
   self.assertEqual(self.r.claim('board','b'*16,3,True,'absolute-v1',lease)['op'],'wait');self.assertFalse(self.c.started)
   self.assertEqual(self.r.status(self.wx,ident)['state'],'stopped')
+ def test_idle_status_is_readable_on_both_origins(self):
+  for owner in (self.wx,self.tg):self.assertEqual(self.r.status(owner)['state'],'idle')
 if __name__=='__main__':unittest.main()

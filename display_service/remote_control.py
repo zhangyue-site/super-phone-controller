@@ -127,7 +127,10 @@ class RemoteControl:
    return {'op':'cancelled'}
  def status(self,owner,ident=None):
   with self.lock:
-   self._sync();ident,r=self._get(owner,ident);return self._reply(ident,r)
+   self._sync();owner=self._owner(owner)
+   if ident is None and not any(r['owner']==owner for r in self.records.values()):
+    return dict(state='idle',reply='当前没有手机控制任务。发送 /phone 打开微信找到李洋 可先查看计划。',terminal=True,verified=False)
+   ident,r=self._get(owner,ident);return self._reply(ident,r)
  def stop_device(self,device):
   with self.lock,self.runtime_lock:
    self._sync();self.cancel_voice(device)
