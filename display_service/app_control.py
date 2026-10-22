@@ -42,7 +42,6 @@ def handle(handler,config):
    operation=obj.get('operation');remote=remote_http.REMOTE
    if operation=='prepare':
     result=remote.prepare(identity,obj.get('text'))
-    result['reply']=result['reply'].split('回复 /phone 确认 ')[0]+'请在两分钟内点击“确认执行”。'
    elif operation=='confirm':
     ident=obj.get('task_id')
     if not isinstance(ident,str) or not re.fullmatch('[0-9a-f]{32}',ident):raise ValueError('请重新生成计划，再点击确认执行。')
