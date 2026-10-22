@@ -46,6 +46,10 @@ void main() {
     await tester.tap(find.text('生成计划'));
     await tester.pumpAndSettle();
     expect(operations, ['prepare']);
+    tester.testTextInput.hide();
+    await tester.pump();
+    await tester.scrollUntilVisible(find.text('确认执行'), 160,
+        scrollable: find.byType(Scrollable).first);
     expect(find.text('确认执行'), findsOneWidget);
     await tester.ensureVisible(find.text('确认执行'));
     await tester.tap(find.text('确认执行'));
