@@ -21,7 +21,7 @@ void main() {
       'OTHER:0:12345678-1234-1234-1234-123456789abc',
       'AABBCCDDEEFF:0:garbage',
       'AABBCCDDEEFF:-1:12345678-1234-1234-1234-123456789abc',
-      first + ':extra'
+      'AABBCCDDEEFF:0:12345678-1234-1234-1234-123456789abc:extra'
     ]) {
       expect(() => UsbAttachment.parse({...attachment(), 'session': invalid}),
           throwsFormatException);

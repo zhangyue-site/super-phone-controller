@@ -26,11 +26,14 @@ class Gateway:
    if queued and self.remote.screen_ready(device) and not s["hid"]:
     self.relay.offer(device,6,[0]*5);return self.relay.poll(device,owner,nonce)
    if not s["hid"]:return packet
+   if t["job"] is None and (not queued or not self.remote.screen_ready(device)):return packet
    if t["job"] is None:
     claim=self.remote.claim(device,t["session"],t["sequence"],True,"absolute-v1",t["lease"])
     if "lease" in claim:t["lease"]=claim["lease"]
     if claim.get("op")=="start":t["job"]=claim["task_id"]
-    else:return packet
+    else:
+     if "lease" not in claim:t["sequence"]+=1
+     return packet
    state=self.remote.board_status(device,t["session"],t["sequence"])
    if state["op"]!="wait":
     self.relay.offer(device,5,[0]*5);return self.relay.poll(device,owner,nonce)

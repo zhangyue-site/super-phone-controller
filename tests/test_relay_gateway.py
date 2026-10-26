@@ -8,6 +8,25 @@ from display_service.hid_relay import Relay
 from test_hid_relay import KEY,NONCE,receipt
 
 class GatewayTests(unittest.TestCase):
+ def test_idle_armed_poll_does_not_starve_later_task(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   box=Mailbox()
+   c=SimpleNamespace(mailbox=box,start=lambda d,s,q,text:box.create(d,s,q))
+   remote=RemoteControl(c,Path(tmp)/'task.json',screen_ready=lambda d:True)
+   remote.binding_allowed=lambda o:True
+   relay=Relay(Path(tmp)/'relay.db',lambda d:KEY)
+   g=Gateway(relay,remote)
+   try:
+    g.attach('epaper-01','owner',receipt())
+    relay.offer('epaper-01',6,[0]*5)
+    arm=relay.poll('epaper-01','owner',NONCE)
+    g.ack('epaper-01','owner',NONCE,arm['id'],receipt(1,6,7,1))
+    for _ in range(4):g.poll('epaper-01','owner',NONCE)
+    owner=('android-app','owner','owner','epaper-01')
+    task=remote.prepare(owner,'打开设置');remote.confirm(owner,task['task_id'])
+    for _ in range(4):g.poll('epaper-01','owner',NONCE)
+    self.assertEqual(remote.status(owner,task['task_id'])['state'],'running')
+   finally:relay.close()
  def test_cloud_confirm_arm_mailbox_receipt_and_stop(self):
   with tempfile.TemporaryDirectory() as tmp:
    box=Mailbox()
