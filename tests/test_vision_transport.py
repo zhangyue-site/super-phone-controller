@@ -52,3 +52,14 @@ class VisionTransportTests(unittest.TestCase):
   with patch.dict(os.environ,{'EPAPER_VISION_FALLBACK_PROVIDER':'xiaomi'}),patch('display_service.model_routing.providers',return_value={'xiaomi':self.backup}),patch('urllib.request.urlopen',side_effect=[TimeoutError(),self.response()]) as net:
    value=request_vision(self.payload,'opencode-go','mimo-v2.6-flash',self.cfg)
    self.assertEqual(value[2],'xiaomi');self.assertEqual(net.call_count,2)
+
+ def test_subscription_fallback_has_separate_bounded_timeout(self):
+  with patch.dict(os.environ,{'EPAPER_VISION_FALLBACK_PROVIDER':'xiaomi','EPAPER_VISION_FALLBACK_TIMEOUT_SECONDS':'45'}),patch('display_service.model_routing.providers',return_value={'xiaomi':self.backup}),patch('urllib.request.urlopen',side_effect=[TimeoutError(),self.response()]) as net:
+   self.assertEqual(request_vision(self.payload,'opencode-go','mimo-v2.6-flash',self.cfg)[2],'xiaomi')
+   self.assertEqual([c.kwargs['timeout'] for c in net.call_args_list],[18,45])
+
+ def test_invalid_fallback_timeout_keeps_safe_default(self):
+  for value in ['bad','0','-1','61','nan','inf']:
+   with self.subTest(value=value),patch.dict(os.environ,{'EPAPER_VISION_FALLBACK_TIMEOUT_SECONDS':value}),patch('urllib.request.urlopen',side_effect=[TimeoutError(),self.response()]) as net:
+    self.request()
+    self.assertEqual([c.kwargs['timeout'] for c in net.call_args_list],[18,18])
