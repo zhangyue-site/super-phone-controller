@@ -1,0 +1,3 @@
+# Public source privacy boundary
+This source snapshot excludes internal handoffs, private credentials, personal observations and deployment addresses. Build configuration supplies the controller URL and optional application ID; public defaults use reserved example domains. Signing material stays in GitHub Secrets. Test identities are synthetic; image names such as @2x.png are not email contacts.
+This snapshot must be committed with a generic project identity and no parents, so it does not inherit personal commit metadata. Earlier public branches are separate and have not been rewritten. Public commit caches and copies are outside source-tree checks.

@@ -1,0 +1,131 @@
+name: Build Flutter app
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: '构建目标'
+        required: true
+        default: android
+        type: choice
+        options: [android, ios, both]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spc-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    # Android 在 ubuntu 上构建，公开仓库免费，私有仓库按实际分钟计费。
+    if: ${{ inputs.platform == 'android' || inputs.platform == 'both' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Public source privacy check
+        run: python3 ../tools/check_public_source.py
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Regression tests
+        run: flutter test
+
+      - name: Build signed APK
+        env:
+          CONTROLLER_BASE_URL: ${{ secrets.CONTROLLER_BASE_URL }}
+          CONTROLLER_DOWNLOAD_URL: ${{ secrets.CONTROLLER_DOWNLOAD_URL }}
+          CONTROLLER_APPLICATION_ID: ${{ secrets.CONTROLLER_APPLICATION_ID }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/controller-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          chmod 600 "$ANDROID_KEYSTORE_PATH"
+          trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
+          export CONTROLLER_RUNTIME_CONFIG="$RUNNER_TEMP/controller-runtime.json"
+          python3 - <<'PYCONFIG'
+          import json, os
+          value=os.environ.get("CONTROLLER_BASE_URL") or "https://controller.example.invalid/phone-controller"
+          with open(os.environ["CONTROLLER_RUNTIME_CONFIG"],"w") as f:
+              json.dump({"CONTROLLER_BASE_URL":value}, f)
+          PYCONFIG
+          chmod 600 "$CONTROLLER_RUNTIME_CONFIG"
+          trap 'rm -f "$ANDROID_KEYSTORE_PATH" "$CONTROLLER_RUNTIME_CONFIG"' EXIT
+          flutter build apk --release --dart-define-from-file="$CONTROLLER_RUNTIME_CONFIG"
+          SIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          "$SIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
+
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pcflash-android
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  ios:
+    # macOS runner 按 10 倍计费：跑 1 分钟扣 10 分钟额度。
+    # 因此只在显式选择 ios 时构建，绝不挂在 push 上。
+    if: ${{ inputs.platform == 'ios' || inputs.platform == 'both' }}
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Pod install
+        run: |
+          cd ios
+          pod install --repo-update
+
+      - name: Build unsigned iOS app
+        run: |
+          # 不签名只出 .app，用于验证真机可编译。要装到手机需在本地
+          # 用开发者证书重签，或配好 provisioning profile 后改 --export-method。
+          flutter build ios --release --no-codesign
+
+      - name: Package
+        run: |
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -R Runner.app Payload/
+          zip -qry "$GITHUB_WORKSPACE/pcflash-ios.ipa" Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pcflash-ios
+          path: pcflash-ios.ipa
+          if-no-files-found: error

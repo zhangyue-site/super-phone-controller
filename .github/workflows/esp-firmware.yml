@@ -1,0 +1,219 @@
+name: Build ESP-IDF firmware
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '固件版本号（留空则用日期+run号）'
+        required: false
+        type: string
+      external_keys:
+        description: '启用 V2 J1 GPIO1/GPIO2 两个外接干接点按键'
+        required: false
+        default: false
+        type: boolean
+concurrency:
+  group: esp-firmware-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  # 必须 >= 项目 idf_component.yml 里声明的 idf 版本
+  IDF_IMAGE: espressif/idf:v6.0
+  FIRMWARE_DIR: firmware-epaper
+  PROJECT_NAME: phone_controller_epaper
+  # ── ESP-IDF 6.0 实测踩过的坑（换成 idf:v5.x 时都不需要）──────────────
+  # 1) usb 组件已移出核心树 → main/idf_component.yml 加 espressif/usb
+  # 2) driver 被拆成 esp_driver_{gpio,spi,uart,...} → 各组件 CMakeLists
+  #    里补 PRIV_REQUIRES，第三方组件则升级到已适配的版本
+  # 3) mbedtls/sha256.h 不再提供 → 改用 psa/crypto.h 的 PSA 哈希 API
+  # 4) device_config.h 是 .gitignore 的本机配置 → 由 secrets 生成
+  # 5) 产物容器是 espressif/idf，用 root 跑会产出 root 属主的 build/
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install "Pillow>=12.0.0"
+          sudo apt-get update -qq
+          sudo apt-get install -y fonts-noto-cjk ffmpeg
+
+      - name: Host interaction regressions
+        env:
+          EPAPER_FONT: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+        run: |
+          python3 tools/test_host.py
+          python3 -m unittest discover -s tests -v
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/esp-idf /usr/local/lib/android || true
+          df -h /
+
+      - name: Generate device config
+        env:
+          DISPLAY_ENDPOINT: ${{ secrets.DISPLAY_ENDPOINT }}
+          DISPLAY_TOKEN: ${{ secrets.DISPLAY_TOKEN }}
+          ADB_KEYS_H: ${{ secrets.ADB_KEYS_H }}
+        run: |
+          cat > "$FIRMWARE_DIR/main/device_config.h" <<EOF
+          #pragma once
+          #define DISPLAY_ENDPOINT "${DISPLAY_ENDPOINT:-https://example.invalid/phone-controller}"
+          #define DISPLAY_TOKEN "${DISPLAY_TOKEN:-ci-placeholder-token}"
+          EOF
+          test -n "$DISPLAY_ENDPOINT" || echo "::warning::DISPLAY_ENDPOINT secret not set, using placeholder"
+          test -n "$DISPLAY_TOKEN" || echo "::warning::DISPLAY_TOKEN secret not set, using placeholder"
+          if [ -n "$ADB_KEYS_H" ]; then
+            printf '%s' "$ADB_KEYS_H" > "$FIRMWARE_DIR/main/device_adb_keys.h"
+            echo "device_adb_keys.h written from secret"
+          else
+            echo "::warning::ADB_KEYS_H secret not set; adb_local will fail to build"
+            printf '#pragma once\nstatic const char board_adb_private[]="";\n' > "$FIRMWARE_DIR/main/device_adb_keys.h"
+          fi
+
+      - name: Compute firmware version
+        id: ver
+        run: |
+          # 版本号会写进 esp_app_desc_t，OTA 服务端靠它比较版本。
+          # 优先级：手动输入 > git tag > 日期+run号。
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME}"; fi
+          fi
+          if [ -z "$V" ]; then V="$(date +%Y.%m.%d)-ci${{ github.run_number }}"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Firmware version: $V"
+
+      - name: Build in official image
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          EXTERNAL_KEYS: ${{ inputs.external_keys || false }}
+        run: |
+          docker run --rm \
+            -v "$PWD/$FIRMWARE_DIR:/project" \
+            -e VERSION \
+            -e EXTERNAL_KEYS \
+            -w /project \
+            "$IDF_IMAGE" \
+            bash -c '
+              set -e
+              . $IDF_PATH/export.sh
+              # 与 124 产线一致：USB_LOCAL 打开，OTA/语音走板子在手机上开的
+              # 18843 本地 ADB 隧道，不依赖 WiFi。只加 defaults 不加 usb-local
+              # 会让 endpoint 回落到 DISPLAY_ENDPOINT，没 WiFi 的板子必然失败。
+              CONTROLLER_DEFAULTS="sdkconfig.defaults;sdkconfig.usb-local.defaults"
+              if [ "$EXTERNAL_KEYS" = "true" ]; then
+                CONTROLLER_DEFAULTS="$CONTROLLER_DEFAULTS;sdkconfig.external-keys.defaults"
+              fi
+              idf.py -DIDF_TARGET=esp32s3 -DPROJECT_VER="$VERSION" \
+                -DSDKCONFIG=sdkconfig.usb-local \
+                -DSDKCONFIG_DEFAULTS="$CONTROLLER_DEFAULTS" \
+                -B build reconfigure build
+            '
+
+      - name: Verify TLS buffers use PSRAM
+        run: |
+          grep -qx 'CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y' "$FIRMWARE_DIR/sdkconfig.usb-local"
+          test "$(grep -c '^CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y' "$FIRMWARE_DIR/sdkconfig.usb-local" || true)" = 0
+
+      - name: Verify version is embedded
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          EXTERNAL_KEYS: ${{ inputs.external_keys || false }}
+        run: |
+          # esp_app_desc_t 里 version 是 32 字节定长字段。偏移随段布局变化，
+          # 与其硬编码，不如在镜像头 64KB 内直接搜这个字符串——版本号本身
+          # 足够独特，不会误命中。
+          ACTUAL=$(python3 - "$FIRMWARE_DIR/build/$PROJECT_NAME.bin" "$VERSION" <<'PY'
+          import sys
+          blob = open(sys.argv[1], "rb").read(65536)
+          want = sys.argv[2].encode()
+          idx = blob.find(want)
+          if idx < 0:
+              print("NOT_FOUND")
+          else:
+              end = blob.find(b"\x00", idx)
+              print(blob[idx:end].decode("utf-8", "replace"))
+          PY
+          )
+          echo "embedded version: $ACTUAL (expected: $VERSION)"
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "::error::firmware version mismatch: got '$ACTUAL', expected '$VERSION'. OTA will never trigger."
+            exit 1
+          fi
+
+      - name: Collect artifacts
+        run: |
+          set -e
+          D="$FIRMWARE_DIR/build"
+          mkdir -p out
+          cp "$D/$PROJECT_NAME.bin"     out/app.bin
+          cp "$D/bootloader/bootloader.bin" out/bootloader.bin
+          cp "$D/partition_table/partition-table.bin" out/partition-table.bin
+          cp "$D/ota_data_initial.bin"  out/ota_data_initial.bin 2>/dev/null || true
+          # 单文件刷机包（0x0 起，含 bootloader+分区表+app）
+          python3 - <<'PY'
+          import json,pathlib
+          d=pathlib.Path("${{ env.FIRMWARE_DIR }}")/"build"
+          print("app size:", (d/"${{ env.PROJECT_NAME }}.bin").stat().st_size)
+          PY
+          cd out && sha256sum *.bin | tee SHA256SUMS
+          ls -la
+
+      - name: Verify OTA slot capacity
+        run: |
+          # ota_0 / ota_1 各 0x340000 = 3407872 字节，超了板子刷不进去
+          SZ=$(stat -c%s out/app.bin)
+          echo "app.bin = $SZ bytes, OTA slot limit = 3407872"
+          test "$SZ" -lt 3407872 || { echo "::error::firmware exceeds OTA slot size"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp-firmware-${{ github.run_number }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
+
+      # Main builds publish through a restricted SSH key, not a public upload API.
+      - name: Publish to OTA endpoint
+        if: vars.OTA_ENABLED == 'true' && github.ref == 'refs/heads/main'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          OTA_SSH_HOST: ${{ vars.OTA_SSH_HOST }}
+          OTA_DEVICE: ${{ vars.OTA_DEVICE }}
+          OTA_SSH_KEY: ${{ secrets.OTA_SSH_KEY }}
+          OTA_SSH_KNOWN_HOSTS: ${{ secrets.OTA_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$OTA_SSH_HOST" && test -n "$OTA_DEVICE"
+          mkdir -p "$RUNNER_TEMP/ota-ssh"
+          chmod 700 "$RUNNER_TEMP/ota-ssh"
+          printf '%s\n' "$OTA_SSH_KEY" > "$RUNNER_TEMP/ota-ssh/key"
+          printf '%s\n' "$OTA_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ota-ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/ota-ssh/key" "$RUNNER_TEMP/ota-ssh/known_hosts"
+          trap 'rm -rf "$RUNNER_TEMP/ota-ssh"' EXIT
+          python3 - <<'PYDATA' | ssh -T -i "$RUNNER_TEMP/ota-ssh/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/ota-ssh/known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "root@$OTA_SSH_HOST" ota-publish > "$RUNNER_TEMP/ota-publish.json"
+          import json,os,sys
+          from pathlib import Path
+          sys.stdout.buffer.write((json.dumps({'source':os.environ['GITHUB_SHA'],'generation':int(os.environ['GITHUB_RUN_NUMBER'])})+'\n').encode())
+          sys.stdout.buffer.write(Path('out/app.bin').read_bytes())
+          PYDATA
+          python3 - <<'PYVERIFY'
+          import hashlib,json,os
+          from pathlib import Path
+          entry=json.loads((Path(os.environ['RUNNER_TEMP'])/'ota-publish.json').read_text())
+          blob=Path('out/app.bin').read_bytes()
+          assert entry['device']==os.environ['OTA_DEVICE']
+          assert entry['version']==os.environ['VERSION']
+          assert entry['source']==os.environ['GITHUB_SHA']
+          assert entry['sha256']==hashlib.sha256(blob).hexdigest()
+          assert entry['size']==len(blob) and entry['activated'] is True
+          print('Private cloud OTA activated:',entry['version'],entry['sha256'])
+          PYVERIFY
