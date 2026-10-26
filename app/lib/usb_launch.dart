@@ -18,7 +18,7 @@ class UsbAttachment {
     if (serial is! String ||
         !RegExp(r'^[0-9A-F]{12}$').hasMatch(serial) ||
         session is! String ||
-        !RegExp('^$serial:[0-9]+\$').hasMatch(session) ||
+        !RegExp('^$serial:[0-9]+(?::[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\$').hasMatch(session) ||
         ((remote != null || device != null) &&
             (remote is! String ||
                 !RegExp(r'^[0-9A-F]{2}(:[0-9A-F]{2}){5}$').hasMatch(remote) ||

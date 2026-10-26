@@ -8,6 +8,25 @@ void main() {
         if (bound) 'remoteId': 'AA:BB:CC:DD:EE:01',
         if (bound) 'deviceId': 'epaper-01',
       };
+  test('native UUID attachment sessions remain unique and validate identity', () {
+    const first = 'AABBCCDDEEFF:0:12345678-1234-1234-1234-123456789abc';
+    const second = 'AABBCCDDEEFF:0:12345678-1234-1234-1234-123456789abd';
+    final a = UsbAttachment.parse({...attachment(), 'session': first});
+    final b = UsbAttachment.parse({...attachment(), 'session': second});
+    final gate = UsbAutoShareGate();
+    expect(gate.claim(a, bluetoothOn: true, opening: false), isTrue);
+    expect(gate.claim(a, bluetoothOn: true, opening: false), isFalse);
+    expect(gate.claim(b, bluetoothOn: true, opening: false), isTrue);
+    for (final invalid in [
+      'OTHER:0:12345678-1234-1234-1234-123456789abc',
+      'AABBCCDDEEFF:0:garbage',
+      'AABBCCDDEEFF:-1:12345678-1234-1234-1234-123456789abc',
+      first + ':extra'
+    ]) {
+      expect(() => UsbAttachment.parse({...attachment(), 'session': invalid}),
+          throwsFormatException);
+    }
+  });
   test('USB binding requires complete validated identity', () {
     expect(UsbAttachment.parse(attachment()).isBound, isTrue);
     expect(UsbAttachment.parse(attachment(bound: false)).isBound, isFalse);
