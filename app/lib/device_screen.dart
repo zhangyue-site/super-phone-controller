@@ -37,6 +37,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
   bool _usbReady = false;
   bool _legacyBle = false;
   int _usbRevision = 0;
+  Timer? _usbRefresh;
   late final _routeLease = UsbRouteLease(() {
     if (!mounted) return;
     if (_opening) Navigator.of(context).popUntil((route) => route.isFirst);
@@ -52,6 +53,16 @@ class _DeviceScreenState extends State<DeviceScreen> {
       final next = value == null ? null : UsbAttachment.parse(value as Map);
       setState(() => _usb = next);
       _routeLease.update(next);
+      _usbRefresh?.cancel();
+      if (_legacyBle && next == null) {
+        _usbRefresh = Timer.periodic(const Duration(milliseconds: 400), (_) {
+          if (!mounted || !_legacyBle || _usb != null) {
+            _usbRefresh?.cancel();
+          } else {
+            _readUsb();
+          }
+        });
+      }
       if (!_legacyBle && _opening && next != null && next.session != previous) {
         Navigator.of(context).popUntil((route) => route.isFirst);
       }
@@ -73,6 +84,10 @@ class _DeviceScreenState extends State<DeviceScreen> {
       if (!mounted || revision != _usbRevision) return;
       final previous = _usb?.session;
       setState(() => _usb = value);
+      if (value != null) {
+        _routeLease.update(value);
+        _usbRefresh?.cancel();
+      }
       if (previous != _usb?.session || !_opening) await _tryUsbOpen();
     } catch (e) {
       if (mounted && revision == _usbRevision) {
@@ -228,6 +243,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
 
   @override
   void dispose() {
+    _usbRefresh?.cancel();
     _routeLease.dispose();
     UsbLaunch.channel.setMethodCallHandler(null);
     _autoStop?.cancel();

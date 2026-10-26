@@ -14,12 +14,12 @@ void main() {
     final lease = UsbRouteLease(() => lost++);
     lease.select(old);
     lease.update(null);
-    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(seconds: 4));
     lease.update(reattached);
     await tester.pump(const Duration(seconds: 4));
     expect(lost, 0);
     lease.update(null);
-    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 8));
     expect(lost, 1);
     lease.update(reattached);
     expect(lost, 1); // no automatic ownership resurrection

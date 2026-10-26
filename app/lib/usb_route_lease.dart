@@ -17,7 +17,7 @@ class UsbRouteLease {
     if (_serial == null) return;
     _detach?.cancel();
     if (board == null) {
-      _detach = Timer(const Duration(seconds: 3), _lose);
+      _detach = Timer(const Duration(seconds: 8), _lose);
     } else if (board.serial != _serial) {
       _lose();
     }
