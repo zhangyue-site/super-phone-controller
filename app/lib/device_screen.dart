@@ -34,6 +34,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
   bool _bluetoothOn = false;
   UsbAttachment? _usb;
   bool _usbReady = false;
+  bool _legacyBle = false;
   int _usbRevision = 0;
 
   Future<void> _acceptUsb(dynamic value) async {
@@ -76,21 +77,28 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
   Future<void> _tryUsbOpen() async {
-    if (_usb == null) {
+    if ((_usb == null || _legacyBle)) {
       if (_usbReady) _listenBluetooth();
       return;
     }
     final subscription = _adapterSub;
     _adapterSub = null;
     await subscription?.cancel();
-    if (_usb == null) _listenBluetooth();
+    if ((_usb == null || _legacyBle)) _listenBluetooth();
     if (_scanning) await _stopScan();
   }
 
   void _listenBluetooth() {
-    if (!mounted || !_usbReady || _usb != null || _adapterSub != null) return;
+    if (!mounted ||
+        !_usbReady ||
+        (_usb != null && !_legacyBle) ||
+        _adapterSub != null) {
+      return;
+    }
     _adapterSub = FlutterBluePlus.adapterState.listen((state) {
-      if (!mounted || _usb != null || state == BluetoothAdapterState.unknown) {
+      if (!mounted ||
+          (_usb != null && !_legacyBle) ||
+          state == BluetoothAdapterState.unknown) {
         return;
       }
       _bluetoothOn = state == BluetoothAdapterState.on;
@@ -101,7 +109,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
         setState(() => _error = '请打开手机蓝牙，开启后会自动寻找控制板');
       }
     }, onError: (Object error) {
-      if (mounted && _usb == null) {
+      if (mounted && (_usb == null || _legacyBle)) {
         setState(() => _error = '无法使用蓝牙，请检查权限或换用支持蓝牙的手机');
       }
     });
@@ -124,7 +132,9 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
   Future<void> _checkBluetooth() async {
-    if (!_usbReady || _usb != null) return;
+    if (!_usbReady || (_usb != null && !_legacyBle)) {
+      return;
+    }
     try {
       if (!await FlutterBluePlus.isSupported) {
         if (mounted) setState(() => _error = '这台设备不支持蓝牙');
@@ -134,7 +144,9 @@ class _DeviceScreenState extends State<DeviceScreen> {
           .where((s) => s != BluetoothAdapterState.unknown)
           .first
           .timeout(const Duration(seconds: 5));
-      if (!mounted || _usb != null) return;
+      if (!mounted || (_usb != null && !_legacyBle)) {
+        return;
+      }
       if (state != BluetoothAdapterState.on) {
         setState(() => _error = '请在系统设置中开启蓝牙');
         return;
@@ -146,7 +158,13 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
   Future<void> _startScan() async {
-    if (_scanning || _opening || !mounted || !_usbReady || _usb != null) return;
+    if (_scanning ||
+        _opening ||
+        !mounted ||
+        !_usbReady ||
+        (_usb != null && !_legacyBle)) {
+      return;
+    }
     setState(() {
       _scanning = true;
       _error = null;
@@ -154,7 +172,9 @@ class _DeviceScreenState extends State<DeviceScreen> {
     });
     await _scanSub?.cancel();
     _scanSub = _svc.scanResults.listen((results) {
-      if (!mounted || _opening || _usb != null) return;
+      if (!mounted || _opening || (_usb != null && !_legacyBle)) {
+        return;
+      }
       setState(() {
         for (final r in results) {
           _found[r.device.remoteId.str] = r;
@@ -169,9 +189,11 @@ class _DeviceScreenState extends State<DeviceScreen> {
       }
     });
     try {
-      if (_usb != null) return;
+      if ((_usb != null && !_legacyBle)) {
+        return;
+      }
       await _svc.startScan();
-      if (!mounted || _opening || _usb != null) {
+      if (!mounted || _opening || (_usb != null && !_legacyBle)) {
         await _svc.stopScan();
         return;
       }
@@ -214,11 +236,13 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
   Future<void> _open(ScanResult r) async {
-    if (_usb == null) await _openDevice(r.device);
+    if ((_usb == null || _legacyBle)) await _openDevice(r.device);
   }
 
   Future<void> _openDevice(BluetoothDevice device, {UsbAttachment? usb}) async {
-    if (_opening || _usb != null) return;
+    if (_opening || (_usb != null && !_legacyBle)) {
+      return;
+    }
     _opening = true;
     await _stopScan();
     if (!mounted) return;
@@ -241,11 +265,16 @@ class _DeviceScreenState extends State<DeviceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final usb = _usb;
+    final usb = _legacyBle ? null : _usb;
     if (usb != null) {
       return UsbTargetScreen(
         key: ValueKey(usb.session),
         attachment: usb,
+        onLegacy: () {
+          setState(() => _legacyBle = true);
+          _listenBluetooth();
+          _checkBluetooth();
+        },
         isCurrent: () => mounted && _usb?.session == usb.session,
       );
     }

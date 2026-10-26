@@ -6,9 +6,13 @@ import 'usb_launch.dart';
 /// Phone B: USB identity and human-consented whole-screen capture only.
 class UsbTargetScreen extends StatefulWidget {
   final UsbAttachment attachment;
+  final VoidCallback? onLegacy;
   final bool Function() isCurrent;
   const UsbTargetScreen(
-      {super.key, required this.attachment, required this.isCurrent});
+      {super.key,
+      required this.attachment,
+      required this.isCurrent,
+      this.onLegacy});
   @override
   State<UsbTargetScreen> createState() => _UsbTargetScreenState();
 }
@@ -108,6 +112,10 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('被控手机 · 屏幕共享')),
         body: ListView(padding: const EdgeInsets.all(24), children: [
+          if (_error != null && widget.onLegacy != null)
+            TextButton(
+                onPressed: _busy ? null : widget.onLegacy,
+                child: const Text('通过蓝牙连接旧版控制板')),
           const Icon(Icons.usb, size: 48),
           const SizedBox(height: 16),
           const Text('已识别USB控制板', style: TextStyle(fontSize: 22)),
