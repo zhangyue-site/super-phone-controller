@@ -19,6 +19,42 @@ final class NoBluetoothPlatform extends FlutterBluePlusPlatform {
 }
 
 void main() {
+  testWidgets('legacy mode rediscovers USB without another attach intent',
+      (tester) async {
+    FlutterBluePlusPlatform.instance = NoBluetoothPlatform();
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var snapshots = 0;
+    messenger.setMockMethodCallHandler(UsbLaunch.channel, (call) async {
+      if (call.method == 'snapshot') {
+        snapshots++;
+        return {'serial': 'AABBCCDDEEFF', 'session': 'AABBCCDDEEFF:$snapshots'};
+      }
+      if (call.method == 'info')
+        throw PlatformException(code: 'usb_proof_failed');
+      return null;
+    });
+    messenger.setMockMethodCallHandler(ScreenShare.channel,
+        (call) async => '{"active":false,"capture":"未共享","task":""}');
+    await tester.pumpWidget(const PcFlashApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('通过蓝牙连接旧版控制板'));
+    await tester.pumpAndSettle();
+    const codec = StandardMethodCodec();
+    // ignore: deprecated_member_use
+    await messenger.handlePlatformMessage(UsbLaunch.channel.name,
+        codec.encodeMethodCall(const MethodCall('changed', null)), (_) {});
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 9));
+    expect(snapshots, greaterThan(1));
+    expect(find.text('控制板升级'), findsOneWidget);
+    expect(find.text('被控手机 · 屏幕共享'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    messenger.setMockMethodCallHandler(UsbLaunch.channel, null);
+    messenger.setMockMethodCallHandler(ScreenShare.channel, null);
+  });
+
   for (final fail in [false, true]) {
     testWidgets('late startup snapshot ($fail) cannot replace newer USB attach',
         (tester) async {
