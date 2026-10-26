@@ -17,14 +17,16 @@ class ControlClient {
   String? _ticket;
   DateTime? _expires;
   ControlClient({http.Client? client}) : _http = client;
-  bool get authorized =>
+  bool get canReadStatus =>
       !_closed &&
-      _relayError == null &&
-      (_relay == null || !_relay!.isClosed) &&
       (_board != null ||
           (_ticket != null &&
               _expires != null &&
               DateTime.now().isBefore(_expires!)));
+  bool get authorized =>
+      canReadStatus &&
+      _relayError == null &&
+      (_relay == null || !_relay!.isClosed);
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
       {bool auth = false}) async {
     final response = await _http!
@@ -111,8 +113,10 @@ class ControlClient {
       String? taskId,
       String? skillId,
       Map<String, String>? parameters}) async {
-    if (_relayError != null) throw StateError('云端控制通道已停止：$_relayError');
-    if (!authorized) throw const FormatException('请先连接授权，授权约五分钟有效');
+    final readOrStop = operation == 'status' || operation == 'stop';
+    if (!(readOrStop ? canReadStatus : authorized)) {
+      throw const FormatException('控制连接已结束，请返回并重新连接控制板；旧动作不会重发');
+    }
     final body = <String, dynamic>{
       'operation': operation,
       if (text != null) 'text': text,

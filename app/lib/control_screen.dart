@@ -31,7 +31,7 @@ class _ControlScreenState extends State<ControlScreen> {
     if (_polling ||
         _busy ||
         _stopping ||
-        !_client.authorized ||
+        !_client.canReadStatus ||
         _task['state'] == 'pending' ||
         _task['task_id'] == null ||
         _task['terminal'] == true) {

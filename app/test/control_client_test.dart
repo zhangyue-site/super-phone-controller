@@ -17,7 +17,71 @@ class FakeBoard extends BleOtaService {
   }
 }
 
+class LocalBoard extends FakeBoard {
+  int writes = 0, disconnects = 0;
+  @override
+  bool get supportsLocalControl => true;
+  @override
+  Future<Map<String, dynamic>> readLocalControl() async => {
+        'nonce': '12' * 16,
+        'seq': writes,
+        'op': writes == 0 ? 0 : 5,
+        'result': writes == 0 ? 0 : 5,
+        'busy': 0,
+        'hid': 0,
+        'ready': 1,
+      };
+  @override
+  Future<void> writeLocalControl(List<int> bytes) async {
+    writes++;
+  }
+
+  @override
+  Future<void> disconnect() async {
+    disconnects++;
+  }
+}
+
 void main() {
+  test('completed relay permits final status but blocks new actions', () async {
+    final board = LocalBoard();
+    var commands = 0;
+    final client = ControlClient(client: MockClient((r) async {
+      final path = r.url.path.split('/').last;
+      final body = switch (path) {
+        'challenge' => {'challenge': 'a' * 64},
+        'authorize' => {
+            'ticket': 't' * 43,
+            'scope': 'phone-commands',
+            'expiresIn': 300
+          },
+        'attach' => {'state': 'connected'},
+        'poll' => {
+            'state': 'action',
+            'id': 'stop',
+            'seq': 1,
+            'op': 5,
+            'packet': '00' * 48
+          },
+        'ack' => {'state': 'acknowledged'},
+        'detach' => {'state': 'stopped'},
+        _ => {'state': 'done', 'verified': true},
+      };
+      if (path == 'command') commands++;
+      return http.Response(jsonEncode(body), 200);
+    }));
+    await client.authorize(board);
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    expect(board.writes, 1);
+    expect(board.disconnects, 1);
+    expect(client.authorized, false);
+    expect(client.canReadStatus, true);
+    expect((await client.command('status'))['verified'], true);
+    await expectLater(
+        client.command('prepare', text: '打开设置'), throwsFormatException);
+    expect(commands, 1);
+    client.close();
+  });
   test('commands require BLE capability and never send without it', () async {
     var requests = 0;
     final client = ControlClient(client: MockClient((request) async {
