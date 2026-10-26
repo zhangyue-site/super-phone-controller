@@ -19,6 +19,8 @@ class ControlClient {
   ControlClient({http.Client? client}) : _http = client;
   bool get authorized =>
       !_closed &&
+      _relayError == null &&
+      (_relay == null || !_relay!.isClosed) &&
       (_board != null ||
           (_ticket != null &&
               _expires != null &&

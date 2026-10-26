@@ -1,4 +1,5 @@
 import 'usb_launch.dart';
+import 'usb_route_lease.dart';
 import 'usb_target_screen.dart';
 import 'app_release.dart';
 import 'dart:async';
@@ -36,6 +37,12 @@ class _DeviceScreenState extends State<DeviceScreen> {
   bool _usbReady = false;
   bool _legacyBle = false;
   int _usbRevision = 0;
+  late final _routeLease = UsbRouteLease(() {
+    if (!mounted) return;
+    if (_opening) Navigator.of(context).popUntil((route) => route.isFirst);
+    setState(() => _legacyBle = false);
+    _tryUsbOpen();
+  });
 
   Future<void> _acceptUsb(dynamic value) async {
     if (!mounted) return;
@@ -44,7 +51,8 @@ class _DeviceScreenState extends State<DeviceScreen> {
     try {
       final next = value == null ? null : UsbAttachment.parse(value as Map);
       setState(() => _usb = next);
-      if (_opening && next != null && next.session != previous) {
+      _routeLease.update(next);
+      if (!_legacyBle && _opening && next != null && next.session != previous) {
         Navigator.of(context).popUntil((route) => route.isFirst);
       }
       await _tryUsbOpen();
@@ -220,6 +228,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
 
   @override
   void dispose() {
+    _routeLease.dispose();
     UsbLaunch.channel.setMethodCallHandler(null);
     _autoStop?.cancel();
     _scanSub?.cancel();
@@ -271,6 +280,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
         key: ValueKey(usb.session),
         attachment: usb,
         onLegacy: () {
+          _routeLease.select(usb);
           setState(() => _legacyBle = true);
           _listenBluetooth();
           _checkBluetooth();

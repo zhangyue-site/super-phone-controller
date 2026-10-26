@@ -17,7 +17,10 @@ class CloudRelay {
       required this.write,
       required this.disconnect,
       required this.onError});
+  bool get isClosed => _closed;
+
   Future<void> start() async {
+    if (_closed || _timer != null) throw StateError("控制会话不可重复启动");
     final initial = await read();
     final nonce = initial["nonce"];
     if (nonce is! String || !RegExp(r"^[0-9a-f]{32}$").hasMatch(nonce)) {
