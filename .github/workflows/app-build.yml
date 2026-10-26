@@ -56,12 +56,14 @@ jobs:
           CONTROLLER_BASE_URL: ${{ secrets.CONTROLLER_BASE_URL }}
           CONTROLLER_DOWNLOAD_URL: ${{ secrets.CONTROLLER_DOWNLOAD_URL }}
           CONTROLLER_APPLICATION_ID: ${{ secrets.CONTROLLER_APPLICATION_ID }}
+          PRIVATE_ARTIFACT_PASSWORD: ${{ secrets.PRIVATE_ARTIFACT_PASSWORD }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          test -n "$PRIVATE_ARTIFACT_PASSWORD" || { echo "Private artifact encryption is required"; exit 1; }
           export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/controller-release.jks"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
           chmod 600 "$ANDROID_KEYSTORE_PATH"
@@ -77,13 +79,15 @@ jobs:
           trap 'rm -f "$ANDROID_KEYSTORE_PATH" "$CONTROLLER_RUNTIME_CONFIG"' EXIT
           flutter build apk --release --dart-define-from-file="$CONTROLLER_RUNTIME_CONFIG"
           SIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
-          "$SIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
+          "$SIGNER" verify --verbose build/app/outputs/flutter-apk/app-release.apk
+          command -v 7z >/dev/null || sudo apt-get install -y p7zip-full
+          7z a -t7z -mhe=on -p"$PRIVATE_ARTIFACT_PASSWORD" "$RUNNER_TEMP/controller-private-build.7z" build/app/outputs/flutter-apk/app-release.apk >/dev/null
 
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pcflash-android
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          name: controller-private-build
+          path: ${{ runner.temp }}/controller-private-build.7z
           if-no-files-found: error
 
   ios:
