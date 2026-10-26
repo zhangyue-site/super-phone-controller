@@ -7,6 +7,7 @@ from .general_vision import observe
 from .dialogue import DENY
 WORKFLOW=WorkflowSpec('general.navigate','通用','画面导航',('task',),'general.verified')
 def parse_task(text):
+ if isinstance(text,str) and re.fullmatch(r'(?:请|帮我)?(?:打开|进入)支付宝',text.strip()):return text.strip()
  from .store_policy import enabled
  if enabled(text):return text
  if not isinstance(text,str) or not 1<=len(text)<=120 or re.search(r'下载|发送|发消息|转账|支付|付款|删除|卸载|购买|下单|发布|评论|点赞|授权|安装|adb|shell|https?://|[`;$<>\\\n\r]',text,re.I):return None
@@ -31,7 +32,7 @@ class GeneralNavigator(WechatNavigator):
  def _command(self,o,task):
   action=o.get('action')
   label=o.get('target_label')
-  if not isinstance(label,str) or not label.strip() or len(label)>120 or DENY.search(label):raise ValueError('导航目标标签无法确认或属于受限动作')
+  if not isinstance(label,str) or not label.strip() or len(label)>120 or (DENY.search(label) and not (label=='支付宝' and re.fullmatch(r'(?:请|帮我)?(?:打开|进入)支付宝',task))):raise ValueError('导航目标标签无法确认或属于受限动作')
   if o.get('safe') is not True:raise ValueError('画面目标不属于安全导航范围')
   box=o.get('bounds')
   if not isinstance(box,list) or len(box)!=4 or any(type(v)!=int for v in box):raise ValueError('导航目标缺少坐标')

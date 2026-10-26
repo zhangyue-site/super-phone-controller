@@ -15,6 +15,18 @@ class RelayTests(unittest.TestCase):
   self.tmp=tempfile.TemporaryDirectory();self.path=Path(self.tmp.name)/"relay.db"
   self.now=1.;self.r=Relay(self.path,lambda d:KEY,clock=lambda:self.now)
  def tearDown(self):self.r.close();self.tmp.cleanup()
+ def test_prearmed_connection_only_disarms_before_control(self):
+  self.r.attach("epaper-01","owner",receipt(hid=1))
+  p=self.r.poll("epaper-01","owner",NONCE)
+  self.assertEqual((p["seq"],p["op"]),(1,7))
+  with self.assertRaises(ValueError):self.r.offer("epaper-01",1,[0]*5)
+  with self.assertRaises(ValueError):self.r.ack("epaper-01","owner",NONCE,p["id"],receipt(1,7,8,1))
+  self.r.ack("epaper-01","owner",NONCE,p["id"],receipt(1,7,8,0))
+  with self.assertRaises(ValueError):self.r.offer("epaper-01",1,[0]*5)
+  self.r.offer("epaper-01",6,[0]*5)
+  self.assertEqual(self.r.poll("epaper-01","owner",NONCE)["op"],6)
+ def test_unsettled_initial_connection_refused(self):
+  with self.assertRaises(PermissionError):self.r.attach("epaper-01","owner",receipt(ready=0))
  def test_proof_required_and_single_owner(self):
   bad=receipt();bad["proof"]="00"*32
   with self.assertRaises(PermissionError):self.r.attach("epaper-01","owner",bad)

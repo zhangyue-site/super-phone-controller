@@ -29,7 +29,7 @@ class Relay:
  def attach(self,device,owner,receipt):
   if not isinstance(receipt,dict):raise PermissionError("receipt shape")
   nonce=receipt.get("nonce","");self._verify(device,nonce,receipt)
-  if receipt["seq"]!=0 or receipt["busy"] or receipt["hid"]:raise PermissionError("fresh safe connection required")
+  if receipt["seq"]!=0 or receipt["op"]!=0 or receipt["result"]!=0 or receipt["busy"] or not receipt["ready"]:raise PermissionError("fresh idle connection required")
   with self.lock:
    old=self.sessions.get(device)
    if old and self.clock()-old["touched"]>15:
@@ -42,7 +42,8 @@ class Relay:
    try:
     with self.db:self.db.execute("INSERT INTO connections VALUES(?,?)",(nonce,device))
    except sqlite3.IntegrityError as error:raise PermissionError("retired BLE nonce") from error
-   self.sessions[device]=dict(nonce=nonce,owner=owner,seq=0,touched=self.clock(),issued=None,hid=0)
+   self.sessions[device]=dict(nonce=nonce,owner=owner,seq=0,touched=self.clock(),issued=None,hid=receipt["hid"],safety_reset=bool(receipt["hid"]))
+   if receipt["hid"]:self.offer(device,7,[0]*5)
    return {"state":"connected","nonce":nonce}
  def _session(self,device,owner=None,nonce=None):
   s=self.sessions.get(device)
@@ -61,6 +62,7 @@ class Relay:
   with self.lock:
    s=self._session(device)
    if s["issued"] or self.db.execute("SELECT 1 FROM actions WHERE device=? AND state=\"queued\"",(device,)).fetchone():raise ValueError("action pending")
+   if s.get("safety_reset") and op!=7:raise ValueError("safe reset must be acknowledged first")
    if op in (1,2,3,4) and not s["hid"]:raise ValueError("HID not armed")
    if s["seq"]>=0xffffffff:raise ValueError("sequence exhausted")
    i=uuid.uuid4().hex;s["seq"]+=1
@@ -89,6 +91,7 @@ class Relay:
    if success and r["op"] in (6,7) and (not receipt["ready"] or receipt["hid"]!=(1 if r["op"]==6 else 0)):raise ValueError("USB mode not settled")
    with self.db:self.db.execute("UPDATE actions SET state=?,receipt=? WHERE id=?",("acknowledged" if success else "failed",json.dumps(receipt),ident))
    s.update(issued=None,touched=self.clock(),hid=receipt["hid"])
+   if success and r["op"]==7:s["safety_reset"]=False
    if not success or r["op"]==5:del self.sessions[device]
    return {"state":"acknowledged" if success else "failed","verified":False}
  def status(self,ident):
