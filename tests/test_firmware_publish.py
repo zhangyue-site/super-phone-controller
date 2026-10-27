@@ -34,7 +34,7 @@ class PublishTests(unittest.TestCase):
  def test_activation_keeps_previous_release(self):
   with tempfile.TemporaryDirectory() as temp,patch.object(firmware,'ROOT',Path(temp)):
    old=firmware.publish('epaper-01',image(),'a'*40,activate=True)
-   firmware.publish('epaper-01',image('2026.10.21-cmd2'),'b'*40,activate=True)
+   firmware.publish('epaper-01',image('2026.10.22-cmd2'),'b'*40,activate=True)
    self.assertEqual(json.loads((Path(temp)/'epaper-01/previous.json').read_text())['sha256'],old['sha256'])
 
  def test_old_cloud_build_cannot_replace_newer_current(self):
@@ -42,3 +42,11 @@ class PublishTests(unittest.TestCase):
    new=firmware.publish('epaper-01',image('2026.10.21-new'),'b'*40,activate=True,generation=20)
    with self.assertRaises(ValueError):firmware.publish('epaper-01',image('2026.10.21-old'),'a'*40,activate=True,generation=19)
    self.assertEqual(firmware.release('epaper-01')[0]['sha256'],new['sha256'])
+
+ def test_date_fence_rejects_older_unordered_and_same_day_images(self):
+  with tempfile.TemporaryDirectory() as temp,patch.object(firmware,'ROOT',Path(temp)):
+   new=firmware.publish('epaper-01',image('2026.10.26-touch-slots2'),'a'*40,activate=True,generation=100)
+   for version in ('2026.10.22-server1','legacy','2026.10.26-other'):
+    with self.subTest(version=version),self.assertRaises(ValueError):
+     firmware.publish('epaper-01',image(version),'b'*40,activate=True,generation=101)
+    self.assertEqual(firmware.release('epaper-01')[0]['sha256'],new['sha256'])

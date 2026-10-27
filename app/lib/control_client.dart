@@ -58,6 +58,11 @@ class ControlClient {
   }
 
   Future<void> authorize(BleOtaService service) async {
+    void checkOpen() {
+      if (_closed) throw StateError('控制连接已结束');
+    }
+
+    checkOpen();
     if (service.supportsLocalControl) _http ??= http.Client();
     if (_http == null) {
       if (!service.supportsControl) {
@@ -67,8 +72,10 @@ class ControlClient {
       return;
     }
     final info = await service.readInfo();
+    checkOpen();
     if (info == null) throw const FormatException('请先连接控制板');
     final challenge = await _post('challenge', {'device': info.device});
+    checkOpen();
     final nonce = challenge['challenge'];
     if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
       throw const FormatException('授权挑战无效');
@@ -76,11 +83,13 @@ class ControlClient {
     final bytes = Uint8List.fromList(List.generate(
         32, (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16)));
     final proof = await service.signDownloadChallenge(bytes);
+    checkOpen();
     final grant = await _post('authorize', {
       'device': info.device,
       'challenge': nonce,
       'proof': proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
     });
+    checkOpen();
     final ticket = grant['ticket'];
     final ttl = grant['expiresIn'];
     if (grant['scope'] != 'phone-commands' ||
@@ -95,7 +104,7 @@ class ControlClient {
     _expires = DateTime.now().add(Duration(seconds: ttl));
     if (service.supportsLocalControl) {
       _relayError = null;
-      _relay = CloudRelay(
+      final relay = CloudRelay(
         post: (p, b) => _post('relay:$p', b, auth: true),
         read: service.readLocalControl,
         write: service.writeLocalControl,
@@ -104,7 +113,12 @@ class ControlClient {
           _relayError = e;
         },
       );
-      await _relay!.start();
+      _relay = relay;
+      await relay.start();
+      if (_closed) {
+        await relay.close();
+        checkOpen();
+      }
     }
   }
 

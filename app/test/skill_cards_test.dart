@@ -23,6 +23,7 @@ void main() {
   testWidgets('skill buttons show descriptions and prepare without auto-confirm',(tester)async {
     final b=RpcBoard();
     await tester.pumpWidget(MaterialApp(home:ControlScreen(service:b)));
+    await tester.pumpAndSettle();
     expect(find.textContaining('当前支持打开微信找联系人'),findsNothing);
     expect(find.text('共享整屏给 AI'),findsNothing);
     await tester.tap(find.text('查看专项技能'));await tester.pumpAndSettle();

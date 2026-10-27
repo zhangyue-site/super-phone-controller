@@ -65,6 +65,13 @@ def image_version(data):
     return version
 
 
+def _release_day(version):
+    from datetime import date
+    match=re.fullmatch(r'(\d{4})\.(\d{2})\.(\d{2})-[a-zA-Z0-9._-]+',version or '')
+    if not match:raise ValueError('unorderable firmware version')
+    try:return date(*(int(x) for x in match.groups()))
+    except ValueError as error:raise ValueError('invalid firmware date') from error
+
 def publish(device,data,source,activate=False,generation=0):
     """SSH/CLI-only publishing; no public upload route. Stage unless activated."""
     import fcntl,tempfile,time
@@ -95,6 +102,9 @@ def publish(device,data,source,activate=False,generation=0):
         if activate:
             current=folder/'current.json'
             previous=json.loads(current.read_text()) if current.exists() else {}
+            if previous and previous.get('sha256')!=sha:
+                if _release_day(version)<=_release_day(previous.get('version')):
+                    raise ValueError('firmware downgrade or ambiguous version rejected')
             previous_generation=previous.get('activationGeneration',0)
             if previous_generation>0 and generation<=previous_generation and previous.get('sha256')!=sha:raise ValueError('stale cloud build')
             entry=dict(entry,activationGeneration=max(generation,previous_generation))

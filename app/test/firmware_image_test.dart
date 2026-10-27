@@ -24,6 +24,13 @@ Uint8List fixture() {
 }
 
 void main() {
+  test('upgrade fence rejects older, unknown and ambiguous versions', () {
+    FirmwareImage target(String version) => FirmwareImage(version, 'a' * 64, 'b' * 64);
+    for (final version in ['2026.10.22-server1', 'legacy', '2026.10.26-other', '2026.10.26-touch-slots2']) {
+      expect(() => target(version).assertUpgradeAllowed('2026.10.26-touch-slots2'), throwsStateError);
+    }
+    expect(() => target('2026.10.27-new').assertUpgradeAllowed('2026.10.26-touch-slots2'), returnsNormally);
+  });
   test('valid S3 controller image is accepted', () {
     expect(FirmwareImage.parse(fixture()).version, 'test-1');
   });

@@ -3,6 +3,29 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pcflash/cloud_relay.dart';
 
 void main() {
+  test('late attach after close detaches without polling or writing', () async {
+    final attach = Completer<Map<String, dynamic>>();
+    final events = <String>[];
+    var writes = 0;
+    final relay = CloudRelay(
+      post: (path, body) async {
+        events.add(path);
+        if (path == 'attach') return attach.future;
+        return {};
+      },
+      read: () async => {'nonce': '12121212121212121212121212121212'},
+      write: (_) async { writes++; },
+      disconnect: () async {},
+      onError: (_) {},
+    );
+    final start = relay.start();
+    await Future<void>.delayed(Duration.zero);
+    await relay.close();
+    attach.complete({});
+    await expectLater(start, throwsStateError);
+    expect(events, ['attach', 'detach']);
+    expect(writes, 0);
+  });
   test('one ATT write even when cloud ACK fails; disconnects', () async {
     var writes = 0, disconnected = 0;
     final events = <String>[];

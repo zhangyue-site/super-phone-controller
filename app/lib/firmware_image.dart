@@ -9,6 +9,25 @@ class FirmwareImage {
   const FirmwareImage(this.version, this.sha, this.elfSha256);
   static const maxSize = 0x340000;
 
+  /// Reject unknown or same-day ordering until a signed release sequence exists.
+  void assertUpgradeAllowed(String currentVersion) {
+    DateTime day(String value) {
+      final match = RegExp(r'^(\d{4})\.(\d{2})\.(\d{2})-[a-zA-Z0-9._-]+$').firstMatch(value);
+      if (match == null) throw StateError('无法比较固件版本，已停止更新');
+      final year = int.parse(match[1]!);
+      final month = int.parse(match[2]!);
+      final day = int.parse(match[3]!);
+      final result = DateTime.utc(year, month, day);
+      if (result.year != year || result.month != month || result.day != day) {
+        throw StateError('固件版本日期无效，已停止更新');
+      }
+      return result;
+    }
+    if (!day(version).isAfter(day(currentVersion))) {
+      throw StateError('目标固件不是可确认的较新版本，已停止更新');
+    }
+  }
+
   static FirmwareImage parse(Uint8List bytes) {
     void reject(String message) => throw FormatException(message);
     if (bytes.length < 4096 || bytes.length > maxSize) {

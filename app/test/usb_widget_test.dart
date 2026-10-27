@@ -30,8 +30,9 @@ void main() {
         snapshots++;
         return {'serial': 'AABBCCDDEEFF', 'session': 'AABBCCDDEEFF:$snapshots'};
       }
-      if (call.method == 'info')
+      if (call.method == 'info') {
         throw PlatformException(code: 'usb_proof_failed');
+      }
       return null;
     });
     messenger.setMockMethodCallHandler(ScreenShare.channel,

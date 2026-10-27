@@ -142,7 +142,13 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       _error = null;
     });
     try {
-      if (await ScreenShare.isActive()) return;
+      if (await ScreenShare.isActive()) {
+        if (mounted && widget.service.supportsLocalControl) {
+          await Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => ControlScreen(service: widget.service)));
+        }
+        return;
+      }
       if (!mounted) return;
       final accepted = automatic ||
           await showDialog<bool>(
@@ -174,6 +180,10 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       if (mounted) {
         setState(
             () => _screenStatus = const ScreenTaskStatus(capture: '正在启动共享'));
+        if (widget.service.supportsLocalControl) {
+          await Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => ControlScreen(service: widget.service)));
+        }
       }
     } catch (e) {
       if (mounted) setState(() => _error = '屏幕共享：$e');

@@ -24,7 +24,22 @@ class _ControlScreenState extends State<ControlScreen> {
   void initState() {
     super.initState();
     _client = widget.client ?? ControlClient();
+    unawaited(_connect());
     _timer = Timer.periodic(const Duration(seconds: 2), (_) => _poll());
+  }
+
+  Future<void> _connect() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await _client.authorize(widget.service);
+    } catch (e) {
+      if (mounted) setState(() => _error = '云端控制连接失败：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _poll() async {
@@ -223,8 +238,10 @@ class _ControlScreenState extends State<ControlScreen> {
         const Text('文字下发 · 确认后执行',
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        const Text(
-            'A 通过蓝牙把通用指令交给控制板与云端 AI。B 需经 USB 连接、保持解锁并在被控手机页面授权整屏共享及 HID 操作。控制板需要可访问云端的网络。'),
+        Text(_busy ? '正在连接云端控制…' : _client.authorized ? '云端控制已连接，可接收电脑或106任务' : '云端控制未连接'),
+        if (!_busy && !_client.authorized)
+          OutlinedButton(onPressed: _connect, child: const Text('重新连接云端控制')),
+        const Text('保持本页的控制连接，即可接收电脑或106任务。手机保持解锁并授权整屏共享，操作由控制板USB HID执行。'),
         OutlinedButton(
             onPressed: _busy || _stopping ? null : _loadSkills,
             child: const Text('查看专项技能')),

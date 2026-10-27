@@ -314,6 +314,7 @@ class BleOtaService {
       if (before == null || device == null) {
         throw StateError('请先更新控制板基础固件以支持重启确认');
       }
+      target.assertUpgradeAllowed(before.version);
       checkActive();
       yield const PushProgress(step: '连接设备', log: '设备连接就绪');
 

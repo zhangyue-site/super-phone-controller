@@ -28,6 +28,12 @@ class CloudRelay {
     }
     await post("attach", {"receipt": initial});
     _nonce = nonce;
+    if (_closed) {
+      try {
+        await post('detach', {'nonce': nonce});
+      } catch (_) {}
+      throw StateError('控制连接已结束');
+    }
     _timer = Timer.periodic(const Duration(milliseconds: 500), (_) => _tick());
   }
 
