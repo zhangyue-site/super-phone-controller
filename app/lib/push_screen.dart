@@ -141,7 +141,7 @@ class _PushScreenState extends State<PushScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface,
+        backgroundColor: AppTheme.colors(context).surface,
         title: const Text('中断推送？'),
         content: const Text('停止发送并断开连接。若板子已经完成校验并切换启动槽，中断无法撤销更新。'),
         actions: [
@@ -150,7 +150,8 @@ class _PushScreenState extends State<PushScreen> {
               child: const Text('继续推送')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('中断', style: TextStyle(color: AppTheme.danger)),
+            child: Text('中断',
+                style: TextStyle(color: AppTheme.colors(context).danger)),
           ),
         ],
       ),
@@ -166,8 +167,10 @@ class _PushScreenState extends State<PushScreen> {
   Widget build(BuildContext context) {
     final pct = _percent / 100.0;
     final color = _done
-        ? (_success ? AppTheme.accent : AppTheme.danger)
-        : AppTheme.accent;
+        ? (_success
+            ? AppTheme.colors(context).accent
+            : AppTheme.colors(context).danger)
+        : AppTheme.colors(context).accent;
 
     return PopScope(
       canPop: _done,
@@ -182,8 +185,8 @@ class _PushScreenState extends State<PushScreen> {
             if (!_done)
               TextButton(
                 onPressed: _confirmCancel,
-                child:
-                    const Text('中断', style: TextStyle(color: AppTheme.textDim)),
+                child: Text('中断',
+                    style: TextStyle(color: AppTheme.colors(context).textDim)),
               ),
           ],
         ),
@@ -203,22 +206,22 @@ class _PushScreenState extends State<PushScreen> {
               const SizedBox(height: 14),
               Center(
                 child: Text(_eta!,
-                    style:
-                        const TextStyle(color: AppTheme.textDim, fontSize: 13)),
+                    style: TextStyle(
+                        color: AppTheme.colors(context).textDim, fontSize: 13)),
               ),
             ],
             if (_done && _failMsg != null) ...[
               const SizedBox(height: 18),
               InfoBanner(
                   icon: Icons.error_outline,
-                  color: AppTheme.danger,
+                  color: AppTheme.colors(context).danger,
                   text: _failMsg!),
             ],
             if (_done && _success) ...[
               const SizedBox(height: 18),
-              const InfoBanner(
+              InfoBanner(
                 icon: Icons.check_circle_outline,
-                color: AppTheme.accent,
+                color: AppTheme.colors(context).accent,
                 text: '已重新连接同一控制板，确认新版本启动且自检通过。',
               ),
             ],
@@ -226,9 +229,9 @@ class _PushScreenState extends State<PushScreen> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: AppTheme.surface,
+                color: AppTheme.colors(context).surface,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: AppTheme.border),
+                border: Border.all(color: AppTheme.colors(context).border),
               ),
               child: StepList(steps: [
                 for (var i = 0; i < _steps.length; i++)
@@ -244,19 +247,19 @@ class _PushScreenState extends State<PushScreen> {
             TextButton.icon(
               onPressed: () => setState(() => _showLogs = !_showLogs),
               icon: Icon(_showLogs ? Icons.expand_less : Icons.expand_more,
-                  size: 18, color: AppTheme.textDim),
+                  size: 18, color: AppTheme.colors(context).textDim),
               label: Text('日志（${_logs.length}）',
-                  style:
-                      const TextStyle(color: AppTheme.textDim, fontSize: 13)),
+                  style: TextStyle(
+                      color: AppTheme.colors(context).textDim, fontSize: 13)),
             ),
             if (_showLogs)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0A0D11),
+                  color: AppTheme.colors(context).surfaceHi,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppTheme.border),
+                  border: Border.all(color: AppTheme.colors(context).border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -266,7 +269,7 @@ class _PushScreenState extends State<PushScreen> {
                         padding: const EdgeInsets.symmetric(vertical: 2),
                         child: Text(l,
                             style: AppTheme.mono.copyWith(
-                                color: AppTheme.textDim,
+                                color: AppTheme.colors(context).textDim,
                                 fontSize: 11,
                                 height: 1.5)),
                       ),

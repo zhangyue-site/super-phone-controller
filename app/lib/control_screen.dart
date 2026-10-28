@@ -4,9 +4,9 @@ import 'ble_ota_service.dart';
 import 'control_client.dart';
 
 class ControlScreen extends StatefulWidget {
-  final BleOtaService service;
+  final BleOtaService? service;
   final ControlClient? client;
-  const ControlScreen({super.key, required this.service, this.client});
+  const ControlScreen({super.key, this.service, this.client});
   @override
   State<ControlScreen> createState() => _ControlScreenState();
 }
@@ -34,7 +34,7 @@ class _ControlScreenState extends State<ControlScreen> {
       _error = null;
     });
     try {
-      await _client.authorize(widget.service);
+      await _authorize();
     } catch (e) {
       if (mounted) setState(() => _error = '云端控制连接失败：$e');
     } finally {
@@ -42,7 +42,19 @@ class _ControlScreenState extends State<ControlScreen> {
     }
   }
 
+  Future<void> _authorize() async {
+    if (_client.authorized) return;
+    final service = widget.service;
+    if (service == null) throw StateError('控制连接已失效，请返回重新绑定被控手机');
+    await _client.authorize(service);
+  }
+
   Future<void> _poll() async {
+    try {
+      await _client.refresh();
+    } catch (e) {
+      if (mounted) setState(() => _error = '连接续期失败：$e');
+    }
     if (_polling ||
         _busy ||
         _stopping ||
@@ -82,7 +94,7 @@ class _ControlScreenState extends State<ControlScreen> {
         if (operation != 'prepare') {
           throw const FormatException('授权失效，请重新生成计划后确认');
         }
-        await _client.authorize(widget.service);
+        await _authorize();
       }
       if (generation != _generation) return;
       final result = await _client.command(operation,
@@ -110,7 +122,7 @@ class _ControlScreenState extends State<ControlScreen> {
       _error = null;
     });
     try {
-      if (!_client.authorized) await _client.authorize(widget.service);
+      if (!_client.authorized) await _authorize();
       final result = await _client.command('stop');
       if (mounted && generation == _generation) {
         setState(() {
@@ -133,7 +145,7 @@ class _ControlScreenState extends State<ControlScreen> {
       _error = null;
     });
     try {
-      if (!_client.authorized) await _client.authorize(widget.service);
+      if (!_client.authorized) await _authorize();
       if (generation != _generation) return;
       final result = await _client.command('skills');
       if (mounted && generation == _generation) {
@@ -238,13 +250,20 @@ class _ControlScreenState extends State<ControlScreen> {
         const Text('文字下发 · 确认后执行',
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        Text(_busy ? '正在连接云端控制…' : _client.authorized ? '云端控制已连接，可接收电脑或106任务' : '云端控制未连接'),
+        Text(_busy
+            ? '正在连接…'
+            : _client.authorized
+                ? '已连接，可发送任务'
+                : '控制连接已结束'),
         if (!_busy && !_client.authorized)
           OutlinedButton(onPressed: _connect, child: const Text('重新连接云端控制')),
-        const Text('保持本页的控制连接，即可接收电脑或106任务。手机保持解锁并授权整屏共享，操作由控制板USB HID执行。'),
-        OutlinedButton(
-            onPressed: _busy || _stopping ? null : _loadSkills,
-            child: const Text('查看专项技能')),
+        Text(_client.isPaired
+            ? '目标设备：${_client.deviceId}。此手机仅发送命令，无需共享本机屏幕。'
+            : '任务经控制板执行；请保持被控手机解锁并开启屏幕共享。'),
+        if (!_client.isPaired)
+          OutlinedButton(
+              onPressed: _busy || _stopping ? null : _loadSkills,
+              child: const Text('查看专项技能')),
         for (final skill in _skills)
           Card(
               child: Padding(

@@ -1,6 +1,7 @@
 import 'controller_config.dart';
 import 'dart:async';
 import 'cloud_relay.dart';
+import 'screen_share.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
@@ -16,7 +17,109 @@ class ControlClient {
   BleOtaService? _board;
   String? _ticket;
   DateTime? _expires;
+  BleOtaService? _relayBoard;
+  bool _paired = false, _refreshing = false;
+  Future<void>? _closing;
+  String? deviceId;
+  Future<void> Function(bool hid)? onModeChange;
   ControlClient({http.Client? client}) : _http = client;
+  bool get isPaired => _paired;
+
+  Future<void> renewCapture(String usbSession) async {
+    if (!authorized || _paired || _relay == null || _ticket == null) {
+      throw StateError('被控端中继未连接');
+    }
+    await ScreenShare.channel.invokeMethod<void>('renewCapture', {
+      'controlTicket': _ticket,
+      'usbSession': usbSession,
+    });
+  }
+
+  Future<void> pair(String code) async {
+    if (_closed ||
+        _ticket != null ||
+        !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(code)) {
+      throw const FormatException('请粘贴被控手机生成的完整连接码');
+    }
+    _http ??= http.Client();
+    final grant = await _post('pair-redeem', {'code': code});
+    final ticket = grant['ticket'], device = grant['device'];
+    if (_closed ||
+        grant['scope'] != 'phone-commands' ||
+        ticket is! String ||
+        !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket) ||
+        device is! String ||
+        !RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(device) ||
+        grant['expiresIn'] != 300) {
+      throw const FormatException('连接授权无效');
+    }
+    _paired = true;
+    _ticket = ticket;
+    deviceId = device;
+    _expires = DateTime.now().add(const Duration(seconds: 300));
+  }
+
+  Future<Map<String, dynamic>> pairingCode() async {
+    if (!authorized || _paired || _relay == null) {
+      throw StateError('请先建立被控手机中继');
+    }
+    return _post('pair-issue', {}, auth: true);
+  }
+
+  Future<void> revokeControllers() async {
+    if (!canReadStatus || _paired) throw StateError('被控端连接已结束');
+    await _post('pair-revoke', {}, auth: true);
+  }
+
+  Future<void> refresh() async {
+    if (_closed ||
+        _refreshing ||
+        !authorized ||
+        _expires == null ||
+        _expires!.difference(DateTime.now()).inSeconds > 90) {
+      return;
+    }
+    _refreshing = true;
+    try {
+      Map<String, dynamic> result;
+      if (_paired) {
+        result = await _post('pair-renew', {}, auth: true);
+      } else {
+        final board = _relayBoard;
+        if (board == null) return;
+        final info = await board.readInfo();
+        if (info == null || info.device != deviceId) {
+          throw StateError('控制板身份已改变');
+        }
+        final challenge = await _post('challenge', {'device': info.device});
+        final nonce = challenge['challenge'];
+        if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
+          throw const FormatException('授权挑战无效');
+        }
+        final proof = await board.signDownloadChallenge(Uint8List.fromList(
+            List.generate(
+                32,
+                (i) =>
+                    int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16))));
+        result = await _post(
+            'renew',
+            {
+              'device': info.device,
+              'challenge': nonce,
+              'proof':
+                  proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+            },
+            auth: true);
+      }
+      if (result['scope'] != 'phone-commands' || result['expiresIn'] != 300) {
+        throw const FormatException('续期授权无效');
+      }
+      if (!_closed) _expires = DateTime.now().add(const Duration(seconds: 300));
+    } finally {
+      _refreshing = false;
+    }
+  }
+
   bool get canReadStatus =>
       !_closed &&
       (_board != null ||
@@ -74,6 +177,7 @@ class ControlClient {
     final info = await service.readInfo();
     checkOpen();
     if (info == null) throw const FormatException('请先连接控制板');
+    deviceId = info.device;
     final challenge = await _post('challenge', {'device': info.device});
     checkOpen();
     final nonce = challenge['challenge'];
@@ -103,8 +207,10 @@ class ControlClient {
     _ticket = ticket;
     _expires = DateTime.now().add(Duration(seconds: ttl));
     if (service.supportsLocalControl) {
+      _relayBoard = service;
       _relayError = null;
       final relay = CloudRelay(
+        beforeModeChange: onModeChange,
         post: (p, b) => _post('relay:$p', b, auth: true),
         read: service.readLocalControl,
         write: service.writeLocalControl,
@@ -149,12 +255,14 @@ class ControlClient {
         auth: true);
   }
 
-  void close() {
-    if (_closed) return;
+  void close() => unawaited(shutdown());
+
+  Future<void> shutdown() {
+    if (_closing != null) return _closing!;
     _closed = true;
     final relay = _relay;
     _relay = null;
-    unawaited(() async {
+    return _closing = () async {
       try {
         if (relay != null) await relay.close();
       } finally {
@@ -163,6 +271,6 @@ class ControlClient {
         _board = null;
         _http?.close();
       }
-    }());
+    }();
   }
 }

@@ -36,7 +36,11 @@ class Gateway:
      return packet
    state=self.remote.board_status(device,t["session"],t["sequence"])
    if state["op"]!="wait":
-    self.relay.offer(device,5,[0]*5);return self.relay.poll(device,owner,nonce)
+    if state["op"]=="done":
+     # Verified completion releases HID while preserving the authenticated target connection.
+     t["normalComplete"]=self.relay.offer(device,7,[0]*5)
+    else:self.relay.offer(device,5,[0]*5)
+    return self.relay.poll(device,owner,nonce)
    cmd=self.remote.c.mailbox.poll(device,t["session"],t["sequence"],"absolute-v1")
    if cmd["op"] in ("wait","done"):return packet
    if cmd["op"]=="hid_home":op=1;args=[0]*5
@@ -57,6 +61,9 @@ class Gateway:
     output="HID_HOME_REPORT_SENT" if cmd["op"]=="hid_home" else "HID_POINTER_REPORT_SENT"
     self.remote.c.mailbox.ack(device,t["session"],t["sequence"],cmd["id"],ok,output if ok else "","" if ok else "input_failed")
     t["command"]=None;t["action"]=None
+   if result["state"]=="acknowledged" and receipt["op"]==7 and t.get("normalComplete")==ident:
+    # Relay.ack has already authenticated hid=0, ready=1 and the exact issued sequence.
+    t.update(job=None,action=None,command=None,normalComplete=None,sequence=t["sequence"]+1)
    if receipt["op"]==5 or result["state"]=="failed":self.remote.stop_device(device);self.turns.pop(device,None)
    return result
  def detach(self,device,owner,nonce):

@@ -327,7 +327,8 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
               label: const Text('手机控制'))
         ],
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(22),
+          preferredSize: Size.fromHeight(
+              MediaQuery.textScalerOf(context).scale(12) * 1.5 + 10),
           child: Padding(
             padding: const EdgeInsets.only(left: 16, bottom: 10),
             child: Align(
@@ -336,8 +337,10 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
                 _deviceVersion.isEmpty
                     ? '目标设备 · 版本待核实'
                     : '目标设备 · 当前 $_deviceVersion',
-                style: AppTheme.mono
-                    .copyWith(color: AppTheme.textDim, fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTheme.mono.copyWith(
+                    color: AppTheme.colors(context).textDim, fontSize: 12),
               ),
             ),
           ),
@@ -355,7 +358,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
           if (_error != null) ...[
             InfoBanner(
                 icon: Icons.error_outline,
-                color: AppTheme.danger,
+                color: AppTheme.colors(context).danger,
                 text: _error!),
             const SizedBox(height: 16),
           ],
@@ -430,9 +433,9 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
           ],
           if (_info != null) ...[
             const SizedBox(height: 26),
-            const Text('已选固件',
+            Text('已选固件',
                 style: TextStyle(
-                    color: AppTheme.textDim,
+                    color: AppTheme.colors(context).textDim,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 0.6)),
@@ -487,10 +490,13 @@ class _SourceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = primary ? AppTheme.accent : AppTheme.text;
+    final accent = primary
+        ? AppTheme.colors(context).accent
+        : AppTheme.colors(context).text;
     return Material(
-      color:
-          primary ? AppTheme.accent.withValues(alpha: 0.07) : AppTheme.surface,
+      color: primary
+          ? AppTheme.colors(context).accent.withValues(alpha: 0.07)
+          : AppTheme.colors(context).surface,
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         onTap: onTap,
@@ -501,8 +507,8 @@ class _SourceCard extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
                 color: primary
-                    ? AppTheme.accent.withValues(alpha: 0.45)
-                    : AppTheme.border),
+                    ? AppTheme.colors(context).accent.withValues(alpha: 0.45)
+                    : AppTheme.colors(context).border),
           ),
           child: Row(
             children: [
@@ -519,14 +525,15 @@ class _SourceCard extends StatelessWidget {
                             fontWeight: FontWeight.w600)),
                     const SizedBox(height: 3),
                     Text(subtitle,
-                        style: const TextStyle(
-                            color: AppTheme.textDim, fontSize: 12)),
+                        style: TextStyle(
+                            color: AppTheme.colors(context).textDim,
+                            fontSize: 12)),
                   ],
                 ),
               ),
               if (onTap != null)
-                const Icon(Icons.chevron_right,
-                    color: AppTheme.textDim, size: 20),
+                Icon(Icons.chevron_right,
+                    color: AppTheme.colors(context).textDim, size: 20),
             ],
           ),
         ),
@@ -545,37 +552,39 @@ class _FirmwareDetail extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppTheme.surface,
+        color: AppTheme.colors(context).surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border),
+        border: Border.all(color: AppTheme.colors(context).border),
       ),
       child: Column(
         children: [
-          _row('文件', info.name, mono: false),
+          _row(context, '文件', info.name, mono: false),
           const SizedBox(height: 12),
-          _row('版本', info.version, mono: true),
+          _row(context, '版本', info.version, mono: true),
           const SizedBox(height: 12),
-          _row('大小', info.sizeText, mono: true),
+          _row(context, '大小', info.sizeText, mono: true),
           const SizedBox(height: 12),
-          _row('sha256', '${info.sha256.substring(0, 16)}…', mono: true),
+          _row(context, 'sha256', '${info.sha256.substring(0, 16)}…',
+              mono: true),
         ],
       ),
     );
   }
 
-  Widget _row(String k, String v, {required bool mono}) {
+  Widget _row(BuildContext context, String k, String v, {required bool mono}) {
     return Row(
       children: [
         SizedBox(
           width: 62,
           child: Text(k,
-              style: const TextStyle(color: AppTheme.textDim, fontSize: 13)),
+              style: TextStyle(
+                  color: AppTheme.colors(context).textDim, fontSize: 13)),
         ),
         Expanded(
           child: Text(
             v,
             style: (mono ? AppTheme.mono : const TextStyle())
-                .copyWith(color: AppTheme.text, fontSize: 13),
+                .copyWith(color: AppTheme.colors(context).text, fontSize: 13),
             overflow: TextOverflow.ellipsis,
           ),
         ),

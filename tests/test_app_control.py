@@ -27,7 +27,7 @@ class AppControlTests(http_tests.RemoteHttpTests):
   return self.request('/app-control/command',dict(operation=operation,**kw),extra={'Authorization':'Bearer '+ticket})
  def test_preview_confirm_claim_stop_and_private_result(self):
   ticket=self.grant()
-  code,plan=self.command(ticket,'prepare',text='打开微信找到测试联系人');self.assertEqual(code,200);self.assertEqual(plan['state'],'pending');self.assertFalse(self.mailbox.jobs)
+  code,plan=self.command(ticket,'prepare',text='打开微信找到李洋');self.assertEqual(code,200);self.assertEqual(plan['state'],'pending');self.assertFalse(self.mailbox.jobs)
   self.assertEqual(plan['reply'].count('请在两分钟内点击'),1)
   self.assertNotIn('/phone',self.command(ticket,'status')[1]['reply'])
   self.assertEqual(self.bridge('confirm',task_id=plan['task_id'])[0],409)
@@ -37,7 +37,7 @@ class AppControlTests(http_tests.RemoteHttpTests):
   self.assertEqual(self.request('/remote/status')[1]['op'],'cancelled')
   self.assertEqual(self.command(ticket,'status')[1]['state'],'stopped')
  def test_app_command_verified_visual_hid_result(self):
-  ticket=self.grant();_,plan=self.command(ticket,'prepare',text='打开微信找到测试联系人')
+  ticket=self.grant();_,plan=self.command(ticket,'prepare',text='打开微信找到李洋')
   self.command(ticket,'confirm',task_id=plan['task_id']);self.request('/remote/claim',{'ready':True})
   self.assertEqual(self.request('/remote/claim',{'ready':True})[1]['op'],'start')
   commands=[];barrier='';number=0;deadline=time.monotonic()+8
@@ -60,7 +60,7 @@ class AppControlTests(http_tests.RemoteHttpTests):
   self.assertEqual(commands,['hid_home','hid_pointer','hid_pointer','type_text'])
   self.assertEqual(self.command(ticket,'save',task_id=plan['task_id'])[0],200)
  def test_scope_expiry_supersession_and_revocation(self):
-  ticket=self.grant();_,plan=self.command(ticket,'prepare',text='打开微信找到测试联系人')
+  ticket=self.grant();_,plan=self.command(ticket,'prepare',text='打开微信找到李洋')
   self.assertEqual(self.command(self.ticket,'confirm',task_id=plan['task_id'])[0],403)
   newer=self.grant()
   self.assertEqual(self.command(ticket,'confirm',task_id=plan['task_id'])[0],403)
@@ -69,10 +69,66 @@ class AppControlTests(http_tests.RemoteHttpTests):
   self.assertEqual(self.remote.records[plan['task_id']]['state'],'error')
   self.control_auth.tickets[newer]=(0,'epaper-01','f'*64)
   self.assertEqual(self.command(newer,'status')[0],403)
+ def test_pairing_does_not_replace_relay_and_is_command_only(self):
+  relay=self.grant()
+  hdr={"Authorization":"Bearer "+relay}
+  code, issued=self.request("/app-control/pair-issue",{},extra=hdr)
+  self.assertEqual(code,200)
+  code, paired=self.request("/app-control/pair-redeem",{"code":issued["code"]})
+  self.assertEqual(code,200)
+  controller=paired["ticket"]
+  self.assertEqual(self.command(relay,"status")[0],200)
+  self.assertEqual(self.command(controller,"status")[0],200)
+  self.assertNotEqual(self.request("/app-relay/poll",{"nonce":"0"*32},extra={"Authorization":"Bearer "+controller})[0],200)
+  self.assertNotEqual(self.request("/app-control/pair-redeem",{"code":issued["code"]})[0],200)
+  self.assertNotEqual(self.request("/app-control/pair-issue",{},extra={"Authorization":"Bearer "+controller})[0],200)
+ def paired(self, parent):
+  code, issued=self.request('/app-control/pair-issue',{},extra={'Authorization':'Bearer '+parent});self.assertEqual(code,200)
+  code, grant=self.request('/app-control/pair-redeem',{'code':issued['code']});self.assertEqual(code,200)
+  return grant['ticket']
+ def test_paired_task_runs_and_target_revoke_cancels_it(self):
+  parent=self.grant();controller=self.paired(parent)
+  code,plan=self.command(controller,'prepare',text='打开微信找到李洋');self.assertEqual(code,200)
+  code,result=self.command(controller,'confirm',task_id=plan['task_id']);self.assertEqual((code,result['state']),(200,'queued'))
+  self.request('/remote/claim',{'ready':True})
+  self.assertEqual(self.request('/remote/claim',{'ready':True})[1]['op'],'start')
+  self.assertEqual(self.command(controller,'status')[1]['state'],'running')
+  code,result=self.request('/app-control/pair-revoke',{},extra={'Authorization':'Bearer '+parent})
+  self.assertEqual((code,result['state']),(200,'stopped'))
+  self.assertEqual(self.command(controller,'status')[0],403)
+  self.assertEqual(self.request('/remote/status')[1]['op'],'cancelled')
+  self.assertIn(self.remote.records[plan['task_id']]['state'],('stopped','error'))
+  self.assertEqual(self.command(parent,'status')[0],200)
+ def test_parent_renew_preserves_paired_identity_and_supersession_invalidates(self):
+  parent=self.grant();controller=self.paired(parent)
+  identity=app_control.controller_owner(controller)
+  old_expiry=self.control_auth.tickets[parent][0]
+  code,c=self.request('/app-control/challenge',{'device':'epaper-01'});self.assertEqual(code,200)
+  proof=hmac.new(b'synthetic-device-only',b'PCFLASH1\nepaper-01\n'+bytes.fromhex(c['challenge']),hashlib.sha256).hexdigest()
+  with patch('display_service.firmware.release',return_value=({'sha256':'f'*64,'version':'test','size':100},b'')):
+   code,result=self.request('/app-control/renew',{'device':'epaper-01','challenge':c['challenge'],'proof':proof},extra={'Authorization':'Bearer '+parent})
+  self.assertEqual(code,200);self.assertGreaterEqual(self.control_auth.tickets[parent][0],old_expiry)
+  self.assertEqual(app_control.controller_owner(controller),identity)
+  self.assertEqual(set(self.control_auth.tickets),{parent})
+  self.assertEqual(self.request('/app-control/pair-renew',{},extra={'Authorization':'Bearer '+controller})[0],200)
+  _,plan=self.command(controller,'prepare',text='打开微信找到李洋')
+  self.grant()
+  self.assertEqual(self.command(controller,'confirm',task_id=plan['task_id'])[0],403)
+  self.assertEqual(self.command(parent,'status')[0],403)
+ def test_pair_capability_cannot_relay_ota_renew_target_or_revoke(self):
+  parent=self.grant();controller=self.paired(parent);hdr={'Authorization':'Bearer '+controller}
+  with patch.dict('os.environ',{'EPAPER_RELAY_CONTROL':'1'}):
+   self.assertEqual(self.request('/app-relay/poll',{'nonce':'0'*32},extra=hdr)[0],403)
+  conn=http_tests.http.client.HTTPConnection(*self.server.server_address,timeout=4)
+  conn.request('GET','/app-ota/image',headers=hdr);response=conn.getresponse()
+  self.assertEqual(response.status,403);response.read();conn.close()
+  self.assertEqual(self.request('/app-control/renew',{'device':'epaper-01','challenge':'0'*64,'proof':'0'*64},extra=hdr)[0],403)
+  self.assertEqual(self.request('/app-control/pair-revoke',{},extra=hdr)[0],403)
+  self.assertEqual(self.request('/app-control/pair-issue',{},extra=hdr)[0],403)
  def test_no_injected_shell_or_owner(self):
   ticket=self.grant()
   self.assertEqual(self.command(ticket,'prepare',text='adb shell input tap 1 2')[0],409)
   self.assertEqual(self.command(ticket,'confirm')[0],409)
-  self.assertEqual(self.command(ticket,'prepare',text='打开微信找到测试联系人',device='other')[0],409)
+  self.assertEqual(self.command(ticket,'prepare',text='打开微信找到李洋',device='other')[0],409)
   self.assertEqual(self.request('/app-control/authorize',{'device':'epaper-01','challenge':'0'*64,'proof':'0'*64})[0],409)
 if __name__=='__main__':unittest.main()

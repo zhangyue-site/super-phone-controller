@@ -17,7 +17,8 @@ import 'widgets.dart';
 /// 设计取舍：不显示"连接中"这种阻塞态——BLE 扫描本身是流式的，用户要的是
 /// 立刻看到板子出现。所以扫描一进来就启动，列表随发现增长。
 class DeviceScreen extends StatefulWidget {
-  const DeviceScreen({super.key});
+  const DeviceScreen({super.key, this.targetOnly = false});
+  final bool targetOnly;
 
   @override
   State<DeviceScreen> createState() => _DeviceScreenState();
@@ -112,7 +113,8 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
   void _listenBluetooth() {
-    if (!mounted ||
+    if ((widget.targetOnly && !_legacyBle) ||
+        !mounted ||
         !_usbReady ||
         (_usb != null && !_legacyBle) ||
         _adapterSub != null) {
@@ -155,7 +157,9 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
   Future<void> _checkBluetooth() async {
-    if (!_usbReady || (_usb != null && !_legacyBle)) {
+    if ((widget.targetOnly && !_legacyBle) ||
+        !_usbReady ||
+        (_usb != null && !_legacyBle)) {
       return;
     }
     try {
@@ -181,7 +185,8 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
   Future<void> _startScan() async {
-    if (_scanning ||
+    if ((widget.targetOnly && !_legacyBle) ||
+        _scanning ||
         _opening ||
         !mounted ||
         !_usbReady ||
@@ -295,6 +300,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
       return UsbTargetScreen(
         key: ValueKey(usb.session),
         attachment: usb,
+        service: _svc,
         onLegacy: () {
           _routeLease.select(usb);
           setState(() => _legacyBle = true);
@@ -306,6 +312,28 @@ class _DeviceScreenState extends State<DeviceScreen> {
     }
     if (!_usbReady) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (widget.targetOnly && !_legacyBle) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('被控手机')),
+        body: ListView(padding: const EdgeInsets.all(24), children: [
+          const Icon(Icons.usb, size: 48),
+          const SizedBox(height: 20),
+          Text('等待连接USB控制板', style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 12),
+          const Text('请用USB连接控制板。识别后会进入被控手机屏幕共享，请按系统提示授权。'),
+          if (_error != null) ...[
+            const SizedBox(height: 16),
+            Text(_error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ],
+          const SizedBox(height: 20),
+          OutlinedButton.icon(
+              onPressed: _readUsb,
+              icon: const Icon(Icons.refresh),
+              label: const Text('重新检查USB连接')),
+        ]),
+      );
     }
     final devices = _sorted;
     return Scaffold(
@@ -336,7 +364,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: InfoBanner(
                 icon: Icons.bluetooth_disabled,
-                color: AppTheme.danger,
+                color: AppTheme.colors(context).danger,
                 text: _error!,
               ),
             ),
@@ -380,7 +408,9 @@ class _ScanBar extends StatelessWidget {
             child: Text(
               scanning ? '正在扫描附近设备…' : '扫描已停止 · 发现 $count 个',
               style: TextStyle(
-                color: scanning ? AppTheme.accent : AppTheme.textDim,
+                color: scanning
+                    ? AppTheme.colors(context).accent
+                    : AppTheme.colors(context).textDim,
                 fontSize: 14,
               ),
             ),
@@ -388,7 +418,7 @@ class _ScanBar extends StatelessWidget {
           TextButton(
             onPressed: onToggle,
             child: Text(scanning ? '停止' : '扫描',
-                style: const TextStyle(color: AppTheme.accent)),
+                style: TextStyle(color: AppTheme.colors(context).accent)),
           ),
         ],
       ),
@@ -419,13 +449,13 @@ class _DeviceCard extends StatelessWidget {
     final (title, version) = _splitName(rawName);
     final rssi = result.rssi;
     final (label, color) = rssi > -60
-        ? ('强', AppTheme.accent)
+        ? ('强', AppTheme.colors(context).accent)
         : rssi > -75
-            ? ('中', AppTheme.warn)
-            : ('弱', AppTheme.textDim);
+            ? ('中', AppTheme.colors(context).warn)
+            : ('弱', AppTheme.colors(context).textDim);
 
     return Material(
-      color: AppTheme.surface,
+      color: AppTheme.colors(context).surface,
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         onTap: onTap,
@@ -434,7 +464,7 @@ class _DeviceCard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppTheme.border),
+            border: Border.all(color: AppTheme.colors(context).border),
           ),
           child: Row(
             children: [
@@ -442,11 +472,11 @@ class _DeviceCard extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: AppTheme.surfaceHi,
+                  color: AppTheme.colors(context).surfaceHi,
                   borderRadius: BorderRadius.circular(11),
                 ),
-                child:
-                    const Icon(Icons.memory, color: AppTheme.accent, size: 22),
+                child: Icon(Icons.memory,
+                    color: AppTheme.colors(context).accent, size: 22),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -456,15 +486,16 @@ class _DeviceCard extends StatelessWidget {
                     Text(title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: AppTheme.text,
+                        style: TextStyle(
+                            color: AppTheme.colors(context).text,
                             fontSize: 16,
                             fontWeight: FontWeight.w600)),
                     if (version.isNotEmpty) ...[
                       const SizedBox(height: 3),
                       Text(version,
-                          style: AppTheme.mono
-                              .copyWith(color: AppTheme.textDim, fontSize: 12)),
+                          style: AppTheme.mono.copyWith(
+                              color: AppTheme.colors(context).textDim,
+                              fontSize: 12)),
                     ],
                   ],
                 ),
@@ -480,8 +511,8 @@ class _DeviceCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(width: 6),
-              const Icon(Icons.chevron_right,
-                  color: AppTheme.textDim, size: 20),
+              Icon(Icons.chevron_right,
+                  color: AppTheme.colors(context).textDim, size: 20),
             ],
           ),
         ),
@@ -506,12 +537,13 @@ class _EmptyState extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(scanning ? Icons.search : Icons.bluetooth_searching,
-                size: 56, color: AppTheme.textDim.withValues(alpha: 0.5)),
+                size: 56,
+                color: AppTheme.colors(context).textDim.withValues(alpha: 0.5)),
             const SizedBox(height: 20),
             Text(
               scanning ? '正在寻找板子…' : '还没发现设备',
-              style: const TextStyle(
-                  color: AppTheme.text,
+              style: TextStyle(
+                  color: AppTheme.colors(context).text,
                   fontSize: 17,
                   fontWeight: FontWeight.w500),
             ),
@@ -521,11 +553,13 @@ class _EmptyState extends StatelessWidget {
                   onPressed: onRetry,
                   icon: const Icon(Icons.refresh),
                   label: const Text('重新寻找控制板')),
-            const Text(
+            Text(
               '确认板子已上电，广播名以 PhoneCtl- 开头。\n如果刚刷完固件，等它重启完成再扫。',
               textAlign: TextAlign.center,
-              style:
-                  TextStyle(color: AppTheme.textDim, fontSize: 13, height: 1.6),
+              style: TextStyle(
+                  color: AppTheme.colors(context).textDim,
+                  fontSize: 13,
+                  height: 1.6),
             ),
           ],
         ),

@@ -3,10 +3,10 @@ import 'theme.dart';
 
 /// 呼吸的圆点，表示"正在进行的动作"。比转圈更轻，不抢视线。
 class PulsingDot extends StatefulWidget {
-  final Color color;
+  final Color? color;
   final double size;
 
-  const PulsingDot({super.key, this.color = AppTheme.accent, this.size = 10});
+  const PulsingDot({super.key, this.color, this.size = 10});
 
   @override
   State<PulsingDot> createState() => _PulsingDotState();
@@ -17,7 +17,18 @@ class _PulsingDotState extends State<PulsingDot>
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),
-  )..repeat(reverse: true);
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _c.stop();
+      _c.value = 1;
+    } else if (!_c.isAnimating) {
+      _c.repeat(reverse: true);
+    }
+  }
 
   @override
   void dispose() {
@@ -33,7 +44,8 @@ class _PulsingDotState extends State<PulsingDot>
         width: widget.size,
         height: widget.size,
         decoration: BoxDecoration(
-          color: widget.color.withValues(alpha: 0.35 + 0.65 * _c.value),
+          color: (widget.color ?? AppTheme.colors(context).accent)
+              .withValues(alpha: 0.35 + 0.65 * _c.value),
           shape: BoxShape.circle,
         ),
       ),
@@ -44,17 +56,18 @@ class _PulsingDotState extends State<PulsingDot>
 class InfoBanner extends StatelessWidget {
   final IconData icon;
   final String text;
-  final Color color;
+  final Color? color;
 
   const InfoBanner({
     super.key,
     required this.icon,
     required this.text,
-    this.color = AppTheme.warn,
+    this.color,
   });
 
   @override
   Widget build(BuildContext context) {
+    final color = this.color ?? AppTheme.colors(context).warn;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
@@ -93,14 +106,15 @@ class StepList extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 7),
             child: Row(
               children: [
-                _marker(steps[i].$2),
+                _marker(context, steps[i].$2),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     steps[i].$1,
                     style: TextStyle(
-                      color:
-                          steps[i].$2 == 0 ? AppTheme.textDim : AppTheme.text,
+                      color: steps[i].$2 == 0
+                          ? AppTheme.colors(context).textDim
+                          : AppTheme.colors(context).text,
                       fontSize: 14,
                       fontWeight:
                           steps[i].$2 == 1 ? FontWeight.w600 : FontWeight.w400,
@@ -115,14 +129,15 @@ class StepList extends StatelessWidget {
     );
   }
 
-  Widget _marker(int st) {
+  Widget _marker(BuildContext context, int st) {
     if (st == 2) {
       return Container(
         width: 18,
         height: 18,
-        decoration:
-            const BoxDecoration(color: AppTheme.accent, shape: BoxShape.circle),
-        child: const Icon(Icons.check, size: 12, color: Color(0xFF06281B)),
+        decoration: BoxDecoration(
+            color: AppTheme.colors(context).accent, shape: BoxShape.circle),
+        child: Icon(Icons.check,
+            size: 12, color: AppTheme.colors(context).onAccent),
       );
     }
     if (st == 1) {
@@ -131,7 +146,7 @@ class StepList extends StatelessWidget {
         height: 18,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: AppTheme.accent, width: 2),
+          border: Border.all(color: AppTheme.colors(context).accent, width: 2),
         ),
       );
     }
@@ -140,7 +155,7 @@ class StepList extends StatelessWidget {
       height: 18,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        border: Border.all(color: AppTheme.border, width: 1.5),
+        border: Border.all(color: AppTheme.colors(context).border, width: 1.5),
       ),
     );
   }
@@ -151,18 +166,19 @@ class RingProgress extends StatelessWidget {
   final double value; // 0..1
   final String center;
   final String? subtitle;
-  final Color color;
+  final Color? color;
 
   const RingProgress({
     super.key,
     required this.value,
     required this.center,
     this.subtitle,
-    this.color = AppTheme.accent,
+    this.color,
   });
 
   @override
   Widget build(BuildContext context) {
+    final color = this.color ?? AppTheme.colors(context).accent;
     return SizedBox(
       width: 176,
       height: 176,
@@ -174,11 +190,13 @@ class RingProgress extends StatelessWidget {
             height: 176,
             child: TweenAnimationBuilder<double>(
               tween: Tween(begin: 0, end: value.clamp(0, 1)),
-              duration: const Duration(milliseconds: 220),
+              duration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 220),
               builder: (_, v, __) => CircularProgressIndicator(
                 value: v,
                 strokeWidth: 9,
-                backgroundColor: AppTheme.surfaceHi,
+                backgroundColor: AppTheme.colors(context).surfaceHi,
                 valueColor: AlwaysStoppedAnimation(color),
                 strokeCap: StrokeCap.round,
               ),
@@ -187,18 +205,26 @@ class RingProgress extends StatelessWidget {
           Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(center,
-                  style: TextStyle(
-                      color: color,
-                      fontSize: 40,
-                      fontWeight: FontWeight.w300,
-                      fontFeatures: const [FontFeature.tabularFigures()])),
+              SizedBox(
+                width: 144,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(center,
+                      maxLines: 1,
+                      style: TextStyle(
+                          color: color,
+                          fontSize: 40,
+                          fontWeight: FontWeight.w300,
+                          fontFeatures: const [FontFeature.tabularFigures()])),
+                ),
+              ),
               if (subtitle != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
                   child: Text(subtitle!,
-                      style: const TextStyle(
-                          color: AppTheme.textDim, fontSize: 12)),
+                      style: TextStyle(
+                          color: AppTheme.colors(context).textDim,
+                          fontSize: 12)),
                 ),
             ],
           ),

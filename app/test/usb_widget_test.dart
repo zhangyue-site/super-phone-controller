@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:flutter_blue_plus_platform_interface/flutter_blue_plus_platform_interface.dart';
-import 'package:pcflash/main.dart';
+import 'package:pcflash/device_screen.dart';
 import 'package:pcflash/usb_launch.dart';
 import 'package:pcflash/screen_share.dart';
 
@@ -19,16 +19,15 @@ final class NoBluetoothPlatform extends FlutterBluePlusPlatform {
 }
 
 void main() {
-  testWidgets('legacy mode rediscovers USB without another attach intent',
+  testWidgets(
+      'target USB identity failure stays read-only without legacy command fallback',
       (tester) async {
     FlutterBluePlusPlatform.instance = NoBluetoothPlatform();
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    var snapshots = 0;
     messenger.setMockMethodCallHandler(UsbLaunch.channel, (call) async {
       if (call.method == 'snapshot') {
-        snapshots++;
-        return {'serial': 'AABBCCDDEEFF', 'session': 'AABBCCDDEEFF:$snapshots'};
+        return {'serial': 'AABBCCDDEEFF', 'session': 'AABBCCDDEEFF:1'};
       }
       if (call.method == 'info') {
         throw PlatformException(code: 'usb_proof_failed');
@@ -37,20 +36,14 @@ void main() {
     });
     messenger.setMockMethodCallHandler(ScreenShare.channel,
         (call) async => '{"active":false,"capture":"未共享","task":""}');
-    await tester.pumpWidget(const PcFlashApp());
+    await tester
+        .pumpWidget(const MaterialApp(home: DeviceScreen(targetOnly: true)));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('通过蓝牙连接旧版控制板'));
-    await tester.pumpAndSettle();
-    const codec = StandardMethodCodec();
-    // ignore: deprecated_member_use
-    await messenger.handlePlatformMessage(UsbLaunch.channel.name,
-        codec.encodeMethodCall(const MethodCall('changed', null)), (_) {});
-    await tester.pump(const Duration(milliseconds: 500));
-    await tester.pump();
-    await tester.pump(const Duration(seconds: 9));
-    expect(snapshots, greaterThan(1));
-    expect(find.text('控制板升级'), findsOneWidget);
-    expect(find.text('被控手机 · 屏幕共享'), findsNothing);
+    expect(find.text('被控手机'), findsOneWidget);
+    expect(find.textContaining('连接未完成'), findsOneWidget);
+    expect(find.text('通过蓝牙连接旧版控制板'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('停止控制与共享'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     messenger.setMockMethodCallHandler(UsbLaunch.channel, null);
     messenger.setMockMethodCallHandler(ScreenShare.channel, null);
@@ -65,6 +58,7 @@ void main() {
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       var infoCalls = 0;
+      var captureCalls = 0;
       messenger.setMockMethodCallHandler(UsbLaunch.channel, (call) async {
         if (call.method == 'snapshot') return initial.future;
         if (call.method == 'info') {
@@ -73,13 +67,17 @@ void main() {
         }
         return null;
       });
-      messenger.setMockMethodCallHandler(ScreenShare.channel,
-          (call) async => '{"active":false,"capture":"未共享","task":""}');
+      messenger.setMockMethodCallHandler(ScreenShare.channel, (call) async {
+        if (call.method == 'start' || call.method == 'startUsb') {
+          captureCalls++;
+        }
+        return '{"active":false,"capture":"未共享","task":""}';
+      });
       addTearDown(
           () => messenger.setMockMethodCallHandler(ScreenShare.channel, null));
       addTearDown(
           () => messenger.setMockMethodCallHandler(UsbLaunch.channel, null));
-      await tester.pumpWidget(const PcFlashApp());
+      await tester.pumpWidget(const MaterialApp(home: DeviceScreen()));
       await tester.pump();
       const codec = StandardMethodCodec();
       // ignore: deprecated_member_use
@@ -93,7 +91,7 @@ void main() {
           })),
           (_) {});
       await tester.pumpAndSettle();
-      expect(find.textContaining('已识别USB控制板'), findsOneWidget);
+      expect(find.textContaining('已识别 · AABBCCDDEEFF'), findsOneWidget);
       expect(bluetooth.reads, 0);
       expect(infoCalls, 1);
       await tester.pump(const Duration(seconds: 6));
@@ -105,15 +103,14 @@ void main() {
             .complete({'serial': 'AABBCCDDEEFF', 'session': 'AABBCCDDEEFF:1'});
       }
       await tester.pumpAndSettle();
-      expect(find.textContaining('已识别USB控制板'), findsOneWidget);
+      expect(find.textContaining('已识别 · AABBCCDDEEFF'), findsOneWidget);
       expect(find.textContaining('首次连接：'), findsNothing);
       expect(find.text('请打开手机蓝牙，开启后会自动寻找控制板'), findsNothing);
-      expect(find.text('被控手机 · 屏幕共享'), findsOneWidget);
+      expect(find.text('被控手机'), findsOneWidget);
       expect(bluetooth.reads, 0);
       expect(infoCalls, 1);
-      await tester.tap(find.text('重试共享整个屏幕'));
-      await tester.pumpAndSettle();
-      expect(infoCalls, 2);
+      expect(captureCalls, 0);
+      expect(find.textContaining('连接未完成'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pump();

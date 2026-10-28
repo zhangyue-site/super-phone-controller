@@ -17,11 +17,24 @@ import android.os.*
 import java.io.ByteArrayOutputStream
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.RejectedExecutionException
 
 class ScreenShareService: Service() {
  companion object {
+ @Volatile private var current: ScreenShareService?=null
+ private val renewalWorker=ThreadPoolExecutor(1,1,0L,TimeUnit.MILLISECONDS,ArrayBlockingQueue<Runnable>(1))
+ fun renewCapture(controlTicket: String, session: String, complete: (Boolean)->Unit) {
+  val service=current
+  if(service==null) { complete(false);return }
+  try { renewalWorker.execute { service.renew(controlTicket,session,complete) } }
+  catch(_: RejectedExecutionException) { complete(false) }
+ }
  @Volatile var active=false
  @Volatile var usbOwnerSerial: String?=null
+  @Volatile var usbOwnerSession: String?=null
  @Volatile var status="未共享"
  @Volatile var taskStatus=""
  fun revoke(capability: String) { if(capability.isEmpty())return;Thread {
@@ -34,23 +47,55 @@ class ScreenShareService: Service() {
   while(out.size()<limit){val n=input.read(buffer,0,minOf(buffer.size,limit-out.size()));if(n<0)break;out.write(buffer,0,n)}
   return out.toByteArray()
  }
- private var projection: MediaProjection?=null
+ @Volatile private var projection: MediaProjection?=null
  private var display: VirtualDisplay?=null
  private var reader: ImageReader?=null
  private var worker: HandlerThread?=null
  private var handler: Handler?=null
  @Volatile private var running=false
  @Volatile private var connection: HttpsURLConnection?=null
- private var ticket=""
+ @Volatile private var ticket=""
  private var sequence=0
  private var last=0L
- private var until=0L
+ @Volatile private var until=0L
+ @Volatile private var renewalConnection: HttpsURLConnection?=null
  private var barrier=""
  private var afterResponse=0L
  private var initialWidth=0
  private var initialHeight=0
  private var initialRotation=0
  private var displayManager: DisplayManager?=null
+ private fun renewalValid(session: String, capability: String, expectedProjection: MediaProjection?): Boolean =
+  current===this && active && running && expectedProjection!=null && projection===expectedProjection &&
+  ticket==capability && capability.isNotEmpty() && usbOwnerSession==session &&
+  UsbLaunchBridge.matches(session) && SystemClock.elapsedRealtime()<until
+ private fun renew(controlTicket: String,session: String,complete: (Boolean)->Unit) {
+  var c: HttpsURLConnection?=null
+  var renewed=false
+  try {
+   if(!Regex("[A-Za-z0-9_-]{43}").matches(controlTicket) || session.isEmpty())return
+   val capability=ticket
+   val expectedProjection=projection
+   synchronized(this) { if(!renewalValid(session,capability,expectedProjection))return }
+   c=URL(BuildConfig.CONTROLLER_BASE_URL+"/app-control/screen-renew").openConnection() as HttpsURLConnection
+   renewalConnection=c
+   c.requestMethod="POST";c.connectTimeout=3000;c.readTimeout=3000;c.doOutput=true
+   c.setRequestProperty("Authorization","Bearer $controlTicket");c.setRequestProperty("Content-Type","application/json")
+   val body=JSONObject().put("ticket",capability).toString().toByteArray(Charsets.UTF_8)
+   c.setFixedLengthStreamingMode(body.size);c.outputStream.use { it.write(body) }
+   if(c.responseCode!=200)return
+   val bytes=c.inputStream.use { readBounded(it,4097) }
+   if(bytes.size>4096)return
+   val response=JSONObject(String(bytes,Charsets.UTF_8))
+   if(response.optString("scope")!="screen-frames" || response.optInt("expiresIn")!=300)return
+   synchronized(this) {
+    if(!renewalValid(session,capability,expectedProjection))return
+    until=SystemClock.elapsedRealtime()+270000L
+    renewed=true
+   }
+  } catch(_: Exception) { /* Keep original expiry on any failed renewal. */ }
+  finally { c?.disconnect();renewalConnection=null;Handler(Looper.getMainLooper()).post { complete(renewed) } }
+ }
  private fun geometryChanged() {
   if(!running)return
   running=false;connection?.disconnect();status="屏幕方向或共享范围已改变，任务已取消；请重新共享整个屏幕";taskStatus="";stopSelf()
@@ -93,7 +138,7 @@ class ScreenShareService: Service() {
   if(value==null || grant==null){stopSelf();return START_NOT_STICKY}
   val usbSession=intent?.getStringExtra("usbSession")
   if(usbSession!=null && !UsbLaunchBridge.matches(usbSession)){revoke(value);status="控制板已拔出，请重新共享";stopSelf();return START_NOT_STICKY}
-  ticket=value;usbOwnerSerial=UsbLaunchBridge.serialFor(usbSession);active=true
+  ticket=value;usbOwnerSerial=UsbLaunchBridge.serialFor(usbSession);usbOwnerSession=usbSession;active=true
   val nm=getSystemService(NOTIFICATION_SERVICE) as NotificationManager
   if(Build.VERSION.SDK_INT>=26)nm.createNotificationChannel(NotificationChannel("screen", "AI屏幕共享", NotificationManager.IMPORTANCE_LOW))
   val stop=PendingIntent.getService(this,0,Intent(this,ScreenShareService::class.java).setAction("STOP"),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -113,7 +158,7 @@ class ScreenShareService: Service() {
    displayManager=getSystemService(DISPLAY_SERVICE) as DisplayManager
    displayManager!!.registerDisplayListener(displayListener,handler)
    reader=ImageReader.newInstance(width,height,PixelFormat.RGBA_8888,2)
-   until=SystemClock.elapsedRealtime()+270000L;running=true;taskStatus="";handler!!.post(poll);status="共享中，等待语音任务"
+   until=SystemClock.elapsedRealtime()+270000L;running=true;current=this;taskStatus="";handler!!.post(poll);status="共享中，等待语音任务"
    reader!!.setOnImageAvailableListener({ source ->
     val image=source.acquireLatestImage() ?: return@setOnImageAvailableListener
     var bitmap: Bitmap?=null
@@ -161,8 +206,12 @@ class ScreenShareService: Service() {
   return START_NOT_STICKY
  }
  override fun onDestroy() {
-  active=false;usbOwnerSerial=null
-  running=false;connection?.disconnect()
+  synchronized(this) {
+   if(current===this)current=null
+   active=false;usbOwnerSerial=null;usbOwnerSession=null
+   running=false
+  }
+  renewalConnection?.disconnect();connection?.disconnect()
   display?.release();display=null;reader?.close();reader=null
   val old=projection;projection=null;old?.stop();worker?.quitSafely();worker=null
   handler?.removeCallbacksAndMessages(null);displayManager?.unregisterDisplayListener(displayListener)

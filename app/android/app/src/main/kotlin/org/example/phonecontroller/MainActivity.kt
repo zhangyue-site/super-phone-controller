@@ -48,6 +48,11 @@ class MainActivity: FlutterActivity() {
    when(call.method) {
     "info", "sign" -> usbProof!!.request(call.method,call.argument("session"),call.argument("nonce"),result)
     "snapshot" -> result.success(UsbLaunchBridge.snapshot())
+    "expectMode" -> {
+     val hid=call.argument<Boolean>("hid")
+     if(!consentInFlight && pending==null && hid!=null && UsbLaunchBridge.expectMode(call.argument("session"),hid))result.success(null)
+     else result.error("usb_mode_rejected","USB连接已改变或正在切换，请重新连接",null)
+    }
     "bind" -> if(UsbLaunchBridge.bind(call.argument("session"),call.argument("remoteId"),call.argument("deviceId")))result.success(null) else result.error("usb_detached","USB连接已改变，未保存配对",null)
     "forget" -> if(UsbLaunchBridge.forget(call.argument("session")))result.success(null) else result.error("busy","请先停止共享并保持USB连接后重新配对",null)
     else -> result.notImplemented()
@@ -55,6 +60,13 @@ class MainActivity: FlutterActivity() {
   }
   MethodChannel(engine.dartExecutor.binaryMessenger, "pcflash/app").setMethodCallHandler { call, result ->
    when(call.method) {
+    "appearance" -> result.success(getSharedPreferences("appearance",MODE_PRIVATE).getString("mode","system"))
+    "setAppearance" -> {
+     val mode=call.argument<String>("mode")
+     if(mode !in setOf("system","light","dark"))result.error("invalid_mode","主题设置无效",null)
+     else if(getSharedPreferences("appearance",MODE_PRIVATE).edit().putString("mode",mode).commit())result.success(null)
+     else result.error("storage_failed","主题设置未保存",null)
+    }
     "info" -> {
      @Suppress("DEPRECATION")
      val info=packageManager.getPackageInfo(packageName,0)
@@ -93,7 +105,31 @@ class MainActivity: FlutterActivity() {
       }
      }
     }
-    "stop" -> { pendingUsbSession=null;ticket?.let { ScreenShareService.revoke(it) };ticket=null;pending?.error("cancelled","已取消屏幕共享",null);pending=null;ScreenShareService.status="已停止共享";ScreenShareService.taskStatus=""; stopService(Intent(this, ScreenShareService::class.java));result.success(null) }
+    "stop" -> {
+     val requestedUsb=call.argument<String>("usbSession")
+     // An old widget's cleanup must not cancel another USB generation's consent or capture.
+     if(requestedUsb==null || requestedUsb==pendingUsbSession) {
+      pendingUsbSession=null;ticket?.let { ScreenShareService.revoke(it) };ticket=null
+      pending?.error("cancelled","已取消屏幕共享",null);pending=null
+     }
+     if(requestedUsb==null || requestedUsb==ScreenShareService.usbOwnerSession) {
+      ScreenShareService.status="已停止共享";ScreenShareService.taskStatus=""
+      stopService(Intent(this,ScreenShareService::class.java))
+     }
+     result.success(null)
+    }
+    "renewCapture" -> {
+     val controlTicket=call.argument<String>("controlTicket")
+     val session=call.argument<String>("usbSession")
+     if(controlTicket==null || session==null || !Regex("[A-Za-z0-9_-]{43}").matches(controlTicket) ||
+        !ScreenShareService.active || ScreenShareService.usbOwnerSession!=session || !UsbLaunchBridge.matches(session)) {
+      result.error("capture_session_invalid","屏幕共享会话已失效",null)
+     } else {
+      ScreenShareService.renewCapture(controlTicket,session) { renewed ->
+       if(renewed)result.success(null) else result.error("capture_renew_failed","共享授权续期未完成",null)
+      }
+     }
+    }
     "status" -> result.success(org.json.JSONObject().put("capture",ScreenShareService.status).put("task",ScreenShareService.taskStatus).put("active",ScreenShareService.active).toString())
     else -> result.notImplemented()
    }

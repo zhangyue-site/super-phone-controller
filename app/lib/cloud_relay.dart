@@ -8,6 +8,7 @@ class CloudRelay {
   final Future<void> Function(List<int>) write;
   final Future<void> Function() disconnect;
   final void Function(Object) onError;
+  final Future<void> Function(bool hid)? beforeModeChange;
   Timer? _timer;
   String? _nonce;
   bool _busy = false, _closed = false;
@@ -16,7 +17,8 @@ class CloudRelay {
       required this.read,
       required this.write,
       required this.disconnect,
-      required this.onError});
+      required this.onError,
+      this.beforeModeChange});
   bool get isClosed => _closed;
 
   Future<void> start() async {
@@ -56,6 +58,10 @@ class CloudRelay {
       }
       final bytes = List.generate(
           48, (i) => int.parse(packet.substring(i * 2, i * 2 + 2), radix: 16));
+      if (op == 5 || op == 6 || op == 7) {
+        await beforeModeChange?.call(op == 6);
+        if (_closed) return;
+      }
       // Exactly one ATT write. No retry after a timeout or uncertain receipt.
       await write(bytes).timeout(const Duration(seconds: 5));
       final until = DateTime.now().add(const Duration(seconds: 10));
