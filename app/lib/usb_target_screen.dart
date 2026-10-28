@@ -127,6 +127,12 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
           const SizedBox(height: 20),
           Text(_status),
           Text(_pointerReady ? 'HID控制板：已就绪' : 'HID控制板：等待板端许可'),
+          if (_active && !_pointerReady && widget.onLegacy != null) ...[
+            const Text('屏幕共享已开启。连接控制板蓝牙后，才能接收电脑或云端任务。'),
+            OutlinedButton(
+                onPressed: _busy || !widget.isCurrent() ? null : widget.onLegacy,
+                child: const Text('连接云端控制')),
+          ],
           if (_error != null) Text(_error!),
           const SizedBox(height: 16),
           FilledButton(
