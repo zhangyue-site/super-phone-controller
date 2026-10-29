@@ -287,8 +287,6 @@ class _ControlScreenState extends State<ControlScreen> {
                       const Text(
                           '本机仅发送任务，无需共享本机屏幕。生成计划后由你确认，执行时再检查被控画面与控制板许可。'),
                     ]))),
-        if (!_client.supportsSkillReplay)
-          const Text('技能回放暂未接通（联调中）。已保存技能保留；保存不代表当前可回放，请继续使用普通文字任务。'),
         if (_client.supportsSkillReplay)
           OutlinedButton(
               onPressed: _busy || _stopping ? null : _loadSkills,
@@ -336,7 +334,7 @@ class _ControlScreenState extends State<ControlScreen> {
             enabled: !_busy && !_stopping,
             decoration: const InputDecoration(
                 labelText: '手机操作指令',
-                hintText: '打开浏览器搜索天气 / 打开地图搜索公园',
+                hintText: '打开设置 / 打开设置搜索电池',
                 border: OutlineInputBorder())),
         FilledButton(
             onPressed: _busy || _stopping ? null : () => _run('prepare'),

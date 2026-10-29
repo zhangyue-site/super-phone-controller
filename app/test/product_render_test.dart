@@ -41,7 +41,7 @@ class RenderClient extends ControlClient {
     return {
       'state': 'pending',
       'task_id': 'a' * 32,
-      'reply': '先查看被控手机的天气页面，再核对今日气温。计划需要你确认后才会执行。',
+      'reply': '计划：打开设置。确认后会检查被控手机画面与操作许可，再由控制板执行。',
       'terminal': false
     };
   }
@@ -60,6 +60,15 @@ class RetainedBoard extends BleOtaService {
   @override
   Future<void> disconnect() async {
     disconnects++;
+  }
+}
+
+class LostUpgradeClient extends RenderClient {
+  @override
+  bool get canWifiUpgrade => true;
+  @override
+  void requestWifiUpgrade() {
+    throw StateError('连接已改变，请重新连接控制板');
   }
 }
 
@@ -102,7 +111,7 @@ void main() {
               'capture': '共享授权有效，等待新的真实画面',
               'task': jsonEncode({
                 'state': 'idle',
-                'reply': '尚未收到当前任务的结果',
+                'reply': '尚未收到任务结果',
                 'pointerReady': false,
                 'skills': [],
                 'barrier': 'ab' * 16
@@ -156,7 +165,7 @@ void main() {
                 key: const Key('product-render'), child: child)));
         await tester.pumpAndSettle();
         if (page == 'task') {
-          await tester.enterText(find.byType(TextField), '查看今天的天气');
+          await tester.enterText(find.byType(TextField), '打开设置');
           await tester.tap(find.text('生成计划'));
           await tester.pumpAndSettle();
           tester.testTextInput.hide();
@@ -295,6 +304,25 @@ void main() {
       expect(client.commands, 0);
       expect(find.text('确认执行'), findsNothing);
     }
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('upgrade connection loss remains an explicit unconfirmed error',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light(),
+        home: ProductSettingsScreen(client: LostUpgradeClient())));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('控制板 Wi-Fi 升级'), 120,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('控制板 Wi-Fi 升级'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('检查并请求升级'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.textContaining('升级请求未确认'), 120,
+        scrollable: find.byType(Scrollable).first);
+    expect(find.textContaining('升级请求未确认'), findsOneWidget);
+    expect(find.textContaining('已请求控制板检查更新'), findsNothing);
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets(

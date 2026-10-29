@@ -87,8 +87,9 @@ class _ControllerGatewayScreenState extends State<ControllerGatewayScreen> {
           IconButton(
               tooltip: '设置与诊断',
               icon: const Icon(Icons.settings_outlined),
-              onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
+              onPressed: _busy
+                  ? null
+                  : () => Navigator.of(context).push(MaterialPageRoute<void>(
                       builder: (_) =>
                           ProductSettingsScreen(diagnostic: _error))))
         ]),

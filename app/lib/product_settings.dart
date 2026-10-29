@@ -4,6 +4,7 @@ import 'app_release.dart';
 import 'control_client.dart';
 import 'device_screen.dart';
 import 'target_session.dart';
+import 'product_widgets.dart';
 
 class ProductAppearance extends InheritedWidget {
   const ProductAppearance(
@@ -30,6 +31,7 @@ class ProductSettingsScreen extends StatefulWidget {
 
 class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
   String? _upgradeNotice;
+  bool _upgradeError = false;
   Timer? _timer;
   @override
   void initState() {
@@ -80,8 +82,18 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                       child: const Text('检查并请求升级'))
                 ]));
     if (accepted != true || !mounted) return;
-    widget.client!.requestWifiUpgrade();
-    setState(() => _upgradeNotice = '已请求控制板检查更新；完成状态需重启后核验。');
+    try {
+      widget.client!.requestWifiUpgrade();
+      setState(() {
+        _upgradeError = false;
+        _upgradeNotice = '已请求控制板检查更新；完成状态需重启后核验。';
+      });
+    } catch (e) {
+      setState(() {
+        _upgradeError = true;
+        _upgradeNotice = '升级请求未确认：${productError(e)}';
+      });
+    }
   }
 
   @override
@@ -132,9 +144,13 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
             Padding(
                 padding: const EdgeInsets.all(12),
                 child: Text(widget.client!.upgradeStatus)),
-          if (_upgradeNotice != null && widget.client?.canWifiUpgrade != true)
+          if (_upgradeNotice != null &&
+              !_upgradeError &&
+              widget.client?.canWifiUpgrade != true)
             const Text('连接已中断，升级结果待核验。请重新连接并核对版本。'),
-          if (_upgradeNotice != null)
+          if (_upgradeNotice != null && _upgradeError)
+            ProductError(_upgradeNotice!),
+          if (_upgradeNotice != null && !_upgradeError)
             Padding(
                 padding: const EdgeInsets.all(12),
                 child: Text(_upgradeNotice!)),
@@ -143,6 +159,14 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
               title: const Text('蓝牙固件维护'),
               subtitle: const Text('无需 USB 或本机屏幕共享；保留官方固件下载与本地镜像恢复'),
               onTap: _maintenance),
+          ListTile(
+              leading: const Icon(Icons.bookmark_outline),
+              title: const Text('专项技能与保存'),
+              subtitle: Text(widget.client?.supportsSkillReplay == true
+                  ? '可从任务页查看已有专项技能'
+                  : '已保存技能保留，当前云端回放暂不可用'),
+              onTap: () => _message('专项技能与保存',
+                  '任务结果核验后仍可保存为技能。已保存内容保留；保存不代表当前即可回放。回放不可用时，请继续使用普通文字任务，不会自动执行或重复旧操作。')),
           const Divider(),
           Text('控制板功能', style: Theme.of(context).textTheme.titleLarge),
           ListTile(
@@ -156,7 +180,7 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
               title: const Text('语音、手动控制与额度'),
               subtitle: const Text('保留原控制板能力与专项技能概念'),
               onTap: () => _message('控制板上的功能',
-                  '语音、方向与点击、返回与桌面、额度和网络方式仍在控制板上可用。未接通的 App 远程入口不会假装已执行。技能可保存，当前云端回放仍在联调。')),
+                  '语音、方向与点击、返回与桌面、额度和网络方式仍在控制板上可用。未接通的 App 远程入口不会假装已执行。技能可保存，当前云端回放暂不可用。')),
           ListTile(
               leading: const Icon(Icons.info_outline),
               title: const Text('连接诊断与兼容说明'),
