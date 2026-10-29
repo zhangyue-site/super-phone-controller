@@ -1,3 +1,4 @@
+import 'diagnostics.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -70,6 +71,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     final generation = _generation;
     try {
       if (!widget.isCurrent()) {
+        SafeDiagnostics.record('target_release',
+            phase: 'shutdown', reason: 'usb_unavailable');
         _lost = true;
         _generation++;
         await _control?.shutdown();
@@ -86,6 +89,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       final active = await ScreenShare.isActive();
       if (!_current(generation)) return;
       if (!active && _active) {
+        SafeDiagnostics.record('target_release',
+            phase: 'shutdown', reason: 'capture_inactive');
         await _control?.shutdown();
         if (!_current(generation)) return;
       }

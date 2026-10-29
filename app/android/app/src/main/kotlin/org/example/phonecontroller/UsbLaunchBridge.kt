@@ -20,11 +20,12 @@ object UsbLaunchBridge {
  private val ui=Handler(Looper.getMainLooper())
  @Volatile private var deviceName: String?=null
  @Volatile private var productId: Int?=null
- private val expiry=Runnable { if(mode.expired(SystemClock.elapsedRealtime()))revoke("控制板切换超时，屏幕共享已停止") }
+ private val expiry=Runnable { if(mode.expired(SystemClock.elapsedRealtime()))revoke("控制板切换超时，屏幕共享已停止","mode_timeout") }
  @Synchronized
- private fun checkExpiry() { if(mode.expired(SystemClock.elapsedRealtime()))revoke("控制板切换超时，屏幕共享已停止") }
+ private fun checkExpiry() { if(mode.expired(SystemClock.elapsedRealtime()))revoke("控制板切换超时，屏幕共享已停止","mode_timeout") }
  @Synchronized
- private fun revoke(message: String) {
+ private fun revoke(message: String,reason: String="unexpected_attach") {
+  SafeDiagnostics.record(mapOf("event" to "usb_revoke","phase" to "usb","reason" to reason,"generation" to detachGeneration,"pid" to (productId?:-1),"mode_pending" to mode.pending()))
   val oldSerial=serial;val oldSession=session
   ui.removeCallbacks(expiry);mode.clear();lease.detach()
   serial=null;session=null;deviceName=null;productId=null;error=null
@@ -39,11 +40,13 @@ object UsbLaunchBridge {
  @Synchronized
  fun expectMode(value: String?,hid: Boolean): Boolean {
   checkExpiry()
-  val current=deviceFor(value)?:return false
-  if(mode.pending())return false
+  val current=deviceFor(value)
+  if(current==null){SafeDiagnostics.record(mapOf("event" to "usb_expect","phase" to "usb","reason" to "device_invalid","generation" to detachGeneration));return false}
+  if(mode.pending()){SafeDiagnostics.record(mapOf("event" to "usb_expect","phase" to "usb","reason" to "already_pending","generation" to detachGeneration,"pid" to current.productId));return false}
   val expected=if(hid)0x4045 else 0x4041
-  if(current.productId==expected)return true
+  if(current.productId==expected){SafeDiagnostics.record(mapOf("event" to "usb_expect","phase" to "usb","reason" to "already_at_mode","generation" to detachGeneration,"pid" to current.productId,"expected_pid" to expected));return true}
   if(!mode.begin(value,session,identity(current),expected,SystemClock.elapsedRealtime()))return false
+  SafeDiagnostics.record(mapOf("event" to "usb_expect","phase" to "usb","reason" to "mode_begin","generation" to detachGeneration,"pid" to current.productId,"expected_pid" to expected))
   ui.postDelayed(expiry,8000)
   return true
  }
@@ -86,7 +89,7 @@ object UsbLaunchBridge {
     if(mode.detach(oldSession,SystemClock.elapsedRealtime())) {
      changed?.invoke(snapshot());return
     }
-    revoke("控制板已拔出，屏幕共享已停止")
+    revoke("控制板已拔出，屏幕共享已停止","physical_detach")
  }
  @Synchronized
  fun attachOwner(value: Any,onChanged: (Map<String,Any?>?)->Unit,onLost: (String)->Unit) {
@@ -102,7 +105,8 @@ object UsbLaunchBridge {
   val actual=manager().deviceList[requested.deviceName]?:return
   if(mode.pending()) {
    val value=identity(actual)
-   if(!mode.accepts(value,actual.productId,SystemClock.elapsedRealtime())) { revoke("控制板连接已改变，屏幕共享已停止");return }
+   if(!mode.accepts(value,actual.productId,SystemClock.elapsedRealtime())) { revoke("控制板连接已改变，屏幕共享已停止","mode_attach_mismatch");return }
+   SafeDiagnostics.record(mapOf("event" to "usb_attach","phase" to "usb","reason" to "mode_attach_accepted","generation" to detachGeneration,"pid" to actual.productId))
    ui.removeCallbacks(expiry);mode.clear();deviceName=actual.deviceName;productId=actual.productId
    changed?.invoke(snapshot());return
   }
@@ -122,6 +126,7 @@ object UsbLaunchBridge {
   if(serial!=null && serial!=value) {
    // A replacement can arrive before delayed detach cleanup. Revoke old consent now.
    session?.let { lost?.invoke(it) }
+   SafeDiagnostics.record(mapOf("event" to "usb_revoke","phase" to "usb","reason" to "board_replaced","generation" to detachGeneration))
    if(ScreenShareService.usbOwnerSerial==serial) {
     ScreenShareService.status="控制板已更换，屏幕共享已停止"
     app.stopService(Intent(app,ScreenShareService::class.java))

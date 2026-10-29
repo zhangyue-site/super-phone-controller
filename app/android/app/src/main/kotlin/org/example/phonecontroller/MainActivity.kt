@@ -40,6 +40,7 @@ class MainActivity: FlutterActivity() {
 
  override fun configureFlutterEngine(engine: FlutterEngine) {
   super.configureFlutterEngine(engine)
+  SafeDiagnostics.initialize(this)
   UsbLaunchBridge.initialize(this)
   usbProof?.close();usbProof=UsbProofBridge(applicationContext)
   val usb=MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/usb")
@@ -60,6 +61,8 @@ class MainActivity: FlutterActivity() {
   }
   MethodChannel(engine.dartExecutor.binaryMessenger, "pcflash/app").setMethodCallHandler { call, result ->
    when(call.method) {
+    "diagnosticEvent" -> { SafeDiagnostics.record(call.arguments as? Map<*,*> ?: emptyMap<Any,Any>());result.success(null) }
+    "diagnostics" -> result.success(SafeDiagnostics.read())
     "appearance" -> result.success(getSharedPreferences("appearance",MODE_PRIVATE).getString("mode","system"))
     "setAppearance" -> {
      val mode=call.argument<String>("mode")
@@ -106,6 +109,7 @@ class MainActivity: FlutterActivity() {
      }
     }
     "stop" -> {
+     SafeDiagnostics.record(mapOf("event" to "capture_stop","phase" to "capture","reason" to "flutter_stop"))
      val requestedUsb=call.argument<String>("usbSession")
      // An old widget's cleanup must not cancel another USB generation's consent or capture.
      if(requestedUsb==null || requestedUsb==pendingUsbSession) {

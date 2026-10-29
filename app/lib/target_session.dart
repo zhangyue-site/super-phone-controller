@@ -1,3 +1,4 @@
+import 'diagnostics.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'ble_ota_service.dart';
@@ -66,7 +67,11 @@ class TargetSession {
     _service = service;
   }
 
-  static Future<void> release() async {
+  static Future<void> release({String diagnosticReason = 'explicit'}) async {
+    if (_client != null || _service != null) {
+      SafeDiagnostics.record('target_release',
+          phase: 'shutdown', reason: diagnosticReason);
+    }
     final client = _client, service = _service;
     _client = null;
     _service = null;
@@ -144,11 +149,11 @@ class TargetSession {
     try {
       final usb = await UsbLaunch.snapshot();
       if (usb == null || (_usb != null && _usb!.session != usb.session)) {
-        await release();
+        await release(diagnosticReason: 'usb_unavailable');
         return;
       }
       if (!await ScreenShare.isActive()) {
-        await release();
+        await release(diagnosticReason: 'capture_inactive');
         return;
       }
       try {

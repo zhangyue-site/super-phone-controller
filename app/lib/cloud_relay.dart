@@ -1,3 +1,4 @@
+import 'diagnostics.dart';
 import "dart:async";
 
 /// Opaque signed packets only. No device key, action planning or ADB fallback.
@@ -9,6 +10,8 @@ class CloudRelay {
   final Future<void> Function() disconnect;
   final void Function(Object) onError;
   final Future<void> Function(bool hid)? beforeModeChange;
+  String _phase = 'attach';
+  int? _activeOp, _activeSeq, _lastOp, _lastSeq;
   Timer? _timer;
   String? _nonce;
   DateTime? _heartbeat;
@@ -40,6 +43,7 @@ class CloudRelay {
     await post("attach", {"receipt": initial});
     _maintenanceSupported = initial.containsKey("relayOnline");
     _nonce = nonce;
+    SafeDiagnostics.record('relay_attached', phase: 'attach');
     if (_closed) {
       try {
         await post('detach', {'nonce': nonce});
@@ -61,12 +65,17 @@ class CloudRelay {
                       DateTime.now().difference(_heartbeat!).inSeconds >= 5)
                   ? 12
                   : null;
+      _phase = maintenance == null ? 'poll' : 'maintenance';
+      _activeOp = maintenance;
+      _activeSeq = null;
       var requestClock = Stopwatch()..start();
       var command = maintenance == null
           ? await post("poll", {"nonce": _nonce})
           : await post('maintenance', {'nonce': _nonce, 'op': maintenance})
               .timeout(const Duration(seconds: 15));
       if (command["state"] == "busy") {
+        _phase = 'poll';
+        _activeOp = null;
         requestClock = Stopwatch()..start();
         command = await post("poll", {"nonce": _nonce});
       }
@@ -83,6 +92,9 @@ class CloudRelay {
           (op > 7 && op < 11)) {
         throw const FormatException("云端动作格式无效");
       }
+      _activeOp = op;
+      _activeSeq = seq;
+      SafeDiagnostics.record('relay_action', phase: _phase, op: op, seq: seq);
       final maintenanceAction = op == 11 || op == 12;
       final ttl = command['expiresIn'];
       if (maintenanceAction && (ttl is! int || ttl < 1 || ttl > 15)) {
@@ -108,13 +120,16 @@ class CloudRelay {
       final bytes = List.generate(
           48, (i) => int.parse(packet.substring(i * 2, i * 2 + 2), radix: 16));
       if (op == 5 || op == 6 || op == 7) {
+        _phase = 'mode';
         await beforeModeChange?.call(op == 6);
         if (_closed) return;
       }
       // Exactly one ATT write. No retry after a timeout or uncertain receipt.
+      _phase = 'write';
       await bounded(() => write(bytes), const Duration(seconds: 5));
       checkActive();
       final until = requestClock.elapsed + const Duration(seconds: 10);
+      _phase = 'read';
       Map<String, dynamic>? receipt;
       while (!_closed && requestClock.elapsed < until) {
         final r = await bounded(read, const Duration(seconds: 2));
@@ -138,31 +153,46 @@ class CloudRelay {
             const Duration(milliseconds: 100));
       }
       if (receipt == null) throw TimeoutException("板端回执未确认，不会重发");
+      _phase = 'ack';
       final result = await bounded(
           () => post("ack",
               {"nonce": _nonce, "id": command["id"], "receipt": receipt}),
           const Duration(seconds: 20));
       checkActive();
       if (result["state"] != "acknowledged") throw StateError("板端动作失败");
+      _lastOp = op;
+      _lastSeq = seq;
+      SafeDiagnostics.record('relay_ack', phase: 'ack', op: op, seq: seq);
       if (op == 12) _heartbeat = DateTime.now();
       if (op == 11) _upgradeRequested = false;
-      if (op == 5) await close();
+      if (op == 5) await close(reason: 'opcode_stop');
     } catch (error) {
       if (_closed) return; // Late completions belong to the closed session.
-      await close();
+      await close(reason: 'error', error: error);
       onError(error);
     } finally {
       _busy = false;
     }
   }
 
-  Future<void> close() async {
+  Future<void> close({String reason = 'explicit', Object? error}) async {
     if (_closed) return;
+    SafeDiagnostics.record('relay_close',
+        phase: _phase,
+        reason: reason,
+        error: error,
+        httpStatus: error is ControlHttpFailure ? error.status : null,
+        op: _activeOp,
+        seq: _activeSeq,
+        lastOp: _lastOp,
+        lastSeq: _lastSeq);
     _closed = true;
     _timer?.cancel();
     // Disconnect releases HID even if cloud is unavailable.
     try {
       await disconnect();
+      SafeDiagnostics.record('relay_disconnect',
+          phase: 'shutdown', reason: 'disconnect_done');
     } finally {
       if (_nonce != null) {
         try {

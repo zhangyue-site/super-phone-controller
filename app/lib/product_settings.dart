@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:flutter/services.dart';
+import 'diagnostics.dart';
 import 'package:flutter/material.dart';
 import 'app_release.dart';
 import 'control_client.dart';
@@ -56,6 +58,40 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                 TextButton(
                     onPressed: () => Navigator.pop(c), child: const Text('关闭'))
               ]));
+  Future<void> _diagnostics() async {
+    String rows;
+    try {
+      rows = await SafeDiagnostics.read();
+    } catch (_) {
+      rows = '诊断记录暂不可读';
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+        context: context,
+        builder: (c) => AlertDialog(
+              title: const Text('连接诊断与兼容说明'),
+              content: SingleChildScrollView(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                    const Text(
+                        '仅记录固定事件、阶段、操作码、HTTP状态与USB代次；不记录凭据、动作包或响应正文。中文输入仍取决于现有输入法与可见候选，正常使用不要求开发者调试。'),
+                    const SizedBox(height: 12),
+                    SelectableText(rows),
+                  ])),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(c), child: const Text('关闭')),
+                TextButton(
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: rows));
+                    },
+                    child: const Text('复制脱敏诊断'))
+              ],
+            ));
+  }
+
   Future<void> _maintenance() async {
     if (widget.client?.usesBoardLink == true || TargetSession.hasGateway) {
       await _message('先释放当前蓝牙连接', '请先停止手机操作，在被控状态页释放手机中转连接，再进入蓝牙维护。屏幕共享可继续保留。');
@@ -185,8 +221,7 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
               leading: const Icon(Icons.info_outline),
               title: const Text('连接诊断与兼容说明'),
               subtitle: const Text('查看底层连接信息与输入兼容范围'),
-              onTap: () => _message('连接诊断与兼容说明',
-                  '${widget.diagnostic ?? widget.client?.connectionStatus ?? '当前没有设备诊断数据'}\n\n中文输入使用被控手机现有输入法、可见候选与控制板 USB 键盘。结果需按画面核验，不能保证所有输入法或键盘布局都一致。正常使用不要求开启开发者调试。')),
+              onTap: _diagnostics),
         ]));
   }
 }

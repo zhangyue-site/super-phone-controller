@@ -123,6 +123,7 @@ class ScreenShareService: Service() {
  }
  @Synchronized private fun pauseCloud(capability: String) {
   if(!running || !active || ticket!=capability)return
+  SafeDiagnostics.record(mapOf("event" to "capture_pause","phase" to "capture","reason" to "cloud_auth","generation" to recovery.generation()))
   recovery.pause();taskStatus="";status="云端授权暂不可用，保留屏幕共享并自动恢复连接"
  }
  @Synchronized private fun endCapture() { recovery.stop();running=false;active=false }
@@ -159,6 +160,7 @@ class ScreenShareService: Service() {
  }
  private fun geometryChanged() {
   if(!running)return
+  SafeDiagnostics.record(mapOf("event" to "capture_stop","phase" to "capture","reason" to "geometry_change","generation" to recovery.generation()))
   endCapture();connection?.disconnect();status="屏幕方向或共享范围已改变，任务已取消；请重新共享整个屏幕";taskStatus="";stopSelf()
  }
  private val displayListener=object: DisplayManager.DisplayListener {
@@ -195,7 +197,7 @@ class ScreenShareService: Service() {
  }
  override fun onBind(intent: Intent?)=null
  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-  if(intent?.action=="STOP"){endCapture();status="已停止共享";stopSelf();return START_NOT_STICKY}
+  if(intent?.action=="STOP"){SafeDiagnostics.record(mapOf("event" to "capture_stop","phase" to "capture","reason" to "user_stop","generation" to recovery.generation()));endCapture();status="已停止共享";stopSelf();return START_NOT_STICKY}
   if(running || active){intent?.getStringExtra("ticket")?.let { revoke(it) };return START_NOT_STICKY}
   val value=intent?.getStringExtra("ticket")
   @Suppress("DEPRECATION") val grant=intent?.getParcelableExtra<Intent>("grant")
@@ -212,7 +214,7 @@ class ScreenShareService: Service() {
   if(Build.VERSION.SDK_INT>=29)startForeground(71,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION) else startForeground(71,notification)
    worker=HandlerThread("screen-capture").also{it.start()};handler=Handler(worker!!.looper)
    projection=(getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).getMediaProjection(Activity.RESULT_OK,grant)
-   projection!!.registerCallback(object: MediaProjection.Callback(){override fun onStop(){if(running)status="系统已停止共享";endCapture();stopSelf()}
+   projection!!.registerCallback(object: MediaProjection.Callback(){override fun onStop(){SafeDiagnostics.record(mapOf("event" to "capture_stop","phase" to "capture","reason" to "system_stop","generation" to recovery.generation()));if(running)status="系统已停止共享";endCapture();stopSelf()}
     override fun onCapturedContentResize(width: Int,height: Int){if(width!=initialWidth || height!=initialHeight)geometryChanged()}},Handler(Looper.getMainLooper()))
    val metrics=resources.displayMetrics
    @Suppress("DEPRECATION") val physical=(getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay
@@ -274,6 +276,7 @@ class ScreenShareService: Service() {
   return START_NOT_STICKY
  }
  override fun onDestroy() {
+  SafeDiagnostics.record(mapOf("event" to "capture_destroy","phase" to "capture","reason" to "destroy","generation" to recovery.generation(),"active" to active,"running" to running))
   endCapture()
   synchronized(this) {
    if(current===this)current=null

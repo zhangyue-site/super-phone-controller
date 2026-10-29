@@ -1,3 +1,4 @@
+import 'diagnostics.dart';
 import 'controller_config.dart';
 import 'dart:async';
 import 'cloud_relay.dart';
@@ -108,6 +109,10 @@ class ControlClient {
       return;
     }
     _refreshing = true;
+    SafeDiagnostics.record('control_refresh',
+        phase: 'renew',
+        reason: 'renew_begin',
+        remainingMs: _expires?.difference(DateTime.now()).inMilliseconds);
     try {
       Map<String, dynamic> result;
       if (_paired) {
@@ -143,6 +148,17 @@ class ControlClient {
         throw const FormatException('续期授权无效');
       }
       if (!_closed) _expires = DateTime.now().add(const Duration(seconds: 300));
+      SafeDiagnostics.record('control_refresh',
+          phase: 'renew',
+          reason: 'renew_ok',
+          remainingMs: _expires?.difference(DateTime.now()).inMilliseconds);
+    } catch (e) {
+      SafeDiagnostics.record('control_refresh',
+          phase: 'renew',
+          reason: 'renew_fail',
+          error: e,
+          httpStatus: e is ControlHttpFailure ? e.status : null);
+      rethrow;
     } finally {
       _refreshing = false;
     }
@@ -179,11 +195,16 @@ class ControlClient {
       throw const FormatException('服务器响应无效');
     }
     if (response.statusCode != 200) {
+      SafeDiagnostics.record('control_http_failure',
+          phase: path.startsWith('relay:') ? path.substring(6) : path,
+          reason: 'http_error',
+          httpStatus: response.statusCode);
       if (response.statusCode == 403) {
         _ticket = null;
         _expires = null;
       }
-      throw FormatException(decoded['reply'] as String? ?? '请求失败，请查询状态后重试');
+      throw ControlHttpFailure(
+          response.statusCode, decoded['reply'] as String? ?? '请求失败，请查询状态后重试');
     }
     return decoded;
   }
@@ -234,6 +255,8 @@ class ControlClient {
     }
     _ticket = ticket;
     _expires = DateTime.now().add(Duration(seconds: ttl));
+    SafeDiagnostics.record('control_grant',
+        phase: 'authorize', reason: 'grant_ok', remainingMs: ttl * 1000);
     if (service.supportsLocalControl) {
       _relayBoard = service;
       _relayError = null;
@@ -289,7 +312,7 @@ class ControlClient {
     _relay = null;
     return _closing = () async {
       try {
-        if (relay != null) await relay.close();
+        if (relay != null) await relay.close(reason: 'owner_shutdown');
       } finally {
         _ticket = null;
         _expires = null;
