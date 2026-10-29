@@ -61,10 +61,13 @@ class CloudRelay {
                       DateTime.now().difference(_heartbeat!).inSeconds >= 5)
                   ? 12
                   : null;
+      var requestClock = Stopwatch()..start();
       var command = maintenance == null
           ? await post("poll", {"nonce": _nonce})
-          : await post('maintenance', {'nonce': _nonce, 'op': maintenance});
+          : await post('maintenance', {'nonce': _nonce, 'op': maintenance})
+              .timeout(const Duration(seconds: 15));
       if (command["state"] == "busy") {
+        requestClock = Stopwatch()..start();
         command = await post("poll", {"nonce": _nonce});
       }
       if (_closed || command["state"] != "action") return;
@@ -80,6 +83,28 @@ class CloudRelay {
           (op > 7 && op < 11)) {
         throw const FormatException("云端动作格式无效");
       }
+      final maintenanceAction = op == 11 || op == 12;
+      final ttl = command['expiresIn'];
+      if (maintenanceAction && (ttl is! int || ttl < 1 || ttl > 15)) {
+        throw const FormatException('维护动作有效期无效');
+      }
+      final deadline = maintenanceAction ? Duration(seconds: ttl as int) : null;
+      void checkActive() {
+        if (_closed) throw StateError('控制连接已结束');
+        if (deadline != null && requestClock.elapsed >= deadline) {
+          throw TimeoutException('维护动作已过期，结果未知时不会重发');
+        }
+      }
+
+      Future<T> bounded<T>(Future<T> Function() action, Duration limit) {
+        checkActive();
+        final remaining =
+            deadline == null ? limit : deadline - requestClock.elapsed;
+        if (remaining <= Duration.zero) throw TimeoutException('维护动作已过期');
+        return action().timeout(remaining < limit ? remaining : limit);
+      }
+
+      checkActive();
       final bytes = List.generate(
           48, (i) => int.parse(packet.substring(i * 2, i * 2 + 2), radix: 16));
       if (op == 5 || op == 6 || op == 7) {
@@ -87,11 +112,13 @@ class CloudRelay {
         if (_closed) return;
       }
       // Exactly one ATT write. No retry after a timeout or uncertain receipt.
-      await write(bytes).timeout(const Duration(seconds: 5));
-      final until = DateTime.now().add(const Duration(seconds: 10));
+      await bounded(() => write(bytes), const Duration(seconds: 5));
+      checkActive();
+      final until = requestClock.elapsed + const Duration(seconds: 10);
       Map<String, dynamic>? receipt;
-      while (!_closed && DateTime.now().isBefore(until)) {
-        final r = await read().timeout(const Duration(seconds: 2));
+      while (!_closed && requestClock.elapsed < until) {
+        final r = await bounded(read, const Duration(seconds: 2));
+        checkActive();
         diagnostics = r;
         if (r["nonce"] != _nonce) throw StateError("板子会话已改变");
         if (r["seq"] == seq &&
@@ -106,16 +133,22 @@ class CloudRelay {
             break;
           }
         }
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await bounded(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)),
+            const Duration(milliseconds: 100));
       }
       if (receipt == null) throw TimeoutException("板端回执未确认，不会重发");
-      final result = await post(
-          "ack", {"nonce": _nonce, "id": command["id"], "receipt": receipt});
+      final result = await bounded(
+          () => post("ack",
+              {"nonce": _nonce, "id": command["id"], "receipt": receipt}),
+          const Duration(seconds: 20));
+      checkActive();
       if (result["state"] != "acknowledged") throw StateError("板端动作失败");
       if (op == 12) _heartbeat = DateTime.now();
       if (op == 11) _upgradeRequested = false;
       if (op == 5) await close();
     } catch (error) {
+      if (_closed) return; // Late completions belong to the closed session.
       await close();
       onError(error);
     } finally {

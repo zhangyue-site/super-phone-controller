@@ -121,7 +121,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     }
 
     final window = await request({'operation': 'poll'});
-    if (window['state'] == 'idle') return;
+    if (window['state'] == 'idle' || window['state'] == 'ready') return;
     final nonce = window['nonce'],
         mode = window['mode'],
         revision = window['generation'],

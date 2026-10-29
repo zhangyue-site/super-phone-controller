@@ -55,7 +55,8 @@ class _ControlScreenState extends State<ControlScreen> {
       if (mounted && !_client.authorized) {
         setState(() => _error = _client.connectionStatus);
       } else if (mounted && _client.ownsGateway) {
-        setState(() {}); // Render board diagnostics even when no task is active.
+        setState(
+            () {}); // Render board diagnostics even when no task is active.
       }
     } catch (e) {
       if (mounted) setState(() => _error = '连接续期失败：$e');
@@ -281,7 +282,9 @@ class _ControlScreenState extends State<ControlScreen> {
         Text(_client.isPaired
             ? '目标设备：${_client.deviceId}。此手机仅发送命令，无需共享本机屏幕。'
             : '任务经控制板执行；请保持被控手机解锁并开启屏幕共享。'),
-        if (!_client.isPaired)
+        if (!_client.supportsSkillReplay)
+          const Text('技能回放暂未接通（HTTP联调中）。已保存技能保留；保存不代表当前可回放，请继续使用普通文字任务。'),
+        if (_client.supportsSkillReplay)
           OutlinedButton(
               onPressed: _busy || _stopping ? null : _loadSkills,
               child: const Text('查看专项技能')),

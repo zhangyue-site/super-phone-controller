@@ -24,6 +24,7 @@ class ControlClient {
   Future<void> Function(bool hid)? onModeChange;
   ControlClient({http.Client? client}) : _http = client;
   bool get isPaired => _paired;
+  bool get supportsSkillReplay => _board != null;
   bool get canWifiUpgrade => ownsGateway && _relay?.supportsMaintenance == true;
   bool get ownsGateway => _relay != null && authorized;
   String get upgradeStatus {
@@ -259,6 +260,10 @@ class ControlClient {
       String? taskId,
       String? skillId,
       Map<String, String>? parameters}) async {
+    if ((operation == 'skills' || operation == 'skill') &&
+        !supportsSkillReplay) {
+      throw UnsupportedError('技能回放暂未接通；已保存数据不会删除，可继续发送普通文字任务');
+    }
     final readOrStop = operation == 'status' || operation == 'stop';
     if (!(readOrStop ? canReadStatus : authorized)) {
       throw const FormatException('控制连接已结束，请返回并重新连接控制板；旧动作不会重发');
