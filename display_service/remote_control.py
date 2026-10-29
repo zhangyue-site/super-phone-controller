@@ -4,7 +4,7 @@ from pathlib import Path
 from .wechat_nav import parse_task
 from .general_nav import parse_task as parse_general
 TERMINAL=frozenset(('done','error','stopped','expired','replaced'))
-CHANNELS=frozenset(('openclaw-weixin','telegram','android-app','board-ble'))
+CHANNELS=frozenset(('openclaw-weixin','telegram','android-app'))
 class RemoteControl:
  def __init__(self,conversation,path=None,clock=time.monotonic,screen_ready=None):
   self.c=conversation;self.path=Path(path or os.environ.get('EPAPER_REMOTE_STATE','/var/lib/phone-controller/remote-state.json'));self.clock=clock
@@ -45,7 +45,7 @@ class RemoteControl:
     if j:self.c.mailbox.cancel(r['owner'][3],r.get('session'),r.get('sequence'))
     r.update(state='error',reply='当前入口授权已撤销，本次任务已取消。',verified=False)
    elif r['state']=='pending' and now>=r['expires']:r.update(state='expired',reply='确认已超时，请重新发起。')
-   elif r['state']=='queued' and now>=r['expires']:r.update(state='expired',reply='未等到控制板领取，任务已取消；请检查连接后重新确认。')
+   elif r['state']=='queued' and r.get('expires') is not None and now>=r['expires']:r.update(state='expired',reply='领取已超时，请重新发起。',verified=False)
    elif r['state']=='running':
     if j is None:r.update(state='error',reply='任务连接丢失，请重新发起。',verified=False)
     elif j.cancelled:r.update(state='stopped',reply='本次手机操作已停止。',verified=False)
@@ -60,7 +60,7 @@ class RemoteControl:
   return dict(task_id=ident,state=r['state'],reply=r['reply'],verified=bool(r.get('verified')),terminal=r['state'] in TERMINAL)
  def prepare(self,owner,text):
   owner=self._owner(owner)
-  if not isinstance(text,str) or len(text)>120 or (parse_task(text) is None and parse_general(text) is None):raise ValueError('仅支持打开应用、导航和搜索；不支持发送、支付或删除。')
+  if not isinstance(text,str) or len(text)>120 or (parse_task(text) is None and parse_general(text) is None):raise ValueError('仅支持打开、导航和搜索。')
   query=parse_task(text)
   with self.lock:
    self._sync()
@@ -71,13 +71,9 @@ class RemoteControl:
      if self.records[ident]['state'] in TERMINAL:self.records.pop(ident);self.jobs.pop(ident,None);break
     else:raise ValueError('待处理任务过多')
    ident=uuid.uuid4().hex;reply='计划：从桌面打开微信，搜索'+(query or '')+'，停在搜索结果页，不发消息。回复 /phone 确认 '+ident+' 后执行；两分钟内有效。'
-   if query is None:reply='计划：'+text+'；仅执行安全页面导航和搜索，保留结果页并独立核验。回复 /phone 确认 '+ident+' 后执行；两分钟内有效。'
+   if query is None:reply='计划：'+text+'；仅执行安全导航，保留结果页并独立核验。确认 '+ident+' 后执行；两分钟有效。'
    r=dict(owner=owner,text=text,state='pending',reply=reply,expires=self.clock()+120,verified=False)
    self.records[ident]=r;self._save();return self._reply(ident,r)
- def prepare_skill(self,owner,skill_id,parameters):
-  owner=self._owner(owner)
-  text=self.c.skills.resolve(owner[3],skill_id,parameters)
-  return self.prepare(owner,text)
  def confirm(self,owner,ident):
   with self.lock,self.runtime_lock,self.c.mailbox.lock:
    self._sync();ident,r=self._get(owner,ident)
@@ -88,7 +84,7 @@ class RemoteControl:
    if self.voice_busy(device):raise ValueError('语音仍在处理中，请先停止或等待完成')
    j=self.c.mailbox.jobs.get(device)
    if j and not j.done and not j.cancelled:raise ValueError('控制板正在处理语音任务，请先停止或等待完成')
-   r.update(state='queued',expires=self.clock()+60,reply='已确认，等待控制板领取；请保持手机解锁、整屏共享和板端HID许可。');self._save();return self._reply(ident,r)
+   r.update(state='queued',expires=self.clock()+60,reply='已进入队列，会等到控制板领取；请保持手机解锁、整屏共享和板端HID许可。');self._save();return self._reply(ident,r)
  def claim(self,device,session,sequence,ready,pointer_protocol,lease=None):
   if not isinstance(session,str) or not re.fullmatch('[0-9a-f]{16}',session) or type(sequence)!=int or not 1<=sequence<=2147483647:raise ValueError('turn')
   # Snapshot consent before mailbox lock: screen handlers lock AUTHORITY then mailbox.
@@ -135,8 +131,14 @@ class RemoteControl:
   with self.lock:
    self._sync();owner=self._owner(owner)
    if ident is None and not any(r['owner']==owner for r in self.records.values()):
-    return dict(state='idle',reply='当前没有手机控制任务。发送 /phone 打开微信找到测试联系人 可先查看计划。',terminal=True,verified=False)
-   ident,r=self._get(owner,ident);return self._reply(ident,r)
+    return dict(state='idle',reply='当前没有手机控制任务。发送 /phone 打开微信找到李洋 可先查看计划。',terminal=True,verified=False)
+   ident,r=self._get(owner,ident);out=self._reply(ident,r)
+   if r['state']=='queued':
+    from . import events
+    code=events.latest_exec(r['owner'][3])
+    labels={0:'板端心跳：可以执行。',1:'板端心跳：未插入USB。',2:'板端心跳：未连上服务器。',3:'板端心跳：键鼠未开启。',4:'板端心跳：上一次任务失败。'}
+    out['reply']=out['reply']+' '+(labels[code] if code in labels else '还没有板端心跳。')
+   return out
  def stop_device(self,device):
   with self.lock,self.runtime_lock:
    self._sync();self.cancel_voice(device)

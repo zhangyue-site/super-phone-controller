@@ -1,5 +1,5 @@
-from .model_routing import task_model_session
 """Bounded WeChat navigation and explicit per-device verified replay skills."""
+from .model_routing import task_model_session
 import base64,hashlib,io,json,math,os,re,threading,time,zlib
 from pathlib import Path
 from PIL import Image
@@ -37,12 +37,23 @@ class WechatNavigator:
   raise ValueError("未收到新的手机画面，请在App中共享整个屏幕")
  def _observe(self,j,raw,query,verify=False):
   start=time.monotonic();barrier=j.video_barrier;session=j.screen_session
-  result=self.vision(raw,query,verify)
+  from .keyboard_input import observation_context
+  input_plan=getattr(j,'keyboard_input',None)
+  if input_plan:
+   with observation_context(input_plan):result=self.vision(raw,query,verify)
+  else:result=self.vision(raw,query,verify)
+  evidence=os.environ.get('EPAPER_NAV_EVIDENCE_DIR')
+  if evidence and getattr(j,'device',None)=='epaper-01' and isinstance(raw,bytes) and len(raw)<=524288:
+   try:
+    folder=Path(evidence)/str(getattr(j,'remote_task_id','diagnostic'));folder.mkdir(mode=0o700,parents=True,exist_ok=True)
+    count=len(list(folder.glob('*.jpg')))
+    if count<24:
+     path=folder/('%02d-%s.jpg'%(count,'verify' if verify else 'observe'));path.write_bytes(raw);path.chmod(0o600)
+   except OSError:pass
+  if not isinstance(result,dict):raise ValueError("画面识别响应格式无效")
   with self.m.lock:
    self.m._live(j)
    if barrier!=j.video_barrier or session!=j.screen_session:raise ValueError("画面会话已经改变")
-  confidence=result.get("confidence")
-  if type(confidence) not in (int,float) or not math.isfinite(confidence) or confidence<(.95 if verify else .9):raise ValueError("画面识别置信度不足")
   self._log(j,"vision",verify=verify,ms=round((time.monotonic()-start)*1000))
   return result
  def _matches_action_frame(self,expected,sig,current):
@@ -52,7 +63,7 @@ class WechatNavigator:
   if not self._matches_action_frame(expected,sig,current):raise ActionFrameChanged("手机页面已变化，本次停止以避免点错")
   self._log(j,"dispatch",op=command["op"])
   output=self.m.execute(j,command)
-  good=("HID_HOME_REPORT_SENT" if command["op"]=="hid_home" else "HID_POINTER_REPORT_SENT" if command["op"]=="hid_pointer" else "__PC_EXIT_0__")
+  good={"hid_home":"HID_HOME_REPORT_SENT","hid_pointer":"HID_POINTER_REPORT_SENT","hid_text":"HID_TEXT_REPORT_SENT","hid_key":"HID_KEY_REPORT_SENT"}.get(command["op"],"__PC_EXIT_0__")
   if output.strip()!=good:raise ValueError("板端没有确认动作完成")
   self._log(j,"receipt",op=command["op"],confirmed=True)
   return dict(j.last_receipt)

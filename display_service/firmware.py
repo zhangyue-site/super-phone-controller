@@ -72,6 +72,14 @@ def _release_day(version):
     try:return date(*(int(x) for x in match.groups()))
     except ValueError as error:raise ValueError('invalid firmware date') from error
 
+def _release_order(version):
+    # Explicit migration: semantic releases supersede legacy date builds once.
+    match=re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',version or '')
+    if match:return (1,*(int(x) for x in match.groups()))
+    day=_release_day(version)
+    return (0,day.year,day.month,day.day)
+
+
 def publish(device,data,source,activate=False,generation=0):
     """SSH/CLI-only publishing; no public upload route. Stage unless activated."""
     import fcntl,tempfile,time
@@ -103,11 +111,21 @@ def publish(device,data,source,activate=False,generation=0):
             current=folder/'current.json'
             previous=json.loads(current.read_text()) if current.exists() else {}
             if previous and previous.get('sha256')!=sha:
-                if _release_day(version)<=_release_day(previous.get('version')):
-                    raise ValueError('firmware downgrade or ambiguous version rejected')
+                if _release_order(version)<=_release_order(previous.get('version')):
+                    raise ValueError('firmware downgrade rejected')
             previous_generation=previous.get('activationGeneration',0)
             if previous_generation>0 and generation<=previous_generation and previous.get('sha256')!=sha:raise ValueError('stale cloud build')
             entry=dict(entry,activationGeneration=max(generation,previous_generation))
             if current.exists() and json.loads(current.read_text()).get('sha256')!=sha:atomic(folder/'previous.json',current.read_bytes())
             atomic(current,json.dumps(entry).encode())
     return entry
+
+
+class RangeError(ValueError):pass
+def range_start(header,size):
+    """Single open-ended byte range for an immutable, authenticated OTA image."""
+    if header is None:return None
+    if not isinstance(header,str) or len(header)>128 or not re.fullmatch(r'bytes=(0|[1-9][0-9]*)-',header):raise RangeError('range')
+    start=int(header[6:-1])
+    if not 0<=start<size:raise RangeError('unsatisfiable range')
+    return start

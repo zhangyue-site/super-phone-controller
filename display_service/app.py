@@ -7,22 +7,21 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse,parse_qs
 from . import events,firmware,app_ota,app_screen
 from .conversation import CONVERSATION
-from . import remote_http,app_control,board_control,relay_http
-from .audio_stream import read_chunks
+from . import remote_http,app_control,relay_http
+from .audio_stream import EarlyDisconnect,read_chunks,read_chunks_tolerant
 from .model import quota_rows
 from .voice import validate_pcm,recognize
 from .readiness import READINESS
 from .render import render,render_dialogue,render_voice_ui
 from .control import read as read_interaction, write as write_interaction
 
-CONFIG=Path(os.environ.get('EPAPER_CONFIG','/etc/phone-controller/devices.example.json'))
+CONFIG=Path(os.environ.get('EPAPER_CONFIG','/etc/phone-controller/devices.json'))
 QUOTAS=Path(os.environ.get('EPAPER_QUOTAS',str(Path.home()/'.local/state/phone-controller/quotas')))
 LOCK=threading.Lock()
 INTERACTIONS={}
 VOICE_BUSY=set()
 VOICE_GENERATION={}
 VOICE_CANCELLED={}
-
 
 def _remote_cancel_voice(device):
     VOICE_GENERATION[device]=VOICE_GENERATION.get(device,0)+1
@@ -44,11 +43,12 @@ def snapshot():
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
-    def reply(self,code,body,kind='application/json'):
+    def reply(self,code,body,kind='application/json',headers=None):
         self.send_response(code)
         self.send_header('Content-Type',kind)
         self.send_header('Content-Length',str(len(body)))
         self.send_header('Cache-Control','no-store')
+        for name,value in (headers or {}).items():self.send_header(name,value)
         self.end_headers()
         self.wfile.write(body)
     def device(self):
@@ -65,7 +65,6 @@ class Handler(BaseHTTPRequestHandler):
         if remote_http.handle(self,CONFIG):return
         if relay_http.handle(self,CONFIG):return
         if app_control.handle(self,CONFIG):return
-        if board_control.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         parsed=urlparse(self.path)
@@ -73,7 +72,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if parsed.path.endswith('/manifest'):return self.reply(200,firmware.manifest(device),'text/plain')
                 sha=parse_qs(parsed.query).get('sha',[''])[0]
-                return self.reply(200,firmware.release(device,sha)[1],'application/octet-stream')
+                data=firmware.release(device,sha)[1]
+                try:start=firmware.range_start(self.headers.get('Range'),len(data))
+                except firmware.RangeError:return self.reply(416,b'',headers={'Content-Range':'bytes */%d'%len(data),'Accept-Ranges':'bytes'})
+                if start is None:return self.reply(200,data,'application/octet-stream',headers={'Accept-Ranges':'bytes'})
+                return self.reply(206,data[start:],'application/octet-stream',headers={'Content-Range':'bytes %d-%d/%d'%(start,len(data)-1,len(data)),'Accept-Ranges':'bytes'})
             except (OSError,ValueError,KeyError,TypeError):return self.reply(404,b'{}')
         if parsed.path=='/events':return self.reply(200,json.dumps(events.tail(device)).encode())
         if parsed.path=='/checks':return self.reply(200,json.dumps(READINESS.snapshot()).encode())
@@ -95,7 +98,6 @@ class Handler(BaseHTTPRequestHandler):
         if remote_http.handle(self,CONFIG):return
         if relay_http.handle(self,CONFIG):return
         if app_control.handle(self,CONFIG):return
-        if board_control.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         if self.path=='/firmware/report':
@@ -197,7 +199,36 @@ class Handler(BaseHTTPRequestHandler):
                 if self.path=='/voice/stream':
                     if self.headers.get('Transfer-Encoding','').lower()!='chunked':raise ValueError('chunked required')
                     if self.headers.get('Content-Length') is not None:raise ValueError('ambiguous length')
-                    raw=read_chunks(self.rfile,progress)
+                    tolerated=False
+                    try:
+                        raw=read_chunks_tolerant(self.rfile,progress)
+                    except EarlyDisconnect as disc:
+                        # Board aborts short/no-voice takes by dropping the upload.
+                        # Tolerate what arrived instead of erroring the screen.
+                        tolerated=True
+                        raw=disc.args[0] if disc.args else b''
+                        if len(raw)>=12800:print('VOICE early-disconnect-tolerated bytes=%d'%len(raw),flush=True)
+                    if len(raw)<12800:
+                        # Short take, clean terminator or hang-up alike: quiet
+                        # no-capture. Cancelled turns stay completely silent.
+                        print('VOICE no-capture bytes=%d'%len(raw),flush=True)
+                        with LOCK:
+                            if sequence<=VOICE_CANCELLED.get(device,{}).get(session,0):
+                                return self.reply(200,b'{"recognized":false,"nocapture":true}')
+                            if generation==VOICE_GENERATION.get(device,0):
+                                write_interaction(device,'idle','\u672a\u5f55\u5230\u8bf4\u8bdd\uff0c\u8bf7\u9760\u8fd1\u9ea6\u514b\u98ce\u518d\u8bf4')
+                        return self.reply(200,b'{"recognized":false,"nocapture":true}')
+                    if tolerated:
+                        # Aborted takes with enough bytes must still sound like
+                        # speech; VAD-timeout silence stays a quiet no-capture.
+                        try:
+                            raw=validate_pcm(raw)
+                        except ValueError:
+                            print('VOICE no-capture bytes=%d rejected'%len(raw),flush=True)
+                            with LOCK:
+                                if generation==VOICE_GENERATION.get(device,0):
+                                    write_interaction(device,'idle','\u672a\u5f55\u5230\u8bf4\u8bdd\uff0c\u8bf7\u9760\u8fd1\u9ea6\u514b\u98ce\u518d\u8bf4')
+                            return self.reply(200,b'{"recognized":false,"nocapture":true}')
                 else:
                     size=int(self.headers.get('Content-Length','0'))
                     if not 12800<=size<=320000:raise ValueError('invalid length')
@@ -219,6 +250,9 @@ class Handler(BaseHTTPRequestHandler):
                     else:write_interaction(device,'waiting',text+'（仅识别模式）')
                 return self.reply(200,b'{"recognized":true,"actuatorConnected":false}')
             except (ValueError,OSError,TimeoutError,KeyError,RuntimeError,subprocess.SubprocessError) as error:
+                if isinstance(error,(BrokenPipeError,ConnectionResetError)):
+                    # Board aborts by hanging up; outcome was already written (or is moot).
+                    print('VOICE client-gone',flush=True);return None
                 intake_errors={'chunked required','ambiguous length','recording timed out','invalid chunk header','invalid chunk size','audio too large','trailers unsupported','truncated audio','invalid length'}
                 reason=str(error) if isinstance(error,ValueError) and str(error) in intake_errors else type(error).__name__
                 print('VOICE failure='+reason,flush=True)
@@ -245,6 +279,6 @@ def main():
         while True:
             time.sleep(5);CONVERSATION.expire()
     threading.Thread(target=expire,daemon=True).start()
-    ThreadingHTTPServer(('127.0.0.1',18943),Handler).serve_forever()
+    ThreadingHTTPServer(('127.0.0.1',int(os.environ.get('EPAPER_PORT','18943'))),Handler).serve_forever()
 
 if __name__=='__main__':main()

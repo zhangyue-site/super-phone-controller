@@ -123,6 +123,9 @@ class Mailbox:
  def offer(self,j,command):
   with self.lock:
    self._live(j)
+   if command.get("op") in ("hid_key","hid_text"):
+    from .keyboard_input import validate_command
+    validate_command(command)
    if j.command:raise ValueError('command busy')
    j.result=None;j.delivered=False;j.command=dict(command,id=uuid.uuid4().hex);j.event.clear()
    print('PHONE_COMMAND device=%s turn=%d id=%s op=%s'%(j.device,j.sequence,j.command['id'][:8],command['op']),flush=True)
@@ -149,7 +152,7 @@ class Mailbox:
    j=self._job(device,session,seq)
    if not j.command or not j.delivered or ident!=j.command['id']:raise ValueError('stale acknowledgement')
    if not isinstance(output,str) or len(output.encode())>(786432 if j.command['op']=='screenshot' else 48000):raise ValueError('command output size')
-   print('PHONE_RECEIPT device=%s turn=%d id=%s ok=%s'%(device,seq,ident[:8],ok),flush=True)
+   print('PHONE_RECEIPT device=%s turn=%d id=%s ok=%s err=%s'%(device,seq,ident[:8],ok,error or '-'),flush=True)
    j.last_receipt={'id':ident,'op':j.command['op'],'ok':ok,'barrier_before':j.video_barrier}
    j.result=(ok,output,error);j.command=None;j.touched=self.clock()
    if j.fenced:j.video_barrier=uuid.uuid4().hex;j.video=b''

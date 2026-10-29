@@ -75,7 +75,7 @@ class Conversation:
     except ValueError as error:raise NavigationError(str(error))
     d={'action':'reply','reply':'已固化为专项技能：'+name+'。下次可以从桌面回放。'}
    elif enabled and query is not None:
-    try:answer=self.navigator.run(j,query)
+    try:answer=self.general_navigator.run(j,'打开微信搜索'+query)
     except ValueError as error:raise NavigationError(str(error))
     d={'action':'reply','reply':answer}
    elif enabled and parse_general(text) is not None:

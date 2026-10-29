@@ -1,5 +1,5 @@
 """Separate authenticated OpenClaw bridge and device-only remote-claim endpoints."""
-import hmac,json,os,re
+import hmac,json,os,re,threading
 from pathlib import Path
 from .remote_control import RemoteControl
 from .conversation import CONVERSATION
@@ -10,9 +10,6 @@ def screen_ready(device):
   app_screen.AUTHORITY._prune(app_screen.AUTHORITY.clock())
   return any(item[1]==device for item in app_screen.AUTHORITY.tickets.values())
 def binding_allowed(owner):
- if owner[0]=='board-ble':
-  from . import board_control
-  return board_control.SESSIONS.allowed(owner)
  if owner[0]=='android-app':
   from . import app_control
   return app_control.binding_allowed(owner)
@@ -30,6 +27,20 @@ def body(handler,limit):
  obj=json.loads(raw) if raw else {}
  if not isinstance(obj,dict):raise ValueError('body')
  return obj
+# Serializes acquisition before either transport may consume a task. Never held
+# while acquiring INIT_LOCK; Gateway methods acquire this lock before self.lock.
+OWNERSHIP_LOCK=threading.RLock()
+def claim_direct(device,session,seq,ready,pointer,lease):
+ # Called only after the HTTP device credential and turn have been validated.
+ from . import relay_http
+ with OWNERSHIP_LOCK:
+  gateway=relay_http.GATEWAY
+  if gateway is not None:
+   with gateway.lock:
+    if gateway.direct_blocked(device):return {'op':'wait'}
+    return REMOTE.claim(device,session,seq,ready,pointer,lease)
+  return REMOTE.claim(device,session,seq,ready,pointer,lease)
+
 def handle(handler,device_config):
  path=handler.path
  if path not in ('/bridge/phone','/remote/claim','/remote/status'):return False
@@ -44,7 +55,18 @@ def handle(handler,device_config):
    owner=tuple(obj.get(k,'') for k in ('channel','sender','conversation','device'));REMOTE._owner(owner)
    if not any(list(owner)==[b.get(k) for k in ('channel','sender','conversation','device')] for b in config.get('bindings',[])):raise PermissionError('binding')
    operation=obj.get('operation')
-   if operation=='prepare':result=REMOTE.prepare(owner,obj.get('text'))
+   if operation=='prepare':
+    result=REMOTE.prepare(owner,obj.get('text'))
+    # The private chat is already the authorization. Do not ask for a second confirm.
+    if result.get('state')=='pending':
+     ident=result['task_id']
+     try:result=REMOTE.confirm(owner,ident)
+     except ValueError as error:
+      with REMOTE.lock:
+       record=REMOTE.records.get(ident)
+       if record and record.get('state')=='pending':record.update(state='error',reply=str(error),verified=False);REMOTE._save()
+      raise
+     result['reply']='已开始执行。'+result['reply']+' 编号 '+ident
    elif operation=='confirm':result=REMOTE.confirm(owner,obj.get('task_id'))
    elif operation=='status':result=REMOTE.status(owner,obj.get('task_id'))
    elif operation=='stop':result=REMOTE.stop(owner)
@@ -58,7 +80,7 @@ def handle(handler,device_config):
    obj=body(handler,128)
    if path=='/remote/claim':
     if set(obj)-{'ready'} or ('ready' in obj and type(obj['ready']) is not bool):raise ValueError('claim shape')
-    result=REMOTE.claim(device,session,seq,obj.get('ready',False),handler.headers.get('X-HID-Pointer'),handler.headers.get('X-Remote-Lease'))
+    result=claim_direct(device,session,seq,obj.get('ready',False),handler.headers.get('X-HID-Pointer'),handler.headers.get('X-Remote-Lease'))
    else:
     if obj:raise ValueError('status shape')
     result=REMOTE.board_status(device,session,seq)

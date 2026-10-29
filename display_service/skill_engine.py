@@ -74,10 +74,10 @@ class SkillStore:
   parameters=spec.bind(parameters)
   if not isinstance(entry_receipt,dict) or entry_receipt.get("op")!="hid_home" or entry_receipt.get("ok") is not True:raise ValueError("缺少桌面入口回执")
   if not verification.get("verified") or verification.get("terminal")!=spec.terminal or verification.get("parameters")!=parameters:raise ValueError("缺少专项结果核验")
-  if not (0 if spec.id=="general.navigate" else 1)<=len(steps)<=8:raise ValueError("技能步骤无效")
+  if not (0 if spec.id=="general.navigate" else 1)<=len(steps)<=(17 if spec.id=="general.navigate" else 8):raise ValueError("技能步骤无效")
   for step in steps:
    receipt=step.get("receipt",{})
-   if receipt.get("ok") is not True or receipt.get("op") not in ("hid_pointer","type_text"):raise ValueError("缺少动作成功回执")
+   if receipt.get("ok") is not True or receipt.get("op") not in ("hid_pointer","hid_text","hid_key","type_text"):raise ValueError("缺少动作成功回执")
    if not re.fullmatch(r"[0-9a-f]{32}",receipt.get("id","")):raise ValueError("动作关联ID无效")
    if "signature" not in step or "target" not in step:raise ValueError("缺少画面与目标检查条件")
   print('SKILL_COLLECT device=%s workflow=%s turn=%s verified=true'%(job.device,spec.id,getattr(job,'sequence',0)),flush=True)

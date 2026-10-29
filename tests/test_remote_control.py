@@ -32,6 +32,13 @@ class RemoteTests(unittest.TestCase):
   with self.assertRaises(ValueError):self.r.confirm(self.wx,ident)
   ident=self.prepare();self.r.confirm(self.wx,ident);self.now[0]+=61
   self.assertEqual(self.claim()['op'],'wait');self.assertEqual(self.c.started,[])
+ def test_reconfirm_does_not_extend_the_original_queue_deadline(self):
+  ident=self.prepare();self.r.confirm(self.wx,ident);expires=self.r.records[ident]['expires']
+  self.now[0]+=50;self.r.confirm(self.wx,ident);self.assertEqual(self.r.records[ident]['expires'],expires)
+  self.now[0]=expires;self.assertEqual(self.claim()['op'],'wait');self.assertFalse(self.c.started)
+ def test_running_execution_uses_its_own_deadline_not_the_queue_ttl(self):
+  ident=self.prepare();self.r.confirm(self.wx,ident);self.assertEqual(self.claim()['op'],'start')
+  self.now[0]+=61;self.assertEqual(self.r.board_status('board','a'*16,self.counter)['op'],'wait');self.assertFalse(self.c.mailbox.jobs['board'].cancelled)
  def test_stop_before_claim_and_during_running(self):
   ident=self.prepare();self.r.confirm(self.wx,ident);self.r.stop(self.tg)
   self.assertEqual(self.claim()['op'],'wait')

@@ -6,48 +6,94 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 def render(rows, interaction, page=0, now=None, connected=True):
+    """Render supplied facts only; connectivity is not a cloud/phone readiness proof.
+
+    y >= 162 belongs to the firmware 1.6.8 footer overlay. ``now`` is rendering time,
+    never the observation time; per-row age comes from the quota model.
+    """
     font_path=os.environ.get('EPAPER_FONT','/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc')
     if not os.path.isfile(font_path):
         font_path='/System/Library/Fonts/Supplemental/Songti.ttc'
-    font=ImageFont.truetype(font_path,12)
-    small=ImageFont.truetype(font_path,10)
-    title=ImageFont.truetype(font_path,16)
+    font=ImageFont.truetype(font_path,14)
+    small=ImageFont.truetype(font_path,9)
+    title=ImageFont.truetype(font_path,22)
     im=Image.new('1',(200,200),1)
     d=ImageDraw.Draw(im)
-    def text(x,y,s,f=font):
-        s=str(s)
-        while s and d.textlength(s,font=f)>192-x:
-            s=s[:-1]
-        d.text((x,y),s,font=f,fill=0)
-    text(8,3,'模型额度' if page==0 else '当前交互',title)
-    text(145,8,'106 在线' if connected else '未连接',small)
-    d.line((7,27,192,27),fill=0)
+    def text(x,y,value,f=font,width=184):
+        value=str(value)
+        if d.textlength(value,font=f)>width:
+            while value and d.textlength(value+'…',font=f)>width:
+                value=value[:-1]
+            value+='…'
+        d.text((x,y),value,font=f,fill=0,anchor='lt')
+    def wrap(value,f,width):
+        lines=[];line=''
+        for char in str(value):
+            if char=='\n' or d.textlength(line+char,font=f)>width:
+                lines.append(line);line=''
+                if char=='\n':continue
+            line+=char
+        if line:lines.append(line)
+        return lines
+    text(8,1,'额度与余额' if page==0 else '任务记录',title)
+    d.line((8,29,191,29),fill=0)
     if page==0:
-        text(8,31,'剩余额度 · 旧值标记 *',small)
+        text(8,31,'各渠道原单位 · 非账单',small)
+        states={'ok':'','stale':'已过期','error':'获取失败','unavailable':'暂无数据'}
         for i,row in enumerate(rows[:5]):
-            y=49+i*25
-            text(8,y,row['label'])
-            value=row['value']+('*' if row['status']!='ok' else '')
-            w=d.textlength(value,font=font)
-            text(max(90,191-w),y,value)
-            if row['remaining'] is not None:
-                d.rectangle((8,y+18,191,y+20),outline=0)
-                width=int(181*row['remaining']/100)
-                if width:d.rectangle((9,y+19,9+width,y+19),fill=0)
+            y=40+i*24
+            label=str(row.get('label',''))
+            value=row.get('value')
+            # A missing amount is unknown, not zero. Preserve supplied units.
+            value='--' if value is None or value=='' else str(value)
+            width=d.textlength(value,font=font)
+            if width<=100:
+                text(8,y,label,font,width=max(30,174-width-8))
+                text(192-width,y,value,font,width=width)
+            else:
+                # Preserve long amounts/units instead of hiding significant digits.
+                # Use a second line and a measured font; no numeric conversion.
+                text(8,y,label,small,width=184)
+                fitted=font
+                for size in range(15,7,-1):
+                    fitted=ImageFont.truetype(font_path,size)
+                    if d.textlength(value,font=fitted)<=184:break
+                text(8,y+11,value,fitted,width=184)
+            age=row.get('age')
+            observed=(datetime.fromtimestamp(now-age,ZoneInfo('Asia/Shanghai')).strftime('%H:%M')
+                      if now is not None and isinstance(age,(int,float)) and age>=0 else None)
+            status=states.get(row.get('status'),'状态未知')
+            # Long amounts keep all original digits; metadata remains on label line.
+            if width<=100:
+                detail=('更新 '+observed if observed else '更新时间未知')
+                if status:detail+=' · '+status
+                text(8,y+14,detail,small)
+            else:
+                detail=(observed or '--:--')+' '+(status or '更新')
+                d.rectangle((8,y,191,y+10),fill=1)
+                text(8,y,label+' · '+detail,small)
+        # Firmware owns y >= 162; no dynamic footer is drawn here.
     else:
         state=interaction.get('state','idle')
-        labels={'idle':'待命','listening':'正在录音','thinking':'正在思考','running':'正在执行',
-                'waiting':'等待确认','done':'已完成','error':'执行失败','stopped':'已停止'}
-        text(8,34,labels.get(state,'未知状态'),title)
-        text(8,61,'设备：'+interaction.get('phone','尚未绑定'))
-        task=interaction.get('task') or '尚无手机控制任务'
-        for i in range(3):text(8,85+i*19,task[i*14:(i+1)*14])
-        text(8,149,'步骤：'+str(interaction.get('step',0)),small)
-        text(8,164,'投屏 / HID 尚未接通',small)
-    d.line((7,178,192,178),fill=0)
-    stamp=datetime.fromtimestamp(now,ZoneInfo('Asia/Shanghai')).strftime('%H:%M') if now else '--:--'
-    text(8,182,stamp+' 更新',small)
-    text(91,182,'短按翻页 长按停止',small)
+        labels={'idle':'暂无任务','listening':'正在录音','thinking':'正在规划','running':'正在操作',
+                'waiting':'等待确认','done':'结果已返回','error':'本轮未完成','stopped':'已停止'}
+        text(8,34,labels.get(state,'状态待确认'),title)
+        text(8,61,'手机：'+str(interaction['phone']) if interaction.get('phone') else '对象请在手机核对')
+        task=interaction.get('task') or '请在控制手机发起任务'
+        lines=wrap(task,font,184)
+        for i,line in enumerate(lines[:3]):
+            text(8,82+i*20,line+('…' if i==2 and len(lines)>3 else ''))
+        # A returned result alone does not prove the target UI reached its goal.
+        detail=('结果请在控制手机核对' if state=='done' else
+                '请在控制手机查看原因' if state=='error' else
+                '待执行步骤不会自动重放' if state=='stopped' else
+                '步骤：'+str(interaction['step']) if interaction.get('step') is not None else
+                '连接与许可请查看手机')
+        text(8,143,detail,small)
+        observed=interaction.get('updatedAt')
+        stamp=(datetime.fromtimestamp(observed,ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M')
+               if isinstance(observed,(int,float)) and observed>0 else '时间未知')
+        text(8,153,'记录 '+stamp+' · 非在线证明',small)
     return im
 
 

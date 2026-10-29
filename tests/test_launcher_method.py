@@ -13,12 +13,16 @@ class LauncherMethodTests(unittest.TestCase):
   o=self.result()
   with patch('display_service.jev_vision.clear_swipe_region',return_value=False):self.assertIs(launcher_method(o,b'frame','打开计算器'),o)
  def test_bad_page_confidence_or_complete_never_creates_action(self):
-  for values in ({'screen':'浏览器'},{'confidence':.89},{'confidence':float('nan')},{'safe':False},{'complete':True},{'action':'unknown'}):
+  for values in ({'screen':'浏览器'},{'safe':False},{'complete':True},{'action':'unknown'}):
    o=self.result(**values)
    with self.subTest(values=values),patch('display_service.jev_vision.clear_swipe_region',return_value=True):self.assertIs(launcher_method(o,b'frame','打开计算器'),o)
  def test_only_safe_app_opening_uses_method(self):
-  for task in ('回到手机桌面','删除照片','打开设置并卸载应用','打开设置'):
+  for task in ('回到手机桌面','删除照片','打开设置并卸载应用'):
    o=self.result()
    with self.subTest(task=task),patch('display_service.jev_vision.clear_swipe_region',return_value=True):self.assertIs(launcher_method(o,b'frame',task),o)
+ def test_self_reported_confidence_never_grants_or_blocks_permission(self):
+  for value in (0,float('nan'),1,None):
+   o=self.result(confidence=value)
+   with patch('display_service.jev_vision.clear_swipe_region',return_value=True):self.assertEqual(launcher_method(o,b'frame','打开设置')['action'],'drag')
  def test_model_cannot_inject_trusted_desktop_flag(self):
   r=normalize_observation(dict(self.result(),coordinate_system='pixels',_trusted_launcher_blank=True),1000,1000);self.assertNotIn('_trusted_launcher_blank',r)

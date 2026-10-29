@@ -32,7 +32,9 @@ public class UsbLeaseHarness {
         bridge=(K/'UsbLaunchBridge.kt').read_text()
         self.assertNotIn('handler.postDelayed',bridge)
         self.assertIn('session=null',bridge)
-        self.assertIn('lost?.invoke(oldSession)',bridge)
+        self.assertIn('oldSession?.let { lost?.invoke(it) }',bridge)
+        self.assertIn('lease.detach()',bridge)
+        self.assertIn('val detachGeneration: Long get()=lease.generation()',bridge)
     def test_lifecycle_and_session_guards(self):
         s=(K/'UsbProofBridge.kt').read_text()
         self.assertIn('Executors.newSingleThreadExecutor',s)

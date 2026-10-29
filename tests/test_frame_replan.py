@@ -14,8 +14,9 @@ class FrameReplanTests(unittest.TestCase):
   self.j=self.m.create('synthetic','a'*16,1);self.j.pointer_protocol='absolute-v1';self.j.video_barrier='b'*32
   self.raw=frame(0);self.calls=[]
   self.final=dict(confidence=.99,complete=True,safe=True,verified=True,task='打开设置',application='设置',bounds=[0,50,1000,900],evidence='系统设置页面')
- def run_case(self,trusted=True,repeated=False,other_error=False):
+ def run_case(self,trusted=True,repeated=False,other_error=False,safe=True):
   click=dict(confidence=.97,safe=True,complete=False,screen='launcher',action='click',target_label='设置',bounds=[100,200,200,300],_trusted_launcher_settings=trusted)
+  click.update(safe=safe)
   observations=iter([click,click,dict(self.final)])
   self.nav.vision=lambda raw,task,verify:dict(self.final) if verify else next(observations)
   def action(j,command,expected):
@@ -36,8 +37,11 @@ class FrameReplanTests(unittest.TestCase):
   with self.assertRaises(ActionFrameChanged):self.run_case(repeated=True)
   self.assertEqual(len(self.calls),3);self.assertFalse(self.j.navigation_verified)
  def test_untrusted_frame_never_replans(self):
-  with self.assertRaises(ActionFrameChanged):self.run_case(trusted=False)
-  self.assertEqual(len(self.calls),2)
+  with self.assertRaises(ValueError):self.run_case(trusted=False,safe=False)
+  self.assertEqual(self.calls,['hid_home'])
+ def test_safe_visual_target_can_relocate_once_without_model_trusted_flag(self):
+  result,_=self.run_case(trusted=False,safe=True)
+  self.assertIn('已通过',result);self.assertEqual(self.calls,['hid_home','hid_pointer','hid_pointer'])
  def test_post_dispatch_or_generic_error_never_replans(self):
   with self.assertRaises(ValueError):self.run_case(other_error=True)
   self.assertEqual(len(self.calls),2)

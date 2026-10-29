@@ -13,7 +13,7 @@ class ModelRoutingTests(unittest.TestCase):
  def response(self,value):return io.BytesIO(json.dumps({'choices':[{'finish_reason':'stop','message':{'content':json.dumps(value)}}]}).encode())
  def test_current_provider_supports_both_vision_paths_without_old_alias(self):
   for module in (wechat_vision,general_vision):
-   with self.subTest(module=module.__name__),patch('urllib.request.urlopen',return_value=self.response({'screen':'unknown','coordinate_system':'pixels'})) as net:
+   with self.subTest(module=module.__name__),patch('display_service.general_vision._open_vision' if module is general_vision else 'urllib.request.urlopen',return_value=self.response({'screen':'unknown','coordinate_system':'pixels'})) as net:
     self.assertEqual(module.observe(frame(0),'test')['screen'],'unknown')
     request=net.call_args.args[0]
     self.assertEqual(json.loads(request.data)['model'],'mimo-v2.6-flash')

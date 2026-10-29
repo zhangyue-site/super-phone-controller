@@ -2,6 +2,7 @@ from .model_routing import task_model_session
 """App-independent screenshot navigation using the established mailbox fences."""
 import base64,re,time,json
 from .wechat_nav import WechatNavigator
+from .dialogue import PhoneCommandError
 from .skill_engine import WorkflowSpec,region,matches,region_matches
 from .general_vision import observe
 from .dialogue import DENY
@@ -12,6 +13,12 @@ def parse_task(text):
  if enabled(text):return text
  if not isinstance(text,str) or not 1<=len(text)<=120 or re.search(r'下载|发送|发消息|转账|支付|付款|删除|卸载|购买|下单|发布|评论|点赞|授权|安装|adb|shell|https?://|[`;$<>\\\n\r]',text,re.I):return None
  return text.strip() if re.fullmatch(r'(?:请|帮我)?(?:打开|进入|搜索|查找|找到|返回|回到).{1,100}',text.strip()) else None
+def _may_reobserve_settings(task, observation):
+ return bool(task in ("打开设置","进入设置","打开系统设置","进入系统设置")
+  and observation.get("screen") in ("安卓桌面","Android桌面","Android 桌面","手机桌面","桌面")
+  and observation.get("action")=="click" and observation.get("target_label") in ("设置","系统设置")
+  and observation.get("safe") is True and observation.get("complete") is False)
+
 def verification_region(raw,bounds):
  # Final evidence may cover the whole screen. System clock/network counters
  # are not the application result and already excluded by signature().
@@ -24,11 +31,44 @@ def verification_region(raw,bounds):
 
 class GeneralNavigator(WechatNavigator):
  def __init__(self,mailbox,store,vision=observe,frame_timeout=15):super().__init__(mailbox,store,vision,frame_timeout)
+ def _observe_frame(self,j,raw,seq,sig,task,verify=False):
+  from .general_vision import VisionTransportError,same_provider_retry
+  with self.m.lock:
+   self.m._live(j);barrier=j.video_barrier;session=j.screen_session
+  try:return raw,seq,sig,self._observe(j,raw,task,verify=verify)
+  except VisionTransportError as error:
+   if not error.retryable:raise
+   with self.m.lock:
+    self.m._live(j)
+    if barrier!=j.video_barrier or session!=j.screen_session:raise ValueError('画面会话已经改变')
+   # Obtain a genuinely later consented frame; no actuator call is repeated.
+   previous_size=(sig.get("w"),sig.get("h"))
+   raw,seq,sig=self._frame(j,after=seq)
+   if previous_size!=(sig.get("w"),sig.get("h")):raise ValueError("共享画面尺寸改变")
+   with self.m.lock:
+    self.m._live(j)
+    if barrier!=j.video_barrier or session!=j.screen_session:raise ValueError('画面会话已经改变')
+   self._log(j,'vision_transport_retry',attempt=2,provider=error.provider,verify=verify)
+   with same_provider_retry(error):return raw,seq,sig,self._observe(j,raw,task,verify=verify)
  def _log(self,j,stage,**metadata):
   if stage=='dispatch':
    j.state='running';j.reply={'hid_home':'正在回到手机桌面','hid_pointer':'正在按画面定位导航目标','type_text':'正在输入搜索词并恢复原输入法'}.get(metadata.get('op'),'正在导航')
   elif stage=='vision' and metadata.get('verify'):j.state='verifying';j.reply='正在独立核验目标画面'
   print("GENERAL_NAV "+json.dumps(dict(device=j.device,turn=j.sequence,stage=stage,**metadata),separators=(",",":")),flush=True)
+ def _action(self,j,command,sig):
+  try:return super()._action(j,command,sig)
+  except PhoneCommandError as first:
+   # input_failed means the HID report never reached the USB endpoint:
+   # resubmitting is safe (nothing was delivered; frame fences re-verify
+   # before every dispatch). Up to 3 attempts total with short backoff.
+   if first.code!='input_failed' or command.get('op') not in ('hid_pointer','hid_home'):raise
+   for attempt in (2,3):
+    time.sleep(.8*(attempt-1))
+    self._log(j,'input_retry',op=command.get('op'),attempt=attempt)
+    try:return super()._action(j,command,sig)
+    except PhoneCommandError as e:
+     if e.code!='input_failed':raise
+   raise first
  def _command(self,o,task):
   action=o.get('action')
   label=o.get('target_label')
@@ -41,7 +81,7 @@ class GeneralNavigator(WechatNavigator):
   if action=='type_text':
    text=o.get('text')
    if not isinstance(text,str) or not 1<=len(text)<=60 or text not in task or o.get('input_focused') is not True or o.get('input_role')!='search':raise ValueError('输入内容或焦点无法确认')
-   return {'op':'type_text','text_b64':base64.b64encode(text.encode()).decode()}
+   raise ValueError('文字输入必须通过USB键盘计划，不使用ADB')
   if action not in ('click','drag'):raise ValueError('无法识别可支持的导航动作')
   command={'op':'hid_pointer','kind':action,'x':(x1+x2)*32767//2000,'y':(y1+y2)*32767//2000}
   if action=='drag':
@@ -51,6 +91,10 @@ class GeneralNavigator(WechatNavigator):
   return command
  def _matches_action_frame(self,expected,sig,current):
   if super()._matches_action_frame(expected,sig,current):return True
+  if expected.get('_visual_target') is True:
+   from .launcher_guard import structure_metrics
+   layout=structure_metrics(expected,sig)
+   if layout and layout['same'] and region_matches(expected.get('target'),current):return True
   if not (expected.get('_blank_launcher') is True or expected.get('_launcher_settings') is True):return False
   from .launcher_guard import structure_metrics,quantized_core_matches
   from .jev_vision import clear_swipe_region
@@ -79,8 +123,11 @@ class GeneralNavigator(WechatNavigator):
   if final.get('complete') is not True or final.get('verified') is not True or final.get('task')!=task or final.get('safe') is not True or not isinstance(final.get('evidence'),str) or not final['evidence'].strip():raise ValueError('最终画面未通过独立核验')
   goal=re.fullmatch(r'(?:请|帮我)?(?:打开|进入)(.+?)(?:(?:搜索|查找|找到)(.+))?',task)
   if goal:
-   if final.get('application')!=goal[1]:raise ValueError('最终画面没有核验到目标应用')
+   actual_app=final.get('application');expected_app=goal[1]
+   if actual_app!=expected_app and not (actual_app in ('设置','系统设置') and expected_app in ('设置','系统设置')):raise ValueError('最终画面没有核验到目标应用')
    if goal[2] and (final.get('query')!=goal[2] or goal[2] not in final['evidence']):raise ValueError('最终画面没有核验到完整搜索词')
+  search=re.fullmatch(r'(?:请|帮我)?(?:搜索|查找|找到)(.+)',task)
+  if search and (final.get('query')!=search[1] or search[1] not in final['evidence']):raise ValueError('最终画面没有核验到完整搜索词')
  @task_model_session
  def run(self,j,task):
   if parse_task(task) is None:raise ValueError('仅支持打开、查找和搜索，不支持发送、支付或删除')
@@ -93,39 +140,53 @@ class GeneralNavigator(WechatNavigator):
   raw,seq,sig=self._frame(j);geometry=(sig['w'],sig['h']);entry=self._action(j,{'op':'hid_home'},sig)
   trace=[];last=self._receipt_frame_floor(j,seq);complete=False;final=None
   frame_replans=1
-  for index in range(9):
+  for index in range(18):
    raw,seq,sig=self._frame(j,after=last);last=seq
    if (sig['w'],sig['h'])!=geometry:raise ValueError('共享画面尺寸改变')
    # A saved skill is a method: every run locates its target in the current frame.
-   o=self._observe(j,raw,task)
-   if o.get('complete') is True:complete=True;break
-   if o.get('action')=='unknown' and o.get('safe') is True:
+   raw,seq,sig,o=self._observe_frame(j,raw,seq,sig,task)
+   last=seq
+   input_pending=bool(getattr(j,'keyboard_input',None) and j.keyboard_input.get('stage')!='complete')
+   if o.get('complete') is True and not input_pending:complete=True;break
+   if o.get('action')=='unknown' and o.get('safe') is True and not input_pending:
     # Missing completion fields must never turn into an extra action.
-    final=self._observe(j,raw,task,verify=True)
+    raw,seq,sig,final=self._observe_frame(j,raw,seq,sig,task,verify=True)
+    last=seq
     self._validate_final(final,task)
     complete=True;break
-   if index==8:break
-   command=self._command(o,task)
+   if index==17:break
+   from .keyboard_navigation import decision
+   try:command,next_input,observe_only=decision(getattr(j,'keyboard_input',None),o,task,seq)
+   except (ValueError,RuntimeError) as error:
+    self._log(j,'keyboard_check_failed',reason=str(error)[:120])
+    raise ValueError('无法确认搜索框、候选词或实际输入文字，本次已停止') from error
+   if observe_only:
+    j.keyboard_input=next_input
+    continue
+   if command is None:command=self._command(o,task)
+   if command.get('op')=='hid_pointer' and next_input and next_input.get('stage')=='select_candidate':o=dict(o,bounds=next_input['bounds'])
    stored={'signature':sig,'observation':o,'target':region(raw,o['bounds'])}
    if o.get('_trusted_launcher_blank') is True and o.get('screen')=='launcher' and o.get('action')=='drag' and o.get('bounds')==[450,630,550,670] and o.get('end')==[500,250]:sig['_blank_launcher']=True
    if o.get('_trusted_launcher_settings') is True and o.get('action')=='click' and o.get('target_label') in ('设置','系统设置'):
     from .launcher_guard import settings_icon_core
     sig['settings_core']=settings_icon_core(raw,o['bounds']);sig['_launcher_settings']=True
    sig['target']=stored['target']
+   if o.get('safe') is True and (command['op']=='hid_text' or command.get('kind')=='click'):sig['_visual_target']=True
    from .wechat_nav import ActionFrameChanged
    try:stored['receipt']=self._action(j,command,sig)
    except ActionFrameChanged:
-    if not frame_replans or not (sig.get('_launcher_settings') or sig.get('_blank_launcher')):raise
+    if not frame_replans or not (sig.get('_launcher_settings') or sig.get('_blank_launcher') or sig.get('_visual_target') or _may_reobserve_settings(task,o)):raise
     # Nothing was dispatched: discard coordinates and inspect a newer frame once.
     frame_replans-=1;last=self._receipt_frame_floor(j,last)
     self._log(j,'frame_replan',remaining=frame_replans)
     continue
+   if next_input is not None:j.keyboard_input=next_input
    trace.append(stored)
    last=self._receipt_frame_floor(j,last)
-  if not complete:raise ValueError('导航超出八步限制或未识别到目标')
-  final=final or self._observe(j,raw,task,verify=True)
+  if not complete:raise ValueError('导航超出有界步骤限制或未识别到目标')
+  if final is None:raw,seq,sig,final=self._observe_frame(j,raw,seq,sig,task,verify=True)
   self._validate_final(final,task)
-  target=verification_region(raw,final.get('bounds'));latest,_,latest_sig=self._frame(j,after=seq)
+  target=verification_region(raw,final.get('bounds'));latest,latest_seq,latest_sig=self._frame(j,after=seq)
   scene_same=matches(sig,latest_sig);target_same=region_matches(target,latest)
   self._log(j,'result_stability',scene_same=scene_same,target_same=target_same,box=target['box'])
   stable=scene_same and target_same
@@ -133,7 +194,7 @@ class GeneralNavigator(WechatNavigator):
    # Read-only result validation: independently inspect the newer frame.
    # Action precondition fences remain strict; dynamic results are not cached.
    if latest_sig.get('w')!=geometry[0] or latest_sig.get('h')!=geometry[1]:raise ValueError('共享画面尺寸改变')
-   refreshed=self._observe(j,latest,task,verify=True)
+   latest,latest_seq,latest_sig,refreshed=self._observe_frame(j,latest,latest_seq,latest_sig,task,verify=True)
    self._validate_final(refreshed,task)
    verification_region(latest,refreshed.get('bounds'))
    self._log(j,'result_reverified',verified=True,coordinate_replay_saved=False)
@@ -141,3 +202,4 @@ class GeneralNavigator(WechatNavigator):
    self.m._live(j);j.navigation_verified=True
    self.store.remember(j,WORKFLOW,{'task':task},trace,geometry,entry,{'verified':True,'terminal':WORKFLOW.terminal,'parameters':{'task':task},'frame':seq,'executionMode':'semantic'})
   return '已通过画面核验完成：'+task+'。已保留结果页。'
+

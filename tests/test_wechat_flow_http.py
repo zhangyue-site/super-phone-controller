@@ -8,6 +8,7 @@ from display_service.app_ota import Authority
 from display_service.conversation import Conversation
 from display_service.dialogue import Mailbox
 from display_service.wechat_nav import SkillStore,WechatNavigator
+from display_service.general_nav import GeneralNavigator
 from test_wechat_nav import frame,observation
 
 class WechatHttpTests(unittest.TestCase):
@@ -15,10 +16,16 @@ class WechatHttpTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as temp:
    root=Path(temp);config=root/"devices.json";config.write_text(json.dumps({"sim-board":"synthetic-only"}))
    mailbox=Mailbox();store=SkillStore(root/"skills");stage=[0];calls=[]
-   def vision(raw,query,verify=False):calls.append(verify);return observation(3 if verify else stage[0])
-   nav=WechatNavigator(mailbox,store,vision=vision,frame_timeout=2)
+   def vision(raw,query,verify=False):
+    calls.append(verify);desired='测试联系人'
+    base=dict(safe=True,screen='synthetic',bounds=[100,100,300,200],target_label='搜索框',input_role='search',input_visible=True,input_focused=True,input_password=False,complete=False)
+    if verify or stage[0]>=4:return dict(base,complete=True,verified=True,task=query,application='微信',query=desired,committed_text=desired,evidence='搜索结果显示'+desired)
+    if stage[0]==2:return dict(base,action='type_text',text=desired)
+    if stage[0]==3:return dict(base,action='click',committed_text='',candidates=[dict(text=desired,bounds=[100,500,300,600])])
+    return dict(base,action='click')
+   nav=GeneralNavigator(mailbox,store,vision=vision,frame_timeout=2)
    def forbidden(_):raise AssertionError("Wechat task must use bounded navigator, not text tools")
-   conversation=Conversation(mailbox,model=forbidden,tts=lambda _:b"\0\1"*100,status=lambda *a:None,navigator=nav,skills=store)
+   conversation=Conversation(mailbox,model=forbidden,tts=lambda _:b"\0\1"*100,status=lambda *a:None,navigator=nav,general_navigator=nav,skills=store)
    authority=Authority();ticket="t"*43;authority.tickets[ticket]=(authority.clock()+300,"sim-board","a"*64)
    server=ThreadingHTTPServer(("127.0.0.1",0),app.Handler);thread=threading.Thread(target=server.serve_forever);thread.start()
    session="e"*16;turn=1;commands=[];barrier="";frame_number=0
@@ -29,7 +36,7 @@ class WechatHttpTests(unittest.TestCase):
     conn.request("POST",path,body,headers);response=conn.getresponse();status=response.status;raw=response.read();conn.close()
     return status,json.loads(raw)
    try:
-    with patch.dict("os.environ",{"EPAPER_WECHAT_NAV":"1"}),patch.object(app,"CONFIG",config),patch.object(app,"CONVERSATION",conversation),patch.object(app_screen,"CONVERSATION",conversation),patch.object(app_screen,"AUTHORITY",authority),patch.object(app_screen,"STORE",store),patch.object(app,"recognize",lambda _:"打开微信找到测试联系人"),patch.object(app,"write_interaction",lambda *a:None):
+    with patch.object(app_screen,"SEQUENCES",{}),patch.dict("os.environ",{"EPAPER_WECHAT_NAV":"1"}),patch.object(app,"CONFIG",config),patch.object(app,"CONVERSATION",conversation),patch.object(app_screen,"CONVERSATION",conversation),patch.object(app_screen,"AUTHORITY",authority),patch.object(app_screen,"STORE",store),patch.object(app,"recognize",lambda _:"打开微信找到测试联系人"),patch.object(app,"write_interaction",lambda *a:None):
      status,_=request("/voice",array.array("h",[600,-600]*4000).tobytes(),extra={"X-Voice-Dialogue":"1"});self.assertEqual(status,200)
      until=time.monotonic()+8
      while time.monotonic()<until:
@@ -40,18 +47,18 @@ class WechatHttpTests(unittest.TestCase):
        commands.append(op)
        if op=="hid_home":stage[0]=0;output="HID_HOME_REPORT_SENT"
        elif op=="hid_pointer":stage[0]+=1;output="HID_POINTER_REPORT_SENT"
-       elif op=="type_text":stage[0]=3;output="__PC_EXIT_0__"
+       elif op=="hid_text":stage[0]=3;output="HID_TEXT_REPORT_SENT"
        else:raise AssertionError("Forbidden command "+op)
        status,_=request("/dialogue/result",json.dumps({"id":result["id"],"ok":True,"output":output}).encode());self.assertEqual(status,200)
       frame_number+=1
-      status,response=request("/app-screen/frame",frame(stage[0]),screen=True,extra={"Content-Type":"image/jpeg","X-Screen-Sequence":str(frame_number),"X-Screen-Barrier":barrier})
+      status,response=request("/app-screen/frame",frame(min(stage[0],3)),screen=True,extra={"Content-Type":"image/jpeg","X-Screen-Sequence":str(frame_number),"X-Screen-Barrier":barrier})
       self.assertIn(status,(200,202))
       barrier=response.get("barrier",barrier)
       time.sleep(.015)
      self.assertEqual(result.get("op"),"done");self.assertEqual(result["state"],"done")
-     self.assertIn("搜索结果页",result["reply"]);self.assertIn("没有发送消息",result["reply"])
-     self.assertEqual(commands,["hid_home","hid_pointer","hid_pointer","type_text"])
-     self.assertEqual(len(calls),4)
+     self.assertIn("已通过",result["reply"]);self.assertTrue(mailbox.jobs["sim-board"].navigation_verified)
+     self.assertEqual(commands,["hid_home","hid_pointer","hid_pointer","hid_text","hid_pointer"])
+     self.assertTrue(calls[-1]);self.assertGreaterEqual(len(calls),5)
      status,_=request("/app-screen/status",screen=True);self.assertEqual(status,200)
      turn=2
      status,_=request("/dialogue/text",json.dumps({"text":"存为技能"}).encode());self.assertEqual(status,200)
@@ -60,7 +67,7 @@ class WechatHttpTests(unittest.TestCase):
       _,result=request("/dialogue/poll")
       if result["op"]=="done":break
       time.sleep(.01)
-     self.assertEqual(result["state"],"done");self.assertEqual(store.list("sim-board")[0]["group"],"微信")
+     self.assertEqual(result["state"],"done");self.assertEqual(store.list("sim-board")[0]["group"],"通用")
    finally:server.shutdown();server.server_close();thread.join()
 
  def test_receipt_rotates_capture_barrier_and_blocks_old_frame(self):

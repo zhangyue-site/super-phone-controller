@@ -32,6 +32,21 @@ def usb_authorize(device,serial,nonce,proof,keys):
  return {"ticket":ticket,"expiresIn":300,"device":device,"serial":serial.upper(),"protocol":"pcusb-v1","scope":"screen-frames"}
 
 
+
+def usb_renew(ticket,obj,keys):
+ if not isinstance(obj,dict) or set(obj)!={'device','serial','challenge','proof'}:raise ValueError('fields')
+ device=subject(ticket)
+ if device!=obj['device']:raise ValueError('device')
+ grant=usb_authorize(device,obj['serial'],obj['challenge'],obj['proof'],keys)
+ with AUTHORITY.lock:
+  now=AUTHORITY.clock();AUTHORITY._prune(now)
+  AUTHORITY.tickets.pop(grant['ticket'],None)
+  item=AUTHORITY.tickets.get(ticket)
+  if item is None or item[1]!=device:raise ValueError('revoked')
+  AUTHORITY.tickets[ticket]=(now+300,device,'usb-screen')
+ return {'expiresIn':300,'scope':'screen-frames','protocol':'pcusb-v1'}
+
+
 def extend_diagnostic_ticket(device,grant):
  if device!='epaper-01' or os.environ.get('EPAPER_SCREEN_DIAG_LONG')!='epaper-01':return
  item=AUTHORITY.tickets.get(grant['ticket'])
@@ -47,17 +62,21 @@ def subject(ticket):
 
 def handle(handler,config):
  path=handler.path
- if path not in ('/app-screen/challenge','/app-screen/authorize','/app-screen/usb-challenge','/app-screen/usb-authorize','/app-screen/frame','/app-screen/stop','/app-screen/status'):return False
+ if path not in ('/app-screen/challenge','/app-screen/authorize','/app-screen/usb-challenge','/app-screen/usb-authorize','/app-screen/usb-renew','/app-screen/frame','/app-screen/stop','/app-screen/status'):return False
  try:
   if handler.command!='POST':handler.reply(405,b'{}');return True
   size=int(handler.headers.get('Content-Length','0'))
-  if path in ('/app-screen/challenge','/app-screen/authorize','/app-screen/usb-challenge','/app-screen/usb-authorize'):
+  if path in ('/app-screen/challenge','/app-screen/authorize','/app-screen/usb-challenge','/app-screen/usb-authorize','/app-screen/usb-renew'):
    if not 1<=size<=1024:raise ValueError('size')
    raw=handler.rfile.read(size)
    if len(raw)!=size:raise ValueError('truncated')
    obj=json.loads(raw);keys=json.loads(config.read_text())
    if not isinstance(obj,dict):raise ValueError('body')
-   if path.endswith('/usb-challenge'):
+   if path.endswith('/usb-renew'):
+    header=handler.headers.get('Authorization','')
+    if not header.startswith('Bearer '):raise ValueError('auth')
+    result=usb_renew(header[7:],obj,keys)
+   elif path.endswith('/usb-challenge'):
     if set(obj)!={'device','serial'}:raise ValueError('fields')
     result=usb_challenge(obj['device'],obj['serial'],keys)
    elif path.endswith('/usb-authorize'):
@@ -90,7 +109,8 @@ def handle(handler,config):
     j=mailbox.jobs.get(device)
     result={'state':j.state if j and not j.cancelled else 'idle','reply':j.reply if j and not j.cancelled else '',
      'frame':j.video_sequence if j else 0,'pointerReady':bool(j and j.pointer_protocol=='absolute-v1'),
-     'skills':STORE.catalog(device),'barrier':j.video_barrier if j else ''}
+     'skills':STORE.catalog(device),'barrier':j.video_barrier if j else '',
+     'verified':bool(j and j.done and not j.cancelled and j.state=='done' and getattr(j,'navigation_verified',False))}
    handler.reply(200,json.dumps(result,ensure_ascii=False).encode());return True
   if path.endswith('/stop'):
    if size!=0:raise ValueError('size')

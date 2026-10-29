@@ -30,11 +30,11 @@ class StorePolicyTests(unittest.TestCase):
    def __exit__(self,*args):self.close()
   class Opener:
    def __init__(self,p):self.p=p
-   def open(self,*args,**kwargs):return Response(json.dumps({'model':'synthetic','usage':None,'answers':{'allowed':{'type':'noul','noul':.99},'target':{'type':'noul','noul':self.p}}}).encode())
+   def open(self,*args,**kwargs):return Response(json.dumps({'model':'synthetic','usage':None,'answers':{'allowed':{'type':'choice','choice':'yes'},'target':{'type':'choice','choice':self.p}}}).encode())
   with patch.object(store_policy.Path,'read_text',return_value='{"api_key":"synthetic-only"}'):
-   with patch.object(store_policy.urllib.request,'build_opener',return_value=Opener(.94)):
+   with patch.object(store_policy.urllib.request,'build_opener',return_value=Opener('unknown')):
     with self.assertRaises(ValueError):store_policy.judge(img.getvalue(),candidate)
-   with patch.object(store_policy.urllib.request,'build_opener',return_value=Opener(.96)):
+   with patch.object(store_policy.urllib.request,'build_opener',return_value=Opener('yes')):
     self.assertEqual(store_policy.judge(img.getvalue(),candidate),candidate)
 
  def test_installation_rejects_other_board_before_any_action(self):
@@ -51,11 +51,11 @@ class StorePolicyTests(unittest.TestCase):
    with self.assertRaisesRegex(RuntimeError,'sent'):store_policy.run(nav,SimpleNamespace(device='epaper-01'),store_policy.TASK)
    self.assertEqual(guard.call_args.args[0],b'fresh');self.assertEqual(execute.call_args.args[3],b'fresh')
 
- def test_mutating_steps_keep_strict_point_threshold(self):
-  self.assertEqual(store_policy.point_threshold(dict(target_label='安装',confidence=1)),.95)
-  self.assertEqual(store_policy.point_threshold(dict(target_label='下载',confidence=1)),.95)
-  self.assertEqual(store_policy.point_threshold(dict(target_label='搜索框',confidence=.95)),.9)
-  self.assertEqual(store_policy.point_threshold(dict(target_label='搜索框',confidence=.94)),.95)
+ def test_discrete_judge_never_uses_reported_probability_as_permission(self):
+  from display_service.jev_vision import verdict
+  self.assertFalse(verdict({'type':'choice','choice':'unknown','confidence':1}))
+  self.assertFalse(verdict({'type':'choice','choice':'no','confidence':1}))
+  self.assertTrue(verdict({'type':'choice','choice':'yes','confidence':0}))
  def test_search_anchor_stays_inside_model_observed_region(self):
   o=dict(target_label='搜索框',bounds=[131,46,748,84]);a=store_policy.anchor(o)
   self.assertEqual(a['bounds'],[131,46,254,84]);self.assertEqual(o['bounds'],[131,46,748,84])
@@ -63,7 +63,7 @@ class StorePolicyTests(unittest.TestCase):
  def test_search_focus_is_bounded_to_confident_top_input(self):
   good=dict(action='click',target_label='搜索框',confidence=.95,bounds=[131,46,254,84])
   self.assertTrue(store_policy.is_search_focus(good))
-  for change in ({'confidence':.94},{'target_label':'安装'},{'bounds':[131,600,254,684]},{'action':'type_text'}):self.assertFalse(store_policy.is_search_focus(dict(good,**change)))
+  for change in ({'target_label':'安装'},{'bounds':[131,600,254,684]},{'action':'type_text'}):self.assertFalse(store_policy.is_search_focus(dict(good,**change)))
 
  def test_model_only_mode_never_calls_jev(self):
   from types import SimpleNamespace

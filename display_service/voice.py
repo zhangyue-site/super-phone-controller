@@ -23,7 +23,9 @@ def recognize(raw):
                 wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(16000);wav.writeframes(raw)
         result=subprocess.run(['/usr/bin/python3',asr_script(),path],
                               capture_output=True,timeout=75,check=True)
-        text=json.loads(result.stdout)['text'].strip()[:120]
+        answer=json.loads(result.stdout)
+        print('ASR_USAGE '+json.dumps({k:answer.get(k) for k in ('provider','model','usage')},ensure_ascii=False),flush=True)
+        text=answer['text'].strip()[:120]
         if not text:raise ValueError('没有识别到语音')
         return text
     finally:

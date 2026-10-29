@@ -49,15 +49,15 @@ class AppControlTests(http_tests.RemoteHttpTests):
     commands.append(op)
     if op=='hid_home':self.stage=0;output='HID_HOME_REPORT_SENT'
     elif op=='hid_pointer':self.stage+=1;output='HID_POINTER_REPORT_SENT'
-    elif op=='type_text':self.stage=3;output='__PC_EXIT_0__'
+    elif op=='hid_text':self.stage=3;output='HID_TEXT_REPORT_SENT'
     else:raise AssertionError(op)
     self.assertEqual(self.request('/dialogue/result',{'id':event['id'],'ok':True,'output':output})[0],200)
    number+=1
-   code,img=self.request('/app-screen/frame',frame(self.stage),'screen',{'Content-Type':'image/jpeg','X-Screen-Sequence':str(number),'X-Screen-Barrier':barrier})
+   code,img=self.request('/app-screen/frame',frame(min(self.stage,3)),'screen',{'Content-Type':'image/jpeg','X-Screen-Sequence':str(number),'X-Screen-Barrier':barrier})
    self.assertIn(code,(200,202));barrier=img.get('barrier',barrier);time.sleep(.015)
   else:raise AssertionError('timeout')
   code,result=self.command(ticket,'status');self.assertEqual((code,result['state'],result['verified']),(200,'done',True))
-  self.assertEqual(commands,['hid_home','hid_pointer','hid_pointer','type_text'])
+  self.assertEqual(commands,['hid_home','hid_pointer','hid_pointer','hid_text','hid_pointer'])
   self.assertEqual(self.command(ticket,'save',task_id=plan['task_id'])[0],200)
  def test_scope_expiry_supersession_and_revocation(self):
   ticket=self.grant();_,plan=self.command(ticket,'prepare',text='打开微信找到李洋')
