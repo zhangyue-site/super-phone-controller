@@ -108,5 +108,6 @@ class _RoleRouterState extends State<_RoleRouter> {
         onThemeChanged: widget.onThemeChanged,
         onController: () => _open(const ControllerPairScreen()),
         onTarget: _openTarget,
+        onMaintenance: () => _open(const DeviceScreen()),
       );
 }

@@ -6,6 +6,7 @@ import 'package:flutter_blue_plus_platform_interface/flutter_blue_plus_platform_
 import 'package:pcflash/main.dart';
 import 'package:pcflash/device_screen.dart';
 import 'package:pcflash/usb_launch.dart';
+import 'package:pcflash/screen_share.dart';
 
 final class BluetoothOffPlatform extends FlutterBluePlusPlatform {
   int adapterReads = 0;
@@ -38,6 +39,36 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('输入被控手机的连接码'), findsOneWidget);
     expect(bluetooth.adapterReads, 0);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('role home BLE maintenance needs no USB proof or screen consent',
+      (tester) async {
+    final calls = <String>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(UsbLaunch.channel, (call) async {
+      calls.add('usb:${call.method}');
+      return null;
+    });
+    messenger.setMockMethodCallHandler(ScreenShare.channel, (call) async {
+      calls.add('screen:${call.method}');
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(UsbLaunch.channel, null);
+      messenger.setMockMethodCallHandler(ScreenShare.channel, null);
+    });
+    FlutterBluePlusPlatform.instance = BluetoothOffPlatform();
+    await tester.pumpWidget(const PcFlashApp());
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('蓝牙固件维护'));
+    await tester.tap(find.text('蓝牙固件维护'));
+    await tester.pumpAndSettle();
+    expect(find.text('控制板升级'), findsOneWidget);
+    expect(find.text('等待连接USB控制板'), findsNothing);
+    expect(calls.every((call) => call == 'usb:snapshot'), isTrue);
+    expect(calls.where((call) => call.startsWith('screen:')), isEmpty);
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets('target role without USB waits without Bluetooth scan',
