@@ -4,7 +4,7 @@ from pathlib import Path
 _SESSION=contextvars.ContextVar('phone_model_session',default=None)
 
 def providers():
- return json.loads(Path(os.environ.get('EPAPER_MODEL_CONFIG','/var/lib/phone-controller/provider/config.json')).read_text())['models']['providers']
+ return json.loads(Path(os.environ.get('EPAPER_MODEL_CONFIG',str(Path.home()/'.config/phone-controller/models.json'))).read_text())['models']['providers']
 
 def vision_route():
  config=providers();pinned=os.environ.get('EPAPER_VISION_PROVIDER')

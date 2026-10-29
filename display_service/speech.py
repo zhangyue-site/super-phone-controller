@@ -18,7 +18,7 @@ def pcm_from_wav(audio):
 
 def synthesize(text):
  if not isinstance(text,str) or not 1<=len(text)<=160:raise ValueError('speech length')
- config=json.loads(Path(os.environ.get('EPAPER_SPEECH_CONFIG','/srv/phone-controller/speech')).read_text())
+ config=json.loads(Path(os.environ.get('EPAPER_SPEECH_CONFIG',str(Path.home()/'.config/phone-controller/speech.json'))).read_text())
  payload={'model':'mimo-v2.5-tts','messages':[{'role':'user','content':'请用清晰自然的普通话播报，语速略快。'},{'role':'assistant','content':text}], 'audio':{'format':'wav','voice':'mimo_default'}}
  req=urllib.request.Request(config['baseUrl'].rstrip('/')+'/chat/completions',data=json.dumps(payload).encode(),headers={'api-key':config['apiKey'],'Content-Type':'application/json'})
  with urllib.request.urlopen(req,timeout=25) as response:result=json.loads(response.read(4500000))

@@ -19,7 +19,7 @@ def chat_probe():
     raise RuntimeError('chat probe failed')
 
 def asr_probe():
-    fixture=Path(os.environ.get('EPAPER_ASR_CHECK_WAV','/srv/phone-controller/model-adapter.py'))
+    fixture=Path(os.environ.get('EPAPER_ASR_CHECK_WAV','assets/asr-check.wav'))
     with wave.open(str(fixture),'rb') as wav:
         if (wav.getnchannels(),wav.getsampwidth(),wav.getframerate())!=(1,2,16000):raise ValueError('invalid fixture')
         raw=wav.readframes(160001)

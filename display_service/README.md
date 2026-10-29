@@ -1,44 +1,30 @@
-# 106 端额度与交互展示
+# 手机控制协调服务
 
-`python3 -m display_service.app` 仅监听 `127.0.0.1:18943`，由 Nginx 的独立 `/phone-controller/` 路径提供 TLS。
+该目录是可配置的服务端源码，不包含维护者的生产部署、账号、模型凭据或真实设备配置。默认只监听本机回环地址；对外部署需要自行提供 TLS、认证配置、存储目录和网络策略。
 
-`/etc/phone-controller/devices.example.json` 保存设备 ID 到随机设备令牌的映射；不使用模型密钥或 tools 管理令牌。仅提供额度白名单摘要、1-bit 位图和 PNG，不转发原始 Cookie、账号身份或上游错误正文。
+运行入口为 `python3 -m display_service.app`。当前分支的功能与实机验收状态以仓库首页为准，不能把接口返回成功等同于手机操作已经通过画面核验。
 
-- `GET /status`：本设备交互与额度摘要。
-- `GET /screen.bin?page=0|1`：200×200，逐行 MSB-first，白色位为1，共5000字节。
-- `GET /screen.png?page=0|1`：同一渲染器的验收预览。
-- `POST /stop`：取消本设备匹配回合；本地ADB由板端立即撤销。响应不声称能撤回已送达手机的动作。
+## 配置
 
-所有接口要求 `Authorization: Bearer <设备令牌>`。新固件的本地ADB执行协议见下文；running/done必须以本轮实际执行与新界面验证为依据。
+配置文件由部署者放在仓库外。不要把设备令牌、模型 API key、Cookie、签名材料、私人画面或运行日志提交到 Git。
 
-服务器发起状态更新：
+| 环境变量 | 用途 | 未提供时 |
+| --- | --- | --- |
+| `EPAPER_CONFIG` | 设备 ID 到设备令牌的外部 JSON 映射 | 使用通用 `/etc/phone-controller/devices.example.json` 路径，不内置设备 |
+| `EPAPER_MODEL_CONFIG` | 模型路由 JSON，结构为 `models.providers` | 当前用户 `.config/phone-controller/models.json`；无配置则不能调用模型 |
+| `EPAPER_JEV_CREDENTIAL` | 可选的图像判断提供方凭据 | 当前用户 `.config/phone-controller/jev.json`；不包含默认账号 |
+| `EPAPER_JEV_PROXY` | 可选的图像判断代理 | 默认直连，不连接隐藏的本机代理 |
+| `EPAPER_SPEECH_CONFIG` | 可选的语音合成配置 | 当前用户 `.config/phone-controller/speech.json`；不包含默认账号 |
+| `EPAPER_ASR` | 部署者配置的识别适配脚本 | 明确报未配置，不回落到维护者服务器路径 |
+| `EPAPER_ASR_CHECK_WAV` | 开发者自有的语音探测样本 | 相对路径 `assets/asr-check.wav`，不包含私人录音 |
+| `EPAPER_QUOTAS` | 可选的额度摘要输入目录 | 当前用户 `.local/state/phone-controller/quotas` |
 
-```sh
-cd /srv/phone-controller/server
-python3 -m display_service.control epaper-01 --state waiting --task '等待手机接入'
-```
+没有配置凭据、模型、设备或语音适配器时，相应功能保持不可用；不会自动使用个人部署。生产配置需自行根据所选服务填写并保存在仓库之外。
 
-状态文件仅服务器写入。每设备独立文件；listening/thinking/running 超过60秒无更新自动显示超时。设备只拉取渲染结果；Mac不参与运行。
+## 接口与验证
 
-106现有quota-mimo.timer每5分钟采集官方额度。server_integrations/server_mimo_quota.py复用服务器原有采集器及mimo_session，renewal_policy.py在HTTP401/403或业务session_expired时续期一次并重试。网络故障不轮换登录，第二次鉴权失败不循环；续期结果记录到mimo-renewal.json，采集失败保留旧值并写lastError供屏幕标记。此处是登录续期，不是付费套餐续费。
+设备读取状态和 200×200 位图的接口包括 `/status`、`/screen.bin`、`/screen.png`。画面上传、手机任务与蓝牙中继分别使用 `/app-screen/`、`/app-control/`、`/app-relay/` 下的受限接口；具体请求与安全边界见源码和对应测试。不同用途的短期票据不应混用。
 
-## 连续对话与板端 ADB 执行（2026-10-21）
+真实控制验收需要同时核对：目标身份、用户授权的新画面、同一任务的派发与板端回执、动作后的独立画面结果。模拟数据和单元测试仅证明各自覆盖的逻辑。
 
-新固件语音上传使用 `X-Voice-Dialogue: 1`。`/voice` 与 `/voice/stream`（HTTP chunked）在识别后创建异步对话任务；无该标记的旧客户端保持仅ASR。设备令牌、16位hex的 `X-Voice-Session`、单调递增 `X-Voice-Sequence` 共同限定回合。
-
-- `POST /dialogue/text`：`{"text":"你好"}`，文本调试入口，同样检查停止序号。
-- `POST /dialogue/poll`：wait、一次性交付的typed ADB command、或done。重复poll不重发动作。
-- `POST /dialogue/result`：`{"id":"命令ID","ok":true,"output":"真实ADB输出"}`；重复/过期ACK拒绝。
-- `POST /dialogue/audio`：本回合16kHz、单声道、PCM16LE结果，最多30秒。
-- `POST /dialogue/screen`：大字结果与停止区域，200×200、5000字节。
-- `POST /stop`：取消匹配会话中截至指定序号的任务。板端同时撤销本地ADB ticket并中断播放；云端不声称撤回已经送达手机的动作。
-
-106只决策，不直接连接旧中继。板端HTTP先关闭，再在同一个ADB worker中执行固定观察或typed动作；不接受任意shell/文本输入。每一步重新观察，输入前再比对UI；锁屏未知、界面改变、截断或超时均停止。当前允许查看/导航，不自动发送消息、支付、删除、授权或登录。
-
-模型读取 `EPAPER_MODEL_CONFIG`（默认原OpenClaw配置），TTS读取 `EPAPER_SPEECH_CONFIG`（默认原小米ASR配置），使用MiMo TTS并经ffmpeg转16kHz PCM。不在固件或响应中输出模型凭证。内存对话最多24条，15分钟清理；音频不写长期文件，后台清理过期任务。
-
-ADB连接依赖手机5555已启用及RSA授权。当前板子是USB网络设备，不能自动代替原生USB Host在普通未root手机重启后恢复已关闭的ADB TCP端口。未连接时显示具体错误，动作不自动重放。
-
-[本次验证与实机缺口](../docs/handoff/2026-10-21-dialogue-adb-validation.md)
-
-后续开发与升级采用云端工作区、GitHub Actions构建和106私有OTA发布，详见 [云端开发与升级](../docs/cloud-development-and-ota.md)。手机可由机主手动恢复ADB5555；屏幕会明确提醒。本轮不要求改USB Host硬件。
+`deploy/` 仅保留通用示例，不是维护者的实际服务器配置。历史专属额度采集适配器和旧私有服务器入口已从公开源码移除；可选额度展示仍可读取部署者自行提供的摘要数据。
