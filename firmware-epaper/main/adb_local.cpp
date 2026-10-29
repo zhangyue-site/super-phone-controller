@@ -1,10 +1,13 @@
 #include "adb_local.h"
 #include "sdkconfig.h"
-#if CONFIG_CONTROLLER_USB_LOCAL
+#if CONFIG_CONTROLLER_USB_LOCAL && CONFIG_CONTROLLER_ADB_MAINTENANCE
 #include "adb_packet.h"
 #include "adb_gate.h"
 #include "adb_stream.h"
 #include "device_adb_keys.h"
+#include "device_config.h"
+#include "cloud_http_config.h"
+#include <stdio.h>
 #include "usb_network.h"
 #include "voice.h"
 #include <atomic>
@@ -202,10 +205,13 @@ static bool proxy_write(int client,const unsigned char *data,size_t length){
  return done==length;
 }
 static bool proxy_session(int client,unsigned char *data){
- const char service[]="exec:toybox nc 198.51.100.10 443";
+ const char *host=controller::cloud_legacy_proxy_host();
+ if(!controller::cloud_legacy_proxy_host_valid(host))return false;
+ char service[256]={};int length=snprintf(service,sizeof(service),"exec:toybox nc %s %u",host,controller::cloud_legacy_proxy_port());
+ if(length<1||length>=(int)sizeof(service))return false;
  AdbStream stream(next_stream++);
  deadline=esp_timer_get_time()+150000000;
- if(!packet(ADB_OPEN,stream.local,0,service,sizeof(service)))return false;
+ if(!packet(ADB_OPEN,stream.local,0,service,(size_t)length+1))return false;
  bool transport_ok=true,closed_by_phone=false;unsigned long to_phone=0,to_board=0;
  while(live() && esp_timer_get_time()<deadline){
   fd_set inputs;FD_ZERO(&inputs);FD_SET(fd,&inputs);

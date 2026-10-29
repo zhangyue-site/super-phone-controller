@@ -1,11 +1,25 @@
 menu "Controller experimental transport"
 config CONTROLLER_USB_LOCAL
-    bool "USB local-only DHCP server for ADB bootstrap tests"
+    bool "USB local-only DHCP maintenance profile"
     depends on TINYUSB_NET_MODE_NCM
     default n
     help
         Isolated test: board 192.168.77.1 leases an address to the phone.
         No internet gateway/DNS advertised. Does not enable ADB automatically.
+config CONTROLLER_USB_MAINTENANCE
+    bool "Private USB diagnostic commands (maintenance only)"
+    default n
+    help
+        Explicitly enables diagnostic CDC commands. Keep disabled in normal
+        builds; enabling this does not authorize a target device or task.
+config CONTROLLER_ADB_MAINTENANCE
+    bool "Legacy ADB transport for explicit maintenance builds only"
+    depends on CONTROLLER_USB_LOCAL
+    default n
+    help
+        Disabled for daily use. Enabling restores the historical phone5555
+        authentication/proxy and ADB Keyboard diagnostic path. Pure USB HID,
+        CDC and NCM do not require this option. Never enable in production.
 config CONTROLLER_EXTERNAL_KEYS
     bool "V2 external dry-contact keys on J1 GPIO1/GPIO2"
     default n

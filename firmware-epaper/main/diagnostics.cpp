@@ -49,3 +49,7 @@ size_t controller_events_snapshot(char *out,size_t capacity){
  }
  return n;
 }
+
+size_t controller_logs_snapshot(char *out,size_t capacity){
+ taskENTER_CRITICAL(&log_mux);size_t n=logs.snapshot(out,capacity);taskEXIT_CRITICAL(&log_mux);return n;
+}

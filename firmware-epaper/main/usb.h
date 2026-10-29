@@ -21,5 +21,19 @@ bool controller_usb_ai_home(bool (*live)(unsigned),unsigned sequence);
 #include "hid_pointer_policy.h"
 bool controller_usb_ai_pointer(const controller::PointerCommand& command,bool (*live)(unsigned),unsigned sequence);
 
-// Same serial presented by the USB device descriptor.
+#if CONTROLLER_USB_MAINTENANCE
+bool controller_usb_maintenance_pointer(const controller::PointerCommand& command);
+#endif
+
+#if CONTROLLER_USB_MAINTENANCE
+const char* controller_usb_maintenance_status();
+#endif
+
+bool controller_usb_ai_key(bool home,bool (*live)(unsigned),unsigned sequence);
+bool controller_usb_key(uint8_t code,bool (*live)(unsigned),unsigned sequence);
+bool controller_usb_consumer(uint16_t usage,bool (*live)(unsigned),unsigned sequence);
+
 const char *controller_usb_serial(void);
+
+bool controller_usb_keyboard(uint8_t modifier,uint8_t usage,bool (*live)(unsigned),unsigned sequence);
+bool controller_usb_ascii(const uint8_t *text,size_t length,bool (*live)(unsigned),unsigned sequence);

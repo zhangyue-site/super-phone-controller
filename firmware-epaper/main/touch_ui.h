@@ -1,21 +1,23 @@
 #pragma once
 #include <cstdint>
+#include "product_ui_layout.h"
 namespace controller {
 inline int next_page(int current,int home){return (current+1)%(home+7);}
 inline int previous_page(int current,int home){return (current+home+6)%(home+7);}
 enum class TouchTarget {NONE,START,QUOTA,CONTROL,HOME,STOP,CONFIRM,UP,DOWN,LEFT,RIGHT,CLICK,PHONE_HOME,PHONE_BACK,UPDATE,VOLUME_DOWN,VOLUME_UP,MUTE,SOUND_TEST,SOUND_SETTINGS,FINISH};
 inline TouchTarget touch_target(int page,int x,int y,int home=5){
- if(x<0||x>=200||y<0||y>=188)return TouchTarget::NONE;
- if(page==home&&y<45)return TouchTarget::SOUND_SETTINGS;
- if(y>=162)return x<100?TouchTarget::HOME:TouchTarget::STOP;
+ using namespace product_layout;
+ if(x<0||x>=width||y<0||y>=footer_end)return TouchTarget::NONE;
+ if(page==home&&y<title_end)return TouchTarget::SOUND_SETTINGS;
+ if(y>=footer_begin)return x<footer_split?TouchTarget::HOME:TouchTarget::STOP;
  if(page==home+6){
-  if(y>=54&&y<100)return x<100?TouchTarget::VOLUME_DOWN:TouchTarget::VOLUME_UP;
-  if(y>=108&&y<154)return x<100?TouchTarget::MUTE:TouchTarget::SOUND_TEST;
+  if(y>=sound_top_begin&&y<sound_top_end)return x<100?TouchTarget::VOLUME_DOWN:TouchTarget::VOLUME_UP;
+  if(y>=sound_bottom_begin&&y<sound_bottom_end)return x<100?TouchTarget::MUTE:TouchTarget::SOUND_TEST;
   return TouchTarget::NONE;
  }
- bool top=y>=45&&y<100,bottom=y>=105&&y<155;
+ bool top=y>=top_begin&&y<top_end,bottom=y>=bottom_begin&&y<bottom_end;
  if(page==home+5)return top?TouchTarget::UPDATE:bottom?TouchTarget::HOME:TouchTarget::NONE;
- if(page==2)return y>=65&&y<125?TouchTarget::CONFIRM:TouchTarget::NONE;
+ if(page==2)return y>=consent_begin&&y<consent_end?TouchTarget::CONFIRM:TouchTarget::NONE;
  if(page==home)return top?TouchTarget::START:bottom?TouchTarget::CONTROL:TouchTarget::NONE;
  if(page==home+1)return top?TouchTarget::PHONE_HOME:bottom?TouchTarget::PHONE_BACK:TouchTarget::NONE;
  if(page==home+2)return top?TouchTarget::LEFT:bottom?TouchTarget::RIGHT:TouchTarget::NONE;

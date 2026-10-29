@@ -1,6 +1,8 @@
-#include "board_control.h"
-#include "device_auth.h"
 #include "ble_ota.h"
+#include "ota_guard.h"
+#include "esp_timer.h"
+#include "esp_app_desc.h"
+#include "ble_local.h"
 #include "device_config.h"
 #ifndef DISPLAY_DEVICE_ID
 #define DISPLAY_DEVICE_ID "epaper-01"
@@ -26,6 +28,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "psa/crypto.h"
 
+extern void controller_ota_prepare(void);
 static const char *TAG = "ble_ota";
 
 // ---------------------------------------------------------------------------
@@ -48,6 +51,11 @@ static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_status_handle = 0;
 static uint8_t s_auth_proof[32];
 static bool s_auth_ready;
+static atomic_bool s_upgrade_authorized;
+static uint8_t s_upgrade_challenge[32];
+static atomic_bool s_ble_ready;
+static atomic_llong s_writer_heartbeat;
+static int64_t s_last_chunk;
 static char s_boot_nonce[33];
 
 // 手机写入的片不进回调直接处理：回调里写 flash 会卡住 NimBLE host 任务，
@@ -96,6 +104,8 @@ static ble_ota_err_t begin_transfer(const uint8_t *p, uint16_t len) {
     // 拿到锁前先清干净上一次的残留
     if (s_ota_handle) { esp_ota_abort(s_ota_handle); s_ota_handle = 0; }
 
+    if (!ota_guard_acquire(OTA_BLE)) return BLE_OTA_ERR_STATE;
+    controller_ota_prepare();
     esp_err_t e = esp_ota_begin(s_ota_part, OTA_WITH_SEQUENTIAL_WRITES, &s_ota_handle);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "ota_begin: %s", esp_err_to_name(e));
@@ -120,6 +130,7 @@ static ble_ota_err_t begin_transfer(const uint8_t *p, uint16_t len) {
 static ble_ota_err_t abort_transfer(void) {
     if (s_ota_handle) { esp_ota_abort(s_ota_handle); s_ota_handle = 0; }
     if (s_sha_live) { psa_hash_abort(&s_sha); s_sha_live = false; }
+    ota_guard_release(OTA_BLE);
     atomic_store(&s_busy, false);
     atomic_store(&s_progress, 0);
     set_state(BLE_OTA_IDLE, BLE_OTA_OK);
@@ -169,7 +180,9 @@ static ble_ota_err_t end_transfer(unsigned generation) {
 
     // Atomic commit boundary: cancellation wins until this CAS. Once switching
     // the boot slot begins, cancellation cannot undo the already verified update.
-    if (!controller_ota_try_commit(&s_generation, generation)) {
+    esp_app_desc_t desc={0};
+    if (esp_ota_get_partition_description(s_ota_part,&desc)!=ESP_OK || strcmp(desc.project_name,"phone_controller_epaper")) {abort_transfer();return BLE_OTA_ERR_HASH;}
+    if (atomic_load(&s_generation) != generation || !ota_guard_commit(OTA_BLE)) {
         abort_transfer(); return BLE_OTA_ERR_STATE;
     }
     e = esp_ota_set_boot_partition(s_ota_part);
@@ -196,9 +209,12 @@ static void writer_task(void *) {
     if (!c) { ESP_LOGE(TAG, "no mem"); vTaskDelete(NULL); return; }
     unsigned generation = atomic_load(&s_generation);
     for (;;) {
+        atomic_store(&s_writer_heartbeat,esp_timer_get_time());
+        if(atomic_load(&s_busy) && esp_timer_get_time()-s_last_chunk>30000000){controller_ota_cancel_ticket(&s_generation);ota_guard_cancel(OTA_BLE);}
         BaseType_t received = xQueueReceive(s_queue, c, pdMS_TO_TICKS(100));
         if (controller_ota_sync_generation(&s_generation, &generation)) abort_transfer();
         if (received != pdTRUE || c->generation != generation) continue;
+        s_last_chunk=esp_timer_get_time();
         ble_ota_err_t result = BLE_OTA_OK;
         if (c->cmd == 1) {
             result = begin_transfer(c->data, c->len);
@@ -271,7 +287,7 @@ static int info_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
     esp_ota_img_states_t state=ESP_OTA_IMG_UNDEFINED;
     esp_ota_get_state_partition(esp_ota_get_running_partition(),&state);
     char elf[65],buf[384];hex_string(desc->app_elf_sha256,32,elf);
-    int n=snprintf(buf,sizeof(buf),"{\"protocol\":1,\"device\":\"%s\",\"version\":\"%s\",\"elfSha256\":\"%s\",\"boot\":\"%s\",\"imageState\":%d}",DISPLAY_DEVICE_ID,desc->version,elf,s_boot_nonce,(int)state);
+    int n=snprintf(buf,sizeof(buf),"{\"protocol\":1,\"otaAuth\":\"hmac-sha256-v1\",\"device\":\"%s\",\"version\":\"%s\",\"elfSha256\":\"%s\",\"boot\":\"%s\",\"imageState\":%d}",DISPLAY_DEVICE_ID,desc->version,elf,s_boot_nonce,(int)state);
     if(n<0 || n>=(int)sizeof(buf))return BLE_ATT_ERR_INSUFFICIENT_RES;
     return os_mbuf_append(ctxt->om,buf,n)==0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 }
@@ -282,9 +298,20 @@ static int auth_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
     }
     if(ctxt->op!=BLE_GATT_ACCESS_OP_WRITE_CHR || OS_MBUF_PKTLEN(ctxt->om)!=32)return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
     s_auth_ready=false;memset(s_auth_proof,0,sizeof(s_auth_proof));
-    uint8_t nonce[32];ble_hs_mbuf_to_flat(ctxt->om,nonce,32,NULL);
-    s_auth_ready=controller_device_sign("PCFLASH1\n" DISPLAY_DEVICE_ID "\n",nonce,s_auth_proof);
-    memset(nonce,0,sizeof(nonce));
+    uint8_t message[128];const char *prefix="PCFLASH1\n" DISPLAY_DEVICE_ID "\n";
+    size_t n=strlen(prefix);if(n+32>sizeof(message))return BLE_ATT_ERR_UNLIKELY;
+    memcpy(message,prefix,n);ble_hs_mbuf_to_flat(ctxt->om,message+n,32,NULL);
+    psa_key_attributes_t attributes=PSA_KEY_ATTRIBUTES_INIT;psa_key_id_t key=0;
+    psa_set_key_usage_flags(&attributes,PSA_KEY_USAGE_SIGN_MESSAGE);
+    psa_set_key_algorithm(&attributes,PSA_ALG_HMAC(PSA_ALG_SHA_256));
+    psa_set_key_type(&attributes,PSA_KEY_TYPE_HMAC);
+    psa_status_t result=psa_import_key(&attributes,(const uint8_t *)DISPLAY_TOKEN,strlen(DISPLAY_TOKEN),&key);
+    psa_reset_key_attributes(&attributes);size_t length=0;
+    if(result==PSA_SUCCESS) {
+        result=psa_mac_compute(key,PSA_ALG_HMAC(PSA_ALG_SHA_256),message,n+32,s_auth_proof,32,&length);
+        psa_destroy_key(key);
+    }
+    s_auth_ready=result==PSA_SUCCESS && length==32;
     return s_auth_ready ? 0 : BLE_ATT_ERR_UNLIKELY;
 }
 
@@ -299,12 +326,12 @@ static void notify_status(void) {
 
 static int ctrl_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *) {
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
+    if(conn!=s_conn || !atomic_load(&s_upgrade_authorized))return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
     uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
     if (len < 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
 
     uint8_t cmd = 0;
     ble_hs_mbuf_to_flat(ctxt->om, &cmd, 1, NULL);
-    if(cmd!=4 && controller_board_control_busy())return BLE_ATT_ERR_UNLIKELY;
 
     if (cmd < 1 || cmd > 4 || len > 512 || (cmd == 1 && len != 37) ||
         (cmd == 2 && len < 2) || (cmd >= 3 && len != 1)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
@@ -326,25 +353,37 @@ static int stat_access(uint16_t, uint16_t, struct ble_gatt_access_ctxt *ctxt, vo
     return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 }
 
-// Task RPC is isolated from the OTA control characteristic and writer queue.
-static const ble_uuid128_t RPC_UUID = BLE_UUID128_INIT(0x07,0,0,0,0,0,0,0,0x61,0x74,0x6f,0x2d,0x61,0x74,0x6f,0x6f);
-static int rpc_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ctxt,void *arg){
-    uint8_t packet[244];
-    if(ctxt->op==BLE_GATT_ACCESS_OP_WRITE_CHR){
-        uint16_t length=OS_MBUF_PKTLEN(ctxt->om);
-        if(length>sizeof(packet) || length<22)return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-        if(ble_hs_mbuf_to_flat(ctxt->om,packet,length,NULL))return BLE_ATT_ERR_UNLIKELY;
-        return controller_board_control_write(conn,packet,length)==0?0:BLE_ATT_ERR_UNLIKELY;
-    }
-    if(ctxt->op==BLE_GATT_ACCESS_OP_READ_CHR){
-        uint16_t mtu=ble_att_mtu(conn);size_t capacity=mtu>2?mtu-2:0;
-        if(capacity>sizeof(packet))capacity=sizeof(packet);
-        int length=controller_board_control_read(conn,packet,capacity);
-        return length>0 && os_mbuf_append(ctxt->om,packet,length)==0?0:BLE_ATT_ERR_UNLIKELY;
-    }
-    return BLE_ATT_ERR_UNLIKELY;
+// Connection-bound mutual authentication. Legacy 0005 remains board identity proof only.
+static const ble_uuid128_t UAUTH_UUID = BLE_UUID128_INIT(0x09,0,0,0,0,0,0,0,0x61,0x74,0x6f,0x2d,0x61,0x74,0x6f,0x6f);
+static int upgrade_auth_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ctxt,void *arg){
+ if(conn!=s_conn)return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+ if(ctxt->op==BLE_GATT_ACCESS_OP_READ_CHR){
+  atomic_store(&s_upgrade_authorized,false);esp_fill_random(s_upgrade_challenge,32);
+  return os_mbuf_append(ctxt->om,s_upgrade_challenge,32)==0?0:BLE_ATT_ERR_INSUFFICIENT_RES;
+ }
+ if(ctxt->op!=BLE_GATT_ACCESS_OP_WRITE_CHR || OS_MBUF_PKTLEN(ctxt->om)!=32)return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+ uint8_t actual[32]={0},expected[32]={0},message[192];size_t length=0;
+ int n=snprintf((char*)message,sizeof(message),"PCOTA-AUTH1\n%s\n%s\n",DISPLAY_DEVICE_ID,s_boot_nonce);
+ if(n<0||n+32>sizeof(message))return BLE_ATT_ERR_UNLIKELY;
+ memcpy(message+n,s_upgrade_challenge,32);ble_hs_mbuf_to_flat(ctxt->om,actual,32,NULL);
+ psa_key_attributes_t a=PSA_KEY_ATTRIBUTES_INIT;psa_key_id_t key=0;
+ psa_set_key_usage_flags(&a,PSA_KEY_USAGE_SIGN_MESSAGE);psa_set_key_algorithm(&a,PSA_ALG_HMAC(PSA_ALG_SHA_256));psa_set_key_type(&a,PSA_KEY_TYPE_HMAC);
+ psa_status_t result=psa_import_key(&a,(const uint8_t*)DISPLAY_TOKEN,strlen(DISPLAY_TOKEN),&key);psa_reset_key_attributes(&a);
+ if(result==PSA_SUCCESS){result=psa_mac_compute(key,PSA_ALG_HMAC(PSA_ALG_SHA_256),message,n+32,expected,32,&length);psa_destroy_key(key);}
+ unsigned diff=0;for(unsigned i=0;i<32;i++)diff|=actual[i]^expected[i];
+ bool ok=result==PSA_SUCCESS&&length==32&&diff==0;atomic_store(&s_upgrade_authorized,ok);esp_fill_random(s_upgrade_challenge,32);
+ return ok?0:BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
 }
-
+static const ble_uuid128_t LOCAL_UUID = BLE_UUID128_INIT(0x08,0,0,0,0,0,0,0,0x61,0x74,0x6f,0x2d,0x61,0x74,0x6f,0x6f);
+static int local_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ctxt,void *arg) {
+ if(ctxt->op==BLE_GATT_ACCESS_OP_WRITE_CHR){
+  uint8_t packet[48];if(OS_MBUF_PKTLEN(ctxt->om)!=sizeof(packet))return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+  if(ble_hs_mbuf_to_flat(ctxt->om,packet,sizeof(packet),NULL))return BLE_ATT_ERR_UNLIKELY;
+  return controller_ble_local_write(conn,packet,sizeof(packet))==0?0:BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+ }
+ if(ctxt->op==BLE_GATT_ACCESS_OP_READ_CHR){char out[384];int n=controller_ble_local_read(conn,out,sizeof(out));return n>0&&os_mbuf_append(ctxt->om,out,n)==0?0:BLE_ATT_ERR_UNLIKELY;}
+ return BLE_ATT_ERR_UNLIKELY;
+}
 static const struct ble_gatt_svc_def GATT_SVCS[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -362,10 +401,11 @@ static const struct ble_gatt_svc_def GATT_SVCS[] = {
                 .val_handle = &s_status_handle,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
             },
+            { .uuid=&UAUTH_UUID.u, .access_cb=upgrade_auth_access, .flags=BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE },
             { .uuid=&INFO_UUID.u, .access_cb=info_access, .flags=BLE_GATT_CHR_F_READ },
             { .uuid=&AUTH_UUID.u, .access_cb=auth_access, .flags=BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE },
             { .uuid=&DIAG_UUID.u, .access_cb=diag_access, .flags=BLE_GATT_CHR_F_READ },
-            { .uuid=&RPC_UUID.u, .access_cb=rpc_access, .flags=BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE },
+            { .uuid=&LOCAL_UUID.u, .access_cb=local_access, .flags=BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE },
             {0},
         },
     },
@@ -382,7 +422,7 @@ static int gap_event(struct ble_gap_event *event, void *) {
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
             s_conn = event->connect.conn_handle;
-            controller_board_control_connect(s_conn);
+            controller_ble_local_connect(s_conn);
             ESP_LOGI(TAG, "connected");
             // MTU 由手机端发起交换（Android requestMtu / iOS 自动协商），
             // 外设侧只被动接受。这里调用 ble_gattc_exchange_mtu 需要 central
@@ -393,8 +433,8 @@ static int gap_event(struct ble_gap_event *event, void *) {
         return 0;
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnected reason=%d", event->disconnect.reason);
+        controller_ble_local_disconnect(event->disconnect.conn.conn_handle);
         s_conn = BLE_HS_CONN_HANDLE_NONE;
-        controller_board_control_disconnect();
         s_auth_ready=false;memset(s_auth_proof,0,sizeof(s_auth_proof));
         // 连接断了但传输没完成：不能继续写，必须回滚，否则槽位被半包固件占着。
         ble_ota_cancel();
@@ -434,6 +474,7 @@ static void advertise(void) {
     rc = ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER,
                            &params, gap_event, NULL);
     if (rc != 0) ESP_LOGE(TAG, "adv_start rc=%d", rc);
+    else atomic_store(&s_ble_ready,true);
 }
 
 static void on_sync(void) {
@@ -443,9 +484,10 @@ static void on_sync(void) {
 }
 
 static void on_reset(int reason) {
+    atomic_store(&s_ble_ready,false);
     ESP_LOGW(TAG, "host reset reason=%d", reason);
+    controller_ble_local_disconnect(s_conn);
     s_conn = BLE_HS_CONN_HANDLE_NONE;
-    controller_board_control_disconnect();
     ble_ota_cancel();
 }
 
@@ -460,8 +502,8 @@ static void host_task(void *) {
 int ble_ota_start(void) {
     static bool started = false;
     if (started) return 0;
-    if(!controller_board_control_start())return -1;
     started = true;
+    if(controller_ble_local_start()!=0)return -1;
     uint8_t nonce[16];esp_fill_random(nonce,sizeof(nonce));hex_string(nonce,sizeof(nonce),s_boot_nonce);
 
     s_queue = xQueueCreate(48, sizeof(chunk_t));
@@ -495,4 +537,5 @@ void ble_ota_status(ble_ota_state_t *state, uint8_t *progress, uint8_t *err) {
 
 bool ble_ota_busy(void) { return atomic_load(&s_busy); }
 
-void ble_ota_cancel(void) { controller_ota_cancel_ticket(&s_generation); }
+void ble_ota_cancel(void) { atomic_store(&s_upgrade_authorized,false);ota_guard_cancel(OTA_BLE);controller_ota_cancel_ticket(&s_generation); }
+bool ble_ota_healthy(void){return atomic_load(&s_ble_ready)&&esp_timer_get_time()-atomic_load(&s_writer_heartbeat)<2000000;}

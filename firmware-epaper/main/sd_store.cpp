@@ -180,3 +180,13 @@ void controller_storage_events_dump(){
  }else controller_usb_write("No persisted operation events\r\n");
  xSemaphoreGive(lock);
 }
+
+size_t controller_storage_tail(bool events,char *out,size_t capacity){
+ if(!capacity){return 0;}
+ out[0]=0;
+ if(!mounted||!lock||xSemaphoreTake(lock,pdMS_TO_TICKS(100))!=pdTRUE)return 0;
+ FILE *f=fopen(events?"/sdcard/SPASSIST/EVENTS.LOG":LOG,"rb");size_t n=0;
+ if(f){fseek(f,0,SEEK_END);long end=ftell(f);if(end>(long)(capacity-1))fseek(f,end-(long)(capacity-1),SEEK_SET);else rewind(f);
+ n=fread(out,1,capacity-1,f);out[n]=0;fclose(f);}
+ xSemaphoreGive(lock);return n;
+}

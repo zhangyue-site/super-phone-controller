@@ -47,3 +47,8 @@ bool controller_voice_background_http_begin();
 void controller_voice_background_http_end();
 
 bool controller_voice_direct_network();
+
+unsigned controller_voice_recorded_ms();
+unsigned controller_voice_level();
+
+int controller_voice_last_http_status();

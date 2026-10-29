@@ -51,6 +51,7 @@ void ble_ota_status(ble_ota_state_t *state, uint8_t *progress, uint8_t *err);
 
 // 是否正在传输（屏幕任务据此避免频繁重绘、暂停耗电任务）。
 bool ble_ota_busy(void);
+bool ble_ota_healthy(void);
 void ble_ota_cancel(void);
 
 #ifdef __cplusplus
