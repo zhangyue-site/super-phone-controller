@@ -1,6 +1,6 @@
 # Upgrade failure investigation (2026-10-21)
 
-Confirmed public DNS points to 入口主机 while authenticated firmware API runs on 云端服务. Added only the /phone-controller/ HTTPS reverse proxy on 入口主机, preserving Authorization, Host, SNI and TLS verification (depth 3). Config backed up before modification. nginx config test passed; reload succeeded. Unauthenticated public manifest now returns 401 rather than HTML 404. All unrelated configuration tokens verified unchanged.
+The public HTTPS entry and authenticated firmware API were hosted separately. Added only the /phone-controller/ reverse-proxy route on the configured entry host, preserving Authorization, Host, SNI and TLS verification (depth 3). Config backed up before modification. nginx config test passed; reload succeeded. Unauthenticated public manifest now returns 401 rather than HTML 404. All unrelated configuration tokens verified unchanged.
 
 This does not fix anonymous App firmware download: the App has no device credential and still receives 401. Do not publish embedded device credentials or embed a shared token in the APK. Authorized App delivery remains pending.
 

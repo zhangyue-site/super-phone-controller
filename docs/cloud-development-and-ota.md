@@ -1,12 +1,12 @@
 # 云端开发与固件升级
 
-用户要求后续开发、修复和固件构建放到云端。云端服务运行服务和独立Git工作区；GitHub Actions在官方ESP-IDF6镜像中编译，避免云端服务上的现有业务争用编译资源。
+用户要求后续开发、修复和固件构建放到云端。维护者的云主机运行服务和独立Git工作区；GitHub Actions在官方ESP-IDF6镜像中编译，避免与在线业务争用编译资源。
 
-## 固定位置
+## 维护者配置
 
-- 源码工作区：云端服务 `/srv/phone-controller/workspace`，分支 `feat/epaper-interaction-audio`。
-- 在线服务：106 `/srv/phone-controller/firmware`，systemd `phone-controller-display`。
-- 私有固件：106 `/var/lib/phone-controller/ota`。
+- 源码工作区由维护者配置为 `CONTROLLER_WORKSPACE`，与在线服务目录分开。
+- 在线服务目录由维护者配置为 `CONTROLLER_SERVICE_DIR`；进程管理与服务名称按部署环境设置。
+- 私有固件存储由维护者配置为 `CONTROLLER_FIRMWARE_DIR`，按设备隔离并限制权限。
 - GitHub云构建：`.github/workflows/esp-firmware.yml`，每次相关代码push运行测试和编译，产物位于私有Actions artifact；使用repo secrets注入设备配置。
 
 开发先在工作区修改、测试、commit和push；在线服务目录不直接作为开发区。新板型/设备须独立配置密钥，不能把现有设备身份复用给公共设备。

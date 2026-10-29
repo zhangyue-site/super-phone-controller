@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""Owner-maintenance BLE HID client; no device token is exported or stored locally."""
-import argparse,asyncio,hashlib,hmac,json,re,shlex,struct,subprocess,time,sys
+"""Owner-maintenance BLE HID client; no device token is exported or stored locally.
+
+Supply the private signer-side config path via --signer-config or the local
+PHONE_CONTROLLER_SIGNER_CONFIG environment variable. No deployment is assumed.
+"""
+import argparse,asyncio,hashlib,hmac,json,re,shlex,struct,subprocess,time,sys,os
 from bleak import BleakClient,BleakScanner
 LOCAL='6f6f7461-2d6f-7461-0000-000000000008'
 INFO='6f6f7461-2d6f-7461-0000-000000000004'
@@ -9,13 +13,15 @@ import ast,hashlib,hmac,json,re,sys
 from pathlib import Path
 v=json.load(sys.stdin)
 assert re.fullmatch('[0-9a-f]{32}',v['nonce']) and v['device']=='epaper-01'
-s=Path('/srv/phone-controller/tools/ble_direct_client.py').read_text()
+config=v.get('config_path')
+assert isinstance(config,str) and config,'Private signer config path is required'
+s=Path(config).read_text()
 m=re.search(r'^\s*#define\s+DISPLAY_TOKEN\s+("(?:[^"\\]|\\.)*")',s,re.M);assert m
 key=ast.literal_eval(m.group(1)).encode()
 print(hmac.new(key,('PCBLE1\n'+v['device']+'\n'+v['nonce']).encode(),hashlib.sha256).hexdigest())
 '''
-def derive(signer,device,nonce):
- r=subprocess.run(['ssh',signer,'python3 -c '+shlex.quote(SIGNER_CODE)],input=json.dumps({'device':device,'nonce':nonce}),text=True,capture_output=True,timeout=15)
+def derive(signer,device,nonce,config_path):
+ r=subprocess.run(['ssh',signer,'python3 -c '+shlex.quote(SIGNER_CODE)],input=json.dumps({'device':device,'nonce':nonce,'config_path':config_path}),text=True,capture_output=True,timeout=15)
  value=r.stdout.strip()
  if r.returncode or not re.fullmatch('[0-9a-f]{64}',value):raise RuntimeError('Session signer failed; no credential printed')
  return bytes.fromhex(value)
@@ -23,11 +29,11 @@ def packet(op,seq,key,args=(0,0,0,0,0)):
  body=struct.pack('<BBI5H',1,op,seq,*args)
  return body+hmac.new(key,body,hashlib.sha256).digest()
 class Link:
- def __init__(self,client,signer):self.c=client;self.signer=signer;self.seq=0
+ def __init__(self,client,signer,config_path=None):self.c=client;self.signer=signer;self.config_path=config_path;self.seq=0
  async def start(self):
   info=json.loads(bytes(await self.c.read_gatt_char(INFO)));raw=json.loads(bytes(await self.c.read_gatt_char(LOCAL)))
   if info.get('device')!='epaper-01' or not re.fullmatch('[0-9a-f]{32}',raw.get('nonce','')):raise RuntimeError('Unexpected board identity')
-  self.nonce=raw['nonce'];self.key=derive(self.signer,info['device'],self.nonce);await self.read()
+  self.nonce=raw['nonce'];self.key=derive(self.signer,info['device'],self.nonce,self.config_path);await self.read()
   print(json.dumps({'connected':True,'device':info['device'],'version':info['version'],'protocol':'local-hid-v1'}),flush=True)
  async def read(self):
   d=json.loads(bytes(await self.c.read_gatt_char(LOCAL)))
@@ -77,7 +83,7 @@ async def main(a):
  if device is None:raise RuntimeError('Target board not found')
  async with BleakClient(device,timeout=15) as c:
   if not any(ch.uuid==LOCAL for s in c.services for ch in s.characteristics):raise RuntimeError('Firmware lacks local BLE control')
-  link=Link(c,a.signer);await link.start()
+  link=Link(c,a.signer,a.signer_config);await link.start()
   if a.op=='selftest':
    initial=await link.read();assert initial['hid']==0,'Safe selftest requires HID initially off'
    wrong=packet(1,1,b'wrong-key');await link.reject(wrong);print('PASS wrong signature rejected',flush=True)
@@ -106,4 +112,6 @@ async def main(a):
     await link.command(6)
    d=await link.command(op,tuple(a.coords) if a.coords else (0,0,0,0,0));print(json.dumps(d),flush=True)
 if __name__=='__main__':
- p=argparse.ArgumentParser();p.add_argument('op',choices=['shell','info','selftest','arm','disarm','home','back','click','drag','stop']);p.add_argument('--address',required=True);p.add_argument('--signer',required=True);p.add_argument('--coords',type=int,nargs=5);a=p.parse_args();asyncio.run(main(a))
+ p=argparse.ArgumentParser();p.add_argument('op',choices=['shell','info','selftest','arm','disarm','home','back','click','drag','stop']);p.add_argument('--address',required=True);p.add_argument('--signer',required=True);p.add_argument('--signer-config',default=os.environ.get('PHONE_CONTROLLER_SIGNER_CONFIG'),help='Private device_config.h path on the configured signer host');p.add_argument('--coords',type=int,nargs=5);a=p.parse_args();
+ if not a.signer_config:p.error('--signer-config or PHONE_CONTROLLER_SIGNER_CONFIG is required')
+ asyncio.run(main(a))

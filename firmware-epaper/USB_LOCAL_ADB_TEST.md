@@ -10,7 +10,7 @@
 idf.py -C firmware-epaper -B build-usb-local -D SDKCONFIG=sdkconfig.usb-local -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.usb-local.defaults' build
 ```
 
-本地网络固定192.168.77.1/24，板子DHCPserver分配手机IP，不宣告网关/DNS。无互联网不是测试失败；该模式不得将DHCP租约标为云端服务连通。Android是否接受这种local-only租约需实测，若网卡出现但IP被系统撤销，记录IpClient行为再调整；不能先用Mac租约证明手机已支持。
+本地网络固定192.168.77.1/24，板子DHCPserver分配手机IP，不宣告网关/DNS。无互联网不是测试失败；该模式不得将DHCP租约标为云服务连通。Android是否接受这种local-only租约需实测，若网卡出现但IP被系统撤销，记录IpClient行为再调整；不能先用Mac租约证明手机已支持。
 
 ## 验证顺序
 

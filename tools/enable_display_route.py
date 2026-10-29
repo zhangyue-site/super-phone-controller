@@ -1,4 +1,4 @@
-"""Run on 云端服务 after deploying the service. Changes only its dedicated nginx include."""
+"""Run on the configured service host after deployment. Changes only its dedicated nginx include."""
 from pathlib import Path
 import subprocess
 p=Path('/www/server/panel/vhost/nginx/controller.example.invalid.conf')

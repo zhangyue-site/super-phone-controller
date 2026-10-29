@@ -4,7 +4,7 @@
 
 本版本实现服务器额度画面的 HTTPS 拉取、变化时局刷、周期全刷、BOOT 短按翻页、长按提交停止请求，以及默认仅 CDC、经本地屏幕确认后才开启 HID 的 USB 模式。**尚未采集手机投屏、录音或执行手机控制任务。** 不生成自动鼠标/按键输入。
 
-- 图片由 云端服务 服务器读取现有额度快照后渲染；设备不持有模型账号凭据。
+- 图片由配置的云服务读取现有额度快照后渲染；设备不持有模型账号凭据。
 - 设备请求只是传输；任务状态由服务器的 `display_service.control` 发起更新。
 - `device_config.h` 只存设备专用令牌，已忽略；同样不要分发带令牌的固件二进制。
 - 每次启动关闭 HID、蓝牙和 Wi-Fi，不保存上次授权。默认 USB 描述符仅含 CDC，不出现键盘接口。
@@ -12,7 +12,7 @@
 - Wi-Fi 仅手动 `WIFI ON` 开启，`WIFI OFF` 关闭；连接手机热点也需要开启Wi-Fi。手机USB共享网络尚未接入本固件。
 - USB 控制台：`STATUS`、`LOGS`、`PAGE`、`STOP`、`SAFE`、`REBOOT`、`BOOTLOADER`；配网使用 `WIFI<TAB>SSID<TAB>PASSWORD`（不回显密码，写入已有 wifi NVS）。
 - 分区保持原 NVS、OTA、assets 的地址；原始整片备份在本机受限目录，未上传 GitHub。
-- 当前服务的域名解析指向另一台入口，所以固件通过 云端服务 IP 连接，仍用 `controller.example.invalid` 做 TLS SNI、证书验证和 HTTP Host；没有关闭证书校验。
+- 服务入口、连接地址及 TLS 主机名由维护者的私有配置提供。即使入口与服务分离，也必须验证证书并保持正确的 SNI/HTTP Host；不能关闭证书校验。
 - 本地 SDK 的可选 bootloader 日志 Kconfig 被先前删除，`bootloader_components/log_compat` 保存相同版本的原定义用于构建。它们来自 ESP-IDF（Apache-2.0），未修改共享 SDK。
 
 构建：ESP-IDF 5.5.2，复制 `main/device_config.example.h` 到被忽略的 `main/device_config.h` 后填写部署配置，`idf.py build`。
