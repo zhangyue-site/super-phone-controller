@@ -6,12 +6,14 @@ class ScreenTaskStatus {
   final String state;
   final String reply;
   final bool pointerReady;
+  final bool verified;
   final List<String> skills;
   const ScreenTaskStatus(
       {required this.capture,
       this.state = '',
       this.reply = '',
       this.pointerReady = false,
+      this.verified = false,
       this.skills = const []});
 
   factory ScreenTaskStatus.parse(String value) {
@@ -47,8 +49,14 @@ class ScreenTaskStatus {
         state: task['state'],
         reply: task['reply'],
         pointerReady: task['pointerReady'],
+        verified: task['verified'] == true,
         skills: List.unmodifiable(skills));
   }
+
+  bool get resultVerified =>
+      verified &&
+      const {'done', 'succeeded', 'success', 'completed', 'verified'}
+          .contains(state);
 
   String get taskLabel => switch (state) {
         'idle' => '等待新任务',
@@ -57,8 +65,12 @@ class ScreenTaskStatus {
         'verifying' => '正在核验结果',
         'speaking' => '正在播报结果',
         'waiting' => '等待控制板或新画面',
-        'done' || 'succeeded' || 'success' || 'completed' => '操作已结束，结果待确认',
-        'verified' => '结果已核验',
+        'done' ||
+        'succeeded' ||
+        'success' ||
+        'completed' ||
+        'verified' =>
+          resultVerified ? '结果已核验' : '操作已结束，结果待确认',
         'error' || 'failed' => '任务失败',
         'cancelled' => '任务已取消',
         'stopped' => '任务已停止',
