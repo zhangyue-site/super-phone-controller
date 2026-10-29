@@ -4,7 +4,7 @@ from pathlib import Path
 from .voice import recognize
 
 def chat_probe():
-    providers=json.loads(Path('/var/lib/phone-controller/provider/config.json').read_text())['models']['providers']
+    providers=json.loads(Path(os.environ.get('EPAPER_MODEL_CONFIG',str(Path.home()/'.config/phone-controller/models.json'))).read_text())['models']['providers']
     for provider,model,base in (('zai','glm-4.7-flash','https://open.bigmodel.cn/api/paas/v4'),
                                 ('deepseek','deepseek-flash','https://api.deepseek.com')):
         try:
@@ -20,7 +20,7 @@ def chat_probe():
     raise RuntimeError('chat probe failed')
 
 def asr_probe():
-    fixture=Path(os.environ.get('EPAPER_ASR_CHECK_WAV','/srv/phone-controller/model-adapter.py'))
+    fixture=Path(os.environ.get('EPAPER_ASR_CHECK_WAV','assets/asr-check.wav'))
     with wave.open(str(fixture),'rb') as wav:
         if (wav.getnchannels(),wav.getsampwidth(),wav.getframerate())!=(1,2,16000):raise ValueError('invalid fixture')
         raw=wav.readframes(160001)

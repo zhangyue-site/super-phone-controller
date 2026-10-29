@@ -9,6 +9,11 @@ def validate_pcm(raw):
         raise ValueError('声音太小，请靠近麦克风')
     return raw
 
+def asr_script():
+    value=os.environ.get('EPAPER_ASR','').strip()
+    if not value:raise RuntimeError('EPAPER_ASR must point to a configured speech adapter')
+    return value
+
 def recognize(raw):
     validate_pcm(raw)
     fd,path=tempfile.mkstemp(suffix='.wav')
@@ -16,7 +21,7 @@ def recognize(raw):
         with os.fdopen(fd,'wb') as stream:
             with wave.open(stream,'wb') as wav:
                 wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(16000);wav.writeframes(raw)
-        result=subprocess.run(['/usr/bin/python3',os.environ.get('EPAPER_ASR','/srv/phone-controller/voice'),path],
+        result=subprocess.run(['/usr/bin/python3',asr_script(),path],
                               capture_output=True,timeout=75,check=True)
         text=json.loads(result.stdout)['text'].strip()[:120]
         if not text:raise ValueError('没有识别到语音')
