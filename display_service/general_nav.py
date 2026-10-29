@@ -50,6 +50,32 @@ class GeneralNavigator(WechatNavigator):
     if barrier!=j.video_barrier or session!=j.screen_session:raise ValueError('画面会话已经改变')
    self._log(j,'vision_transport_retry',attempt=2,provider=error.provider,verify=verify)
    with same_provider_retry(error):return raw,seq,sig,self._observe(j,raw,task,verify=verify)
+ def _repair_input_schema(self,j,raw,seq,sig,task,observation):
+  from .keyboard_navigation import schema_issue_fields
+  from .general_vision import input_schema_reobserve
+  fields=schema_issue_fields(observation)
+  if not fields:return raw,seq,sig,observation
+  text=observation.get('text')
+  if not isinstance(text,str) or not text or text not in task:return raw,seq,sig,observation
+  with self.m.lock:
+   self.m._live(j)
+   if getattr(j,'input_schema_reobserved',False):raise ValueError('输入字段复核次数已用完')
+   barrier=j.video_barrier;session=j.screen_session;j.input_schema_reobserved=True
+  previous_size=(sig.get('w'),sig.get('h'))
+  raw,seq,sig=self._frame(j,after=seq)
+  with self.m.lock:
+   self.m._live(j)
+   if barrier!=j.video_barrier or session!=j.screen_session:raise ValueError('画面会话已经改变')
+  if previous_size!=(sig.get('w'),sig.get('h')):raise ValueError('共享画面尺寸改变')
+  self._log(j,'keyboard_schema_reobserve',fields=list(fields),attempt=1)
+  # Exactly one read, with the previous provider/model/config pinned. No
+  # transport retry is nested here and no actuator is touched.
+  with input_schema_reobserve():result=self._observe(j,raw,task)
+  with self.m.lock:
+   self.m._live(j)
+   if barrier!=j.video_barrier or session!=j.screen_session:raise ValueError('画面会话已经改变')
+  if result.get('action')!='type_text' or schema_issue_fields(result):raise ValueError('输入观察字段仍不完整')
+  return raw,seq,sig,result
  def _log(self,j,stage,**metadata):
   if stage=='dispatch':
    j.state='running';j.reply={'hid_home':'正在回到手机桌面','hid_pointer':'正在按画面定位导航目标','type_text':'正在输入搜索词并恢复原输入法'}.get(metadata.get('op'),'正在导航')
@@ -156,7 +182,10 @@ class GeneralNavigator(WechatNavigator):
     complete=True;break
    if index==17:break
    from .keyboard_navigation import decision
-   try:command,next_input,observe_only=decision(getattr(j,'keyboard_input',None),o,task,seq)
+   try:
+    raw,seq,sig,o=self._repair_input_schema(j,raw,seq,sig,task,o)
+    last=seq
+    command,next_input,observe_only=decision(getattr(j,'keyboard_input',None),o,task,seq)
    except (ValueError,RuntimeError) as error:
     self._log(j,'keyboard_check_failed',reason=str(error)[:120])
     raise ValueError('无法确认搜索框、候选词或实际输入文字，本次已停止') from error

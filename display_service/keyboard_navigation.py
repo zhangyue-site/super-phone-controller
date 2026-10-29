@@ -2,6 +2,13 @@
 from copy import deepcopy
 from .keyboard_input import pinyin_plan,choose_candidate,verify_candidate_commit,validate_target
 
+def schema_issue_fields(o):
+ """Only malformed type_text evidence may be reobserved, never negative evidence."""
+ if not isinstance(o,dict) or o.get('action')!='type_text' or o.get('safe') is not True:return ()
+ if o.get('input_visible') is False or o.get('input_focused') is False or o.get('input_password') is True:return ()
+ if isinstance(o.get('input_role'),str) and o['input_role']!='search':return ()
+ return tuple(k for k in ('input_visible','input_password','input_focused','input_role') if k not in o or (type(o[k]) is not str if k=='input_role' else type(o[k]) is not bool))
+
 def _focused(o,frame):
  if o.get('safe') is not True or o.get('input_visible') is not True or o.get('input_focused') is not True or o.get('input_role')!='search' or o.get('input_password') is not False:raise ValueError('需要确认已聚焦的非密码搜索框')
  return validate_target(dict(purpose='visible_search',role='search',visible=True,focused=True,password=False,frame=frame))
