@@ -1,0 +1,20 @@
+[Unit]
+Description=Phone controller example service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/phone-controller
+EnvironmentFile=/etc/phone-controller/server.env
+ExecStart=/usr/bin/python3 -m display_service.app
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/phone-controller
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

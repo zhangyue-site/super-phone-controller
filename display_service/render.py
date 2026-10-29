@@ -20,7 +20,7 @@ def render(rows, interaction, page=0, now=None, connected=True):
             s=s[:-1]
         d.text((x,y),s,font=f,fill=0)
     text(8,3,'模型额度' if page==0 else '当前交互',title)
-    text(145,8,'106 在线' if connected else '未连接',small)
+    text(145,8,'服务在线' if connected else '未连接',small)
     d.line((7,27,192,27),fill=0)
     if page==0:
         text(8,31,'剩余额度 · 旧值标记 *',small)
