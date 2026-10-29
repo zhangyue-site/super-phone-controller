@@ -54,6 +54,8 @@ class _ControlScreenState extends State<ControlScreen> {
       await _client.refresh();
       if (mounted && !_client.authorized) {
         setState(() => _error = _client.connectionStatus);
+      } else if (mounted && _client.ownsGateway) {
+        setState(() {}); // Render board diagnostics even when no task is active.
       }
     } catch (e) {
       if (mounted) setState(() => _error = '连接续期失败：$e');
