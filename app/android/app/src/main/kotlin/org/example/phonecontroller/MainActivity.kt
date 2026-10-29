@@ -114,9 +114,24 @@ class MainActivity: FlutterActivity() {
      }
      if(requestedUsb==null || requestedUsb==ScreenShareService.usbOwnerSession) {
       ScreenShareService.status="已停止共享";ScreenShareService.taskStatus=""
+      ScreenShareService.stopRecovery()
       stopService(Intent(this,ScreenShareService::class.java))
      }
      result.success(null)
+    }
+    "captureSession" -> {
+     val session=call.argument<String>("usbSession")
+     val value=if(session==null)null else ScreenShareService.captureSession(session)
+     if(value==null)result.error("capture_session_invalid","屏幕共享会话已结束",null) else result.success(value)
+    }
+    "replaceUsbCapture" -> {
+     val session=call.argument<String>("usbSession");val serial=call.argument<String>("serial")
+     val generation=call.argument<Number>("generation")?.toLong();val capability=call.argument<String>("ticket")
+     if(session!=null && serial!=null && generation!=null && capability!=null) {
+      ScreenShareService.replaceUsbCapture(session,serial,generation,capability) { replaced ->
+       if(replaced)result.success(null) else result.error("capture_session_invalid","共享会话已改变，未恢复旧会话",null)
+      }
+     } else result.error("capture_session_invalid","共享会话已改变，未恢复旧会话",null)
     }
     "usbWindow" -> {
      val session=call.argument<String>("usbSession")

@@ -51,6 +51,13 @@ jobs:
       - name: Regression tests
         run: flutter test
 
+      - name: Native capture and USB session regressions
+        run: |
+          mkdir -p "$RUNNER_TEMP/capture-jvm"
+          javac -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/{CaptureRecoveryGuard,UsbSessionLease,UsbModeWindow}.java android/app/src/test/java/org/example/phonecontroller/{CaptureRecoveryGuardTest,UsbModeWindowTest}.java
+          java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.CaptureRecoveryGuardTest
+          java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.UsbModeWindowTest
+
       - name: Build signed APK
         env:
           CONTROLLER_BASE_URL: ${{ secrets.CONTROLLER_BASE_URL }}

@@ -79,7 +79,7 @@ class CloudRelay {
           seq is! int ||
           op is! int ||
           op < 1 ||
-          op > 12 ||
+          op > 14 ||
           (op > 7 && op < 11)) {
         throw const FormatException("云端动作格式无效");
       }

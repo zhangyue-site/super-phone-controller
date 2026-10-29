@@ -26,6 +26,18 @@ class ScreenShareService: Service() {
  companion object {
  @Volatile private var current: ScreenShareService?=null
  private val renewalWorker=ThreadPoolExecutor(1,1,0L,TimeUnit.MILLISECONDS,ArrayBlockingQueue<Runnable>(1))
+ fun captureSession(session: String): Map<String,Any>? = current?.captureContext(session)
+ fun replaceUsbCapture(session: String,serial: String,generation: Long,capability: String,complete: (Boolean)->Unit) {
+  val service=current
+  val queue=service?.handler
+  if(service==null || queue==null){complete(false);return}
+  val posted=queue.post {
+   val replaced=service.replaceCapture(session,serial,generation,capability)
+   Handler(Looper.getMainLooper()).post { complete(replaced) }
+  }
+  if(!posted)complete(false)
+ }
+ fun stopRecovery() { current?.endCapture() }
  fun usbWindow(session: String, body: JSONObject, complete: (String?)->Unit) {
   val service=current
   if(service==null) { complete(null);return }
@@ -75,6 +87,7 @@ class ScreenShareService: Service() {
   while(out.size()<limit){val n=input.read(buffer,0,minOf(buffer.size,limit-out.size()));if(n<0)break;out.write(buffer,0,n)}
   return out.toByteArray()
  }
+ private val recovery=CaptureRecoveryGuard()
  @Volatile private var projection: MediaProjection?=null
  private var display: VirtualDisplay?=null
  private var reader: ImageReader?=null
@@ -93,10 +106,30 @@ class ScreenShareService: Service() {
  private var initialHeight=0
  private var initialRotation=0
  private var displayManager: DisplayManager?=null
+ @Synchronized private fun projectionValid(session: String): Boolean =
+  current===this && active && running && projection!=null && usbOwnerSession==session &&
+  UsbLaunchBridge.matches(session) && usbOwnerSerial==UsbLaunchBridge.serialFor(session)
+ @Synchronized private fun captureContext(session: String): Map<String,Any>? {
+  if(!projectionValid(session))return null
+  if(SystemClock.elapsedRealtime()>=until)pauseCloud(ticket)
+  return mapOf("generation" to recovery.generation(),"serial" to (usbOwnerSerial?:""),"needsAuthorization" to recovery.needsAuthorization())
+ }
+ @Synchronized private fun replaceCapture(session: String,serial: String,generation: Long,capability: String): Boolean {
+  if(!projectionValid(session) || usbOwnerSerial!=serial || !Regex("[A-Za-z0-9_-]{43}").matches(capability) || !recovery.replace(generation))return false
+  ticket=capability;until=SystemClock.elapsedRealtime()+270000L
+  sequence=0;barrier="";afterResponse=System.nanoTime();taskStatus=""
+  status="共享已恢复，等待新任务；旧任务不会重放"
+  return true
+ }
+ @Synchronized private fun pauseCloud(capability: String) {
+  if(!running || !active || ticket!=capability)return
+  recovery.pause();taskStatus="";status="云端授权暂不可用，保留屏幕共享并自动恢复连接"
+ }
+ @Synchronized private fun endCapture() { recovery.stop();running=false;active=false }
  private fun renewalValid(session: String, capability: String, expectedProjection: MediaProjection?): Boolean =
   current===this && active && running && expectedProjection!=null && projection===expectedProjection &&
   ticket==capability && capability.isNotEmpty() && usbOwnerSession==session &&
-  UsbLaunchBridge.matches(session) && SystemClock.elapsedRealtime()<until
+  UsbLaunchBridge.matches(session) && !recovery.needsAuthorization() && SystemClock.elapsedRealtime()<until
  private fun renew(controlTicket: String,session: String,complete: (Boolean)->Unit, usbProof: JSONObject?=null) {
   var c: HttpsURLConnection?=null
   var renewed=false
@@ -111,7 +144,7 @@ class ScreenShareService: Service() {
    c.setRequestProperty("Authorization","Bearer ${if(usbProof==null) controlTicket else capability}");c.setRequestProperty("Content-Type","application/json")
    val body=(if(usbProof==null) JSONObject().put("ticket",capability) else usbProof).toString().toByteArray(Charsets.UTF_8)
    c.setFixedLengthStreamingMode(body.size);c.outputStream.use { it.write(body) }
-   if(c.responseCode!=200)return
+   if(c.responseCode!=200){if(CaptureRecoveryGuard.authorizationFailure(c.responseCode))pauseCloud(capability);return}
    val bytes=c.inputStream.use { readBounded(it,4097) }
    if(bytes.size>4096)return
    val response=JSONObject(String(bytes,Charsets.UTF_8))
@@ -126,7 +159,7 @@ class ScreenShareService: Service() {
  }
  private fun geometryChanged() {
   if(!running)return
-  running=false;connection?.disconnect();status="屏幕方向或共享范围已改变，任务已取消；请重新共享整个屏幕";taskStatus="";stopSelf()
+  endCapture();connection?.disconnect();status="屏幕方向或共享范围已改变，任务已取消；请重新共享整个屏幕";taskStatus="";stopSelf()
  }
  private val displayListener=object: DisplayManager.DisplayListener {
   override fun onDisplayAdded(id: Int) {}
@@ -141,25 +174,28 @@ class ScreenShareService: Service() {
  private val poll=object: Runnable {
   override fun run() {
    if(!running)return
-   if(SystemClock.elapsedRealtime()>=until){running=false;status="共享凭证已到期，请重新开启";stopSelf();return}
+   if(SystemClock.elapsedRealtime()>=until)pauseCloud(ticket)
+   if(recovery.needsAuthorization()){handler?.postDelayed(this,2000);return}
+   val requestTicket=ticket
    var c: HttpsURLConnection?=null
    try {
     c=URL("$BASE/status").openConnection() as HttpsURLConnection;connection=c
     c.requestMethod="POST";c.connectTimeout=3000;c.readTimeout=3000;c.doOutput=true
-    c.setRequestProperty("Authorization","Bearer $ticket");c.setFixedLengthStreamingMode(0);c.outputStream.close()
+    c.setRequestProperty("Authorization","Bearer $requestTicket");c.setFixedLengthStreamingMode(0);c.outputStream.close()
     if(c.responseCode==200) {
      val body=c.inputStream.use { readBounded(it,16385) }
      if(body.size>16384)throw IllegalStateException()
      val data=JSONObject(String(body,Charsets.UTF_8))
-     if(running)taskStatus=data.toString()
-    } else if(c.responseCode==401 || c.responseCode==403) {running=false;status="共享授权失效，请重新开启";stopSelf()}
+     if(running && ticket==requestTicket)taskStatus=data.toString()
+    } else if(CaptureRecoveryGuard.authorizationFailure(c.responseCode)) {pauseCloud(requestTicket)}
+    else if(running)status="云端暂不可用，保留共享并重试"
    } catch(_: Exception) {if(running)taskStatus=""} finally {c?.disconnect();connection=null}
    if(running)handler?.postDelayed(this,2000)
   }
  }
  override fun onBind(intent: Intent?)=null
  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-  if(intent?.action=="STOP"){status="已停止共享";stopSelf();return START_NOT_STICKY}
+  if(intent?.action=="STOP"){endCapture();status="已停止共享";stopSelf();return START_NOT_STICKY}
   if(running || active){intent?.getStringExtra("ticket")?.let { revoke(it) };return START_NOT_STICKY}
   val value=intent?.getStringExtra("ticket")
   @Suppress("DEPRECATION") val grant=intent?.getParcelableExtra<Intent>("grant")
@@ -176,7 +212,7 @@ class ScreenShareService: Service() {
   if(Build.VERSION.SDK_INT>=29)startForeground(71,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION) else startForeground(71,notification)
    worker=HandlerThread("screen-capture").also{it.start()};handler=Handler(worker!!.looper)
    projection=(getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).getMediaProjection(Activity.RESULT_OK,grant)
-   projection!!.registerCallback(object: MediaProjection.Callback(){override fun onStop(){if(running)status="系统已停止共享";running=false;stopSelf()}
+   projection!!.registerCallback(object: MediaProjection.Callback(){override fun onStop(){if(running)status="系统已停止共享";endCapture();stopSelf()}
     override fun onCapturedContentResize(width: Int,height: Int){if(width!=initialWidth || height!=initialHeight)geometryChanged()}},Handler(Looper.getMainLooper()))
    val metrics=resources.displayMetrics
    @Suppress("DEPRECATION") val physical=(getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay
@@ -186,7 +222,7 @@ class ScreenShareService: Service() {
    displayManager=getSystemService(DISPLAY_SERVICE) as DisplayManager
    displayManager!!.registerDisplayListener(displayListener,handler)
    reader=ImageReader.newInstance(width,height,PixelFormat.RGBA_8888,2)
-   until=SystemClock.elapsedRealtime()+270000L;running=true;current=this;taskStatus="";handler!!.post(poll);status="共享中，等待语音任务"
+   until=SystemClock.elapsedRealtime()+270000L;recovery.start();running=true;current=this;taskStatus="";handler!!.post(poll);status="共享中，等待语音任务"
    reader!!.setOnImageAvailableListener({ source ->
     val image=source.acquireLatestImage() ?: return@setOnImageAvailableListener
     var bitmap: Bitmap?=null
@@ -199,7 +235,9 @@ class ScreenShareService: Service() {
      val currentSize=Point();currentDisplay.getRealSize(currentSize)
      if(currentDisplay.rotation!=initialRotation || currentSize.x!=initialWidth || currentSize.y!=initialHeight){geometryChanged();return@setOnImageAvailableListener}
      if(image.width!=initialWidth || image.height!=initialHeight){geometryChanged();return@setOnImageAvailableListener}
-     if(now>=until){status="共享凭证已到期，请重新开启";stopSelf();return@setOnImageAvailableListener}
+     if(now>=until)pauseCloud(ticket)
+     if(recovery.needsAuthorization())return@setOnImageAvailableListener
+     val requestTicket=ticket
      if(now-last<800)return@setOnImageAvailableListener
      last=now
      val plane=image.planes[0];val padding=plane.rowStride-plane.pixelStride*image.width
@@ -213,9 +251,10 @@ class ScreenShareService: Service() {
      if(bytes.size>524288){running=false;status="画面过大，任务已停止；请降低屏幕分辨率后重新共享";stopSelf();return@setOnImageAvailableListener}
      val conn=URL("$BASE/frame").openConnection() as HttpsURLConnection
      connection=conn;conn.requestMethod="POST";conn.connectTimeout=5000;conn.readTimeout=5000;conn.doOutput=true
-     conn.setRequestProperty("X-Screen-Native-Width",initialWidth.toString());conn.setRequestProperty("X-Screen-Native-Height",initialHeight.toString());conn.setRequestProperty("X-Screen-Barrier",barrier);conn.setRequestProperty("Authorization","Bearer $ticket");conn.setRequestProperty("Content-Type","image/jpeg");conn.setRequestProperty("X-Screen-Sequence",(++sequence).toString());conn.setFixedLengthStreamingMode(bytes.size)
+     conn.setRequestProperty("X-Screen-Native-Width",initialWidth.toString());conn.setRequestProperty("X-Screen-Native-Height",initialHeight.toString());conn.setRequestProperty("X-Screen-Barrier",barrier);conn.setRequestProperty("Authorization","Bearer $requestTicket");conn.setRequestProperty("Content-Type","image/jpeg");conn.setRequestProperty("X-Screen-Sequence",(++sequence).toString());conn.setFixedLengthStreamingMode(bytes.size)
      conn.outputStream.use{it.write(bytes)}
      val code=conn.responseCode
+     if(!running || ticket!=requestTicket)return@setOnImageAvailableListener
      if(code==200 || code==202) {
       val body=conn.inputStream.use { readBounded(it,4097) }
       if(body.size>4096)throw IllegalStateException()
@@ -224,7 +263,8 @@ class ScreenShareService: Service() {
       if(!Regex("[0-9a-f]{32}").matches(next))throw IllegalStateException()
       barrier=next;afterResponse=System.nanoTime()
       if(running)status=if(code==200)"画面传输：已上传" else "画面传输：共享中"
-     } else {running=false;status="共享授权失效，请重新开启";stopSelf()}
+     } else if(CaptureRecoveryGuard.authorizationFailure(code)) {pauseCloud(requestTicket)}
+     else {status="画面上传暂不可用，保留共享并重试"}
      conn.disconnect();connection=null
     } catch(e: Exception) {if(running)status="画面上传失败，正在重试"}
     finally {if(scaled!==cropped)scaled?.recycle();if(cropped!==bitmap)cropped?.recycle();bitmap?.recycle();image.close();connection?.disconnect();connection=null}
@@ -234,6 +274,7 @@ class ScreenShareService: Service() {
   return START_NOT_STICKY
  }
  override fun onDestroy() {
+  endCapture()
   synchronized(this) {
    if(current===this)current=null
    active=false;usbOwnerSerial=null;usbOwnerSession=null

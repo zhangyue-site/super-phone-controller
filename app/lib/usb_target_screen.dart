@@ -14,12 +14,16 @@ class UsbTargetScreen extends StatefulWidget {
   final BleOtaService? service;
   final VoidCallback? onLegacy;
   final bool Function() isCurrent;
+  final DateTime Function()? captureClock;
+  final Future<void> Function(UsbAttachment)? renewCapture;
   const UsbTargetScreen(
       {super.key,
       required this.attachment,
       required this.isCurrent,
       this.service,
-      this.onLegacy});
+      this.onLegacy,
+      this.captureClock,
+      this.renewCapture});
   @override
   State<UsbTargetScreen> createState() => _UsbTargetScreenState();
 }
@@ -36,6 +40,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   String? _error, _code;
   DateTime? _codeExpiry;
   DateTime? _captureRenewed;
+  DateTime get _captureNow => widget.captureClock?.call() ?? DateTime.now();
   bool? _expectedWindowMode;
   bool _current(int generation) =>
       mounted && !_lost && widget.isCurrent() && generation == _generation;
@@ -77,15 +82,34 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         await _control?.shutdown();
         if (!_current(generation)) return;
       }
-      if (active) await _usbWindow(generation);
+      // Capture credentials recover independently of gateway/window errors.
+      if (active) {
+        try {
+          final recovered = await ScreenShare.recoverUsb(widget.attachment,
+              isCurrent: () => _current(generation));
+          if (recovered) _captureRenewed = _captureNow;
+          if (!recovered &&
+              _captureRenewed != null &&
+              _captureNow.difference(_captureRenewed!).inSeconds >= 60) {
+            await (widget.renewCapture ??
+                ScreenShare.renewUsb)(widget.attachment);
+            _captureRenewed = _captureNow;
+          }
+        } catch (e) {
+          if (_current(generation)) setState(() => _error = '云端画面连接正在恢复：$e');
+        }
+      }
       if (!_current(generation)) return;
-      await _control?.refresh();
-      if (_active &&
-          active &&
-          _captureRenewed != null &&
-          DateTime.now().difference(_captureRenewed!).inSeconds >= 60) {
-        await ScreenShare.renewUsb(widget.attachment);
-        _captureRenewed = DateTime.now();
+      try {
+        if (active) await _usbWindow(generation);
+      } catch (e) {
+        if (_current(generation)) setState(() => _error = 'USB控制窗口暂不可用：$e');
+      }
+      if (!_current(generation)) return;
+      try {
+        await _control?.refresh();
+      } catch (e) {
+        if (_current(generation)) setState(() => _error = '网关续期失败：$e');
       }
       if (!_current(generation)) return;
       setState(() {
@@ -274,7 +298,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       }
       if (!_current(generation)) return;
       _active = await ScreenShare.isActive();
-      _captureRenewed = DateTime.now();
+      _captureRenewed = _captureNow;
       if (!_current(generation)) return;
       if (!_active) throw StateError('屏幕共享尚未启动，请重试');
       setState(() {
