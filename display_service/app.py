@@ -12,7 +12,7 @@ from .render import render
 from .control import read as read_interaction, write as write_interaction
 
 CONFIG=Path(os.environ.get('EPAPER_CONFIG','/etc/phone-controller/devices.example.json'))
-QUOTAS=Path(os.environ.get('EPAPER_QUOTAS','/var/lib/phone-controller/private/config.json'))
+QUOTAS=Path(os.environ.get('EPAPER_QUOTAS',str(Path.home()/'.local/state/phone-controller/quotas')))
 LOCK=threading.Lock()
 INTERACTIONS={}
 VOICE_BUSY=set()
