@@ -6,8 +6,25 @@ plugins {
 }
 
 def releaseStore = System.getenv("ANDROID_KEYSTORE_PATH")
-if (gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") } && !releaseStore) {
+def releaseBuild = gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") }
+if (releaseBuild && !releaseStore) {
     throw new GradleException("Release signing requires the cloud Android keystore configuration")
+}
+
+def configuredBase = (System.getenv("CONTROLLER_BASE_URL") ?: "").trim().replaceAll(/\/+$/, "")
+def configuredDownload = System.getenv("CONTROLLER_DOWNLOAD_URL") ?: ""
+def configuredApplicationId = System.getenv("CONTROLLER_APPLICATION_ID")
+def validServiceUrl = { value ->
+    try {
+        def uri = new java.net.URI(value)
+        return uri.scheme == "https" && uri.host && !uri.userInfo && !uri.rawQuery && !uri.rawFragment
+    } catch (Exception ignored) { return false }
+}
+if (releaseBuild && (!validServiceUrl(configuredBase) || !configuredApplicationId)) {
+    throw new GradleException("Release requires CONTROLLER_BASE_URL (HTTPS) and the existing CONTROLLER_APPLICATION_ID")
+}
+if (configuredDownload && !validServiceUrl(configuredDownload)) {
+    throw new GradleException("CONTROLLER_DOWNLOAD_URL must be HTTPS without credentials, query or fragment")
 }
 
 android {
@@ -27,11 +44,11 @@ android {
 
     buildFeatures { buildConfig = true }
     defaultConfig {
-        buildConfigField "String", "CONTROLLER_BASE_URL", groovy.json.JsonOutput.toJson(System.getenv("CONTROLLER_BASE_URL") ?: "https://controller.example.invalid/phone-controller")
-        buildConfigField "String", "DOWNLOAD_URL", groovy.json.JsonOutput.toJson(System.getenv("CONTROLLER_DOWNLOAD_URL") ?: "https://downloads.example.invalid/")
+        buildConfigField "String", "CONTROLLER_BASE_URL", groovy.json.JsonOutput.toJson(configuredBase)
+        buildConfigField "String", "DOWNLOAD_URL", groovy.json.JsonOutput.toJson(configuredDownload)
 
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = System.getenv("CONTROLLER_APPLICATION_ID") ?: "org.example.phonecontroller"
+        applicationId = configuredApplicationId ?: "org.example.phonecontroller"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 26

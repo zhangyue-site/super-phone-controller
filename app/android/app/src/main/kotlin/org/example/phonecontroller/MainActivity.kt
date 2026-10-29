@@ -78,6 +78,7 @@ class MainActivity: FlutterActivity() {
      result.success(mapOf("versionName" to info.versionName, "versionCode" to code))
     }
     "openDownload" -> {
+     if(BuildConfig.DOWNLOAD_URL.isBlank()){result.error("not_configured","更新入口尚未配置，请联系应用维护者",null);return@setMethodCallHandler}
      try {
       startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(BuildConfig.DOWNLOAD_URL)))
       result.success(null)
@@ -89,6 +90,7 @@ class MainActivity: FlutterActivity() {
   MethodChannel(engine.dartExecutor.binaryMessenger, "pcflash/screen").setMethodCallHandler { call, result ->
    when(call.method) {
     "start" -> {
+     if(BuildConfig.CONTROLLER_BASE_URL.isBlank()){result.error("not_configured","服务地址尚未配置，请联系应用维护者",null);return@setMethodCallHandler}
      val value=call.argument<String>("ticket")
      val requestedUsb=call.argument<String>("usbSession")
      if(consentInFlight || pending!=null || ScreenShareService.active || value==null || !Regex("[A-Za-z0-9_-]{43}").matches(value)) {

@@ -10,7 +10,7 @@ import 'ble_ota_service.dart';
 
 /// Ephemeral BLE possession capability, kept only in memory.
 class ControlClient {
-  static const base = '${ControllerConfig.base}/app-control';
+  static String get base => '${ControllerConfig.base}/app-control';
   http.Client? _http;
   CloudRelay? _relay;
   bool _closed = false;

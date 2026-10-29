@@ -8,7 +8,7 @@ import 'usb_launch.dart';
 
 class ScreenShare {
   static const channel = MethodChannel('pcflash/screen');
-  static const base = '${ControllerConfig.base}/app-screen';
+  static String get base => '${ControllerConfig.base}/app-screen';
   static Future<Map<String, dynamic>> _post(
       http.Client client, String path, Map<String, dynamic> body) async {
     final response = await client

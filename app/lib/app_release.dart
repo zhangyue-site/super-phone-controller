@@ -31,8 +31,7 @@ class AppRelease {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
-                                  content: Text(
-                                      '无法打开浏览器，请访问 downloads.example.invalid 的控制板升级助手页面')));
+                                  content: Text('更新入口未配置或暂时无法打开，请联系应用维护者')));
                         }
                       }
                     },

@@ -43,13 +43,15 @@ jobs:
         run: flutter pub get
 
       - name: Public source privacy check
-        run: python3 ../tools/check_public_source.py
+        run: |
+          python3 ../tools/check_public_source.py
+          python3 -m unittest discover -s ../tools -p test_prepare_app_config.py
 
       - name: Analyze
         run: flutter analyze
 
       - name: Regression tests
-        run: flutter test
+        run: flutter test --dart-define=CONTROLLER_BASE_URL=https://controller.test
 
       - name: Native capture and USB session regressions
         run: |
@@ -77,12 +79,7 @@ jobs:
           chmod 600 "$ANDROID_KEYSTORE_PATH"
           trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
           export CONTROLLER_RUNTIME_CONFIG="$RUNNER_TEMP/controller-runtime.json"
-          python3 - <<'PYCONFIG'
-          import json, os
-          value=os.environ.get("CONTROLLER_BASE_URL") or "https://controller.example.invalid/phone-controller"
-          with open(os.environ["CONTROLLER_RUNTIME_CONFIG"],"w") as f:
-              json.dump({"CONTROLLER_BASE_URL":value}, f)
-          PYCONFIG
+          python3 ../tools/prepare_app_config.py --output "$CONTROLLER_RUNTIME_CONFIG"
           chmod 600 "$CONTROLLER_RUNTIME_CONFIG"
           trap 'rm -f "$ANDROID_KEYSTORE_PATH" "$CONTROLLER_RUNTIME_CONFIG"' EXIT
           flutter build apk --release --dart-define-from-file="$CONTROLLER_RUNTIME_CONFIG"

@@ -48,4 +48,27 @@ void main() {
     expect(find.textContaining('暂时无法读取'), findsOneWidget);
     expect(find.textContaining('1.0.7'), findsNothing);
   });
+  testWidgets('missing update URL gives no placeholder or personal fallback',
+      (tester) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(AppRelease.channel, (call) async {
+      if (call.method == 'info') return {'versionName': '1', 'versionCode': 1};
+      throw PlatformException(code: 'not_configured');
+    });
+    addTearDown(() => TestDefaultBinaryMessengerBinding
+        .instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(AppRelease.channel, null));
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: Builder(
+                builder: (context) => TextButton(
+                    onPressed: () => AppRelease.show(context),
+                    child: const Text('版本'))))));
+    await tester.tap(find.text('版本'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('官方下载与更新'));
+    await tester.pumpAndSettle();
+    expect(find.text('更新入口未配置或暂时无法打开，请联系应用维护者'), findsOneWidget);
+    expect(find.textContaining('example.invalid'), findsNothing);
+  });
 }

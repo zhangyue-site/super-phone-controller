@@ -40,7 +40,7 @@ class FirmwareScreen extends StatefulWidget {
 }
 
 class _FirmwareScreenState extends State<FirmwareScreen> {
-  static const otaBase = ControllerConfig.base;
+  static String get otaBase => ControllerConfig.base;
 
   FirmwareInfo? _info;
   Uint8List? _bytes;
