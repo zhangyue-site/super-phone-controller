@@ -275,6 +275,11 @@ class ScreenShareService: Service() {
   } catch(e: Exception) {status="屏幕共享启动失败，请重新授权";stopSelf()}
   return START_NOT_STICKY
  }
+ override fun onTaskRemoved(rootIntent: Intent?) {
+  // USB attach uses a temporary task; losing that task is not consent revocation.
+  SafeDiagnostics.record(mapOf("event" to "capture_task_removed","phase" to "capture","reason" to "task_removed","generation" to recovery.generation(),"active" to active,"running" to running))
+  super.onTaskRemoved(rootIntent)
+ }
  override fun onDestroy() {
   SafeDiagnostics.record(mapOf("event" to "capture_destroy","phase" to "capture","reason" to "destroy","generation" to recovery.generation(),"active" to active,"running" to running))
   endCapture()

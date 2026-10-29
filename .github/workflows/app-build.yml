@@ -46,6 +46,7 @@ jobs:
         run: |
           python3 ../tools/check_public_source.py
           python3 -m unittest discover -s ../tools -p test_prepare_app_config.py
+          python3 -m unittest discover -s ../tools -p test_capture_lifecycle_contract.py
 
       - name: Analyze
         run: flutter analyze

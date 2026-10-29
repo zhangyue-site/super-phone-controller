@@ -10,6 +10,8 @@ public final class DiagnosticSchemaTest {
   raw.put("phase","SENSITIVE-TEST-VALUE");raw.put("reason","not-a-fixed-reason");raw.put("http_status",999);raw.put("generation","not-a-number");safe=DiagnosticSchema.sanitize(raw);
   check(!safe.containsKey("phase")&&!safe.containsKey("reason")&&!safe.containsKey("http_status")&&!safe.containsKey("generation"));
   raw.put("event","arbitrary-user-text");check(DiagnosticSchema.sanitize(raw).isEmpty());
+  raw.clear();raw.put("event","capture_task_removed");raw.put("phase","capture");raw.put("reason","task_removed");raw.put("active",true);raw.put("running",true);raw.put("intent","SENSITIVE-INTENT");
+  safe=DiagnosticSchema.sanitize(raw);check(safe.size()==5);check(safe.get("reason").equals("task_removed"));check(!safe.toString().contains("SENSITIVE"));
   System.out.println("Diagnostic schema rejects secrets and arbitrary text: passed");
  }
 }
