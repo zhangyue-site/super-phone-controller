@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +6,10 @@ import 'ble_ota_service.dart';
 import 'control_client.dart';
 import 'screen_share.dart';
 import 'usb_launch.dart';
+import 'target_session.dart';
+import 'product_widgets.dart';
+import 'product_settings.dart';
+import 'screen_task_status.dart';
 
 /// The target owns capture and the BLE relay, never command entry.
 class UsbTargetScreen extends StatefulWidget {
@@ -30,6 +33,7 @@ class UsbTargetScreen extends StatefulWidget {
 
 class _UsbTargetScreenState extends State<UsbTargetScreen> {
   static final Set<String> _manuallyStopped = <String>{};
+  static final Set<String> _autoAttemptedSessions = <String>{};
   Timer? _timer;
   ControlClient? _control;
   Future<void>? _startFuture;
@@ -38,19 +42,22 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   int _generation = 0;
   String _capture = '等待屏幕共享授权', _relay = '尚未连接';
   String? _error, _code;
+  ScreenTaskStatus _feedback = const ScreenTaskStatus(capture: '状态待更新');
   DateTime? _codeExpiry;
-  DateTime? _captureRenewed;
   DateTime get _captureNow => widget.captureClock?.call() ?? DateTime.now();
-  bool? _expectedWindowMode;
   bool _current(int generation) =>
       mounted && !_lost && widget.isCurrent() && generation == _generation;
 
   @override
   void initState() {
     super.initState();
+    TargetSession.addView(this);
     _timer = Timer.periodic(const Duration(seconds: 2), (_) => _poll());
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_manuallyStopped.contains(widget.attachment.serial)) _start();
+      if (!_manuallyStopped.contains(widget.attachment.serial)) {
+        final first = _autoAttemptedSessions.add(widget.attachment.session);
+        _start(allowConsent: first);
+      }
     });
   }
 
@@ -85,16 +92,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       // Capture credentials recover independently of gateway/window errors.
       if (active) {
         try {
-          final recovered = await ScreenShare.recoverUsb(widget.attachment,
-              isCurrent: () => _current(generation));
-          if (recovered) _captureRenewed = _captureNow;
-          if (!recovered &&
-              _captureRenewed != null &&
-              _captureNow.difference(_captureRenewed!).inSeconds >= 60) {
-            await (widget.renewCapture ??
-                ScreenShare.renewUsb)(widget.attachment);
-            _captureRenewed = _captureNow;
-          }
+          await TargetSession.maintainCapture(widget.attachment,
+              clock: widget.captureClock, renew: widget.renewCapture);
         } catch (e) {
           if (_current(generation)) setState(() => _error = '云端画面连接正在恢复：$e');
         }
@@ -115,6 +114,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       setState(() {
         _active = active;
         _capture = status.capture;
+        _feedback = status;
         _pointerReady = status.pointerReady;
         if (_control != null && !_control!.authorized) {
           _relay = '连接已结束，请重新连接；旧动作不会重发';
@@ -130,48 +130,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     }
   }
 
-  Future<void> _usbWindow(int generation) async {
-    Future<Map<String, dynamic>> request(Map<String, dynamic> body) async {
-      final raw = await ScreenShare.channel.invokeMethod<String>('usbWindow', {
-        'usbSession': widget.attachment.session,
-        'body': jsonEncode(body),
-      });
-      if (!_current(generation)) throw StateError('USB窗口会话已改变');
-      final value = jsonDecode(raw ?? '{}');
-      if (value is! Map<String, dynamic>) {
-        throw const FormatException('USB窗口响应无效');
-      }
-      return value;
-    }
-
-    final window = await request({'operation': 'poll'});
-    if (window['state'] == 'idle' || window['state'] == 'ready') return;
-    final nonce = window['nonce'],
-        mode = window['mode'],
-        revision = window['generation'],
-        ttl = window['expiresInMs'];
-    if (window['state'] != 'prepare' ||
-        nonce is! String ||
-        !RegExp(r'^[0-9a-f]{32}$').hasMatch(nonce) ||
-        (mode != 'hid' && mode != 'normal') ||
-        revision is! int ||
-        ttl is! int ||
-        ttl < 1 ||
-        ttl > 5000) {
-      throw const FormatException('USB切换窗口无效');
-    }
-    await UsbLaunch.channel.invokeMethod<void>('expectMode',
-        {'session': widget.attachment.session, 'hid': mode == 'hid'});
-    if (!_current(generation)) return;
-    _expectedWindowMode = mode == 'hid';
-    final ready = await request({
-      'operation': 'ready',
-      'nonce': nonce,
-      'mode': mode,
-      'generation': revision
-    });
-    if (ready['state'] != 'ready') throw StateError('USB切换窗口未确认');
-  }
+  Future<void> _usbWindow(int generation) =>
+      TargetSession.window(widget.attachment);
 
   Future<String> _usbIdentity() async {
     final info = await UsbLaunch.channel.invokeMapMethod<String, dynamic>(
@@ -190,6 +150,12 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     final service = widget.service;
     if (service == null) {
       _relay = '等待控制板连接';
+      return;
+    }
+    final retained = TargetSession.clientFor(widget.attachment);
+    if (retained?.authorized == true) {
+      _control = retained;
+      _relay = '手机中转连接已保留';
       return;
     }
     await _control?.shutdown();
@@ -235,17 +201,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         if (!service.supportsLocalControl) throw StateError('当前控制板固件不支持安全中继');
         final control = ControlClient();
         _control = control;
-        control.onModeChange = (hid) async {
-          if (!_current(generation) || !_active || _stopping) {
-            throw StateError('共享或 USB 会话已失效');
-          }
-          if (_expectedWindowMode == hid) {
-            _expectedWindowMode = null;
-            return;
-          }
-          await UsbLaunch.channel.invokeMethod<void>(
-              'expectMode', {'session': widget.attachment.session, 'hid': hid});
-        };
+        control.onModeChange = TargetSession.modeCallback(widget.attachment);
         await control.authorize(service);
         if (!_current(generation)) {
           await control.shutdown();
@@ -253,7 +209,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         }
         await UsbLaunch.bind(
             widget.attachment, device.remoteId.str, info.device);
-        _relay = '已连接，等待控制手机或龙虾的任务';
+        TargetSession.retain(widget.attachment, control, service);
+        _relay = '手机中转已连接，执行前会检查画面与许可';
         return;
       } catch (_) {
         await _control?.shutdown();
@@ -264,16 +221,16 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     throw StateError('蓝牙设备与 USB 控制板身份不一致，未建立控制连接');
   }
 
-  Future<void> _start() {
+  Future<void> _start({bool allowConsent = true}) {
     if (_startFuture != null) return _startFuture!;
-    final future = _performStart();
+    final future = _performStart(allowConsent: allowConsent);
     _startFuture = future;
     return future.whenComplete(() {
       _startFuture = null;
     });
   }
 
-  Future<void> _performStart() async {
+  Future<void> _performStart({bool allowConsent = true}) async {
     if (_busy || _stopping || !widget.isCurrent()) return;
     _manuallyStopped.remove(widget.attachment.serial);
     final generation = ++_generation;
@@ -287,6 +244,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       final identity = await _usbIdentity();
       if (!_current(generation)) return;
       if (!await ScreenShare.isActive()) {
+        if (!allowConsent) throw StateError('屏幕共享已结束，请主动开始共享');
         await ScreenShare.startUsb(widget.attachment,
             isCurrent: () => _current(generation));
       }
@@ -298,7 +256,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       }
       if (!_current(generation)) return;
       _active = await ScreenShare.isActive();
-      _captureRenewed = _captureNow;
+      TargetSession.noteCapture(widget.attachment, _captureNow);
       if (!_current(generation)) return;
       if (!_active) throw StateError('屏幕共享尚未启动，请重试');
       setState(() {
@@ -365,6 +323,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     } catch (e) {
       failure = '云端停止未确认：$e';
     } finally {
+      await TargetSession.release();
       await _control?.shutdown();
       await _startFuture;
       await widget.service?.disconnect();
@@ -386,13 +345,12 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   void dispose() {
     _generation++;
     _timer?.cancel();
-    unawaited(_control?.shutdown() ?? Future<void>.value());
-    unawaited(_stopCapture().catchError((_) {}));
+    TargetSession.removeView(this);
+    if (!TargetSession.owns(_control)) {
+      unawaited(_control?.shutdown() ?? Future<void>.value());
+    }
     super.dispose();
   }
-
-  Widget _row(IconData icon, String label, String value) =>
-      ListTile(leading: Icon(icon), title: Text(label), subtitle: Text(value));
 
   @override
   Widget build(BuildContext context) {
@@ -400,37 +358,53 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     final ready =
         _active && (connected || _externalGateway) && widget.isCurrent();
     return Scaffold(
-      appBar: AppBar(title: const Text('被控手机')),
+      appBar: AppBar(title: const Text('被控手机'), actions: [
+        IconButton(
+            tooltip: '设置',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => ProductSettingsScreen(
+                    client: _control, diagnostic: _relay))),
+            icon: const Icon(Icons.settings_outlined))
+      ]),
       body: ListView(padding: const EdgeInsets.all(20), children: [
         Text(
-            ready
-                ? '已就绪'
+            _active
+                ? '屏幕共享中'
                 : _busy
                     ? '正在连接'
                     : '需要连接',
             style: Theme.of(context).textTheme.headlineMedium),
         const SizedBox(height: 8),
-        const Text('接收控制手机或龙虾发起的任务，由控制板执行操作。'),
+        const Text('接收控制手机或 AI 助手的任务，由控制板执行操作。'),
         const SizedBox(height: 20),
+        TargetStatusOverview(
+          board: widget.isCurrent() ? '已识别控制板' : '连接已改变，请重新检查连接线',
+          capture: productError(_capture),
+          permission:
+              _pointerReady ? '最近回执允许操作，开始执行前仍会检查' : '执行任务时检查操作许可，空闲无需重复授权',
+          network: connected
+              ? '此手机中转连接已建立，云端执行状态按任务回执更新'
+              : _externalGateway
+                  ? '等待控制板直连或另一台手机中转；当前网络状态待更新'
+                  : '正在检查手机中转连接',
+          error: _error,
+        ),
         Card(
-            child: Column(children: [
-          _row(
-              Icons.usb,
-              'USB 控制板',
-              widget.isCurrent()
-                  ? '已识别 · ${widget.attachment.serial}'
-                  : '连接已改变'),
-          _row(Icons.screen_share_outlined, '屏幕共享', _capture),
-          _row(Icons.cloud_outlined, '云端中继', _relay),
-          _row(Icons.touch_app_outlined, '执行许可',
-              _pointerReady ? '已就绪' : '等待任务或板端许可'),
-        ])),
-        if (_error != null)
-          Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Text(_error!,
-                  style:
-                      TextStyle(color: Theme.of(context).colorScheme.error))),
+            child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('最近任务反馈',
+                          style: Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height: 8),
+                      Text(_feedback.state.isEmpty
+                          ? '任务状态暂未更新，请在控制手机查看最近结果。'
+                          : _feedback.taskLabel),
+                      if (_feedback.reply.isNotEmpty)
+                        Text(productError(_feedback.reply)),
+                      const Text('此处显示最近收到的反馈；若与你的任务不一致，请以控制手机的任务页为准。'),
+                    ]))),
         const SizedBox(height: 16),
         if (!ready)
           FilledButton.icon(
@@ -440,7 +414,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
               label: Text(_busy
                   ? '正在请求授权或连接…'
                   : _active
-                      ? '重新连接云端中继'
+                      ? '重新检查手机中转'
                       : '开始屏幕共享并连接')),
         if (connected)
           OutlinedButton.icon(
@@ -454,6 +428,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                   : () async {
                       setState(() => _busy = true);
                       try {
+                        await TargetSession.release();
                         await _control?.shutdown();
                         await widget.service?.disconnect();
                         if (mounted) {
@@ -471,7 +446,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                       }
                     },
               icon: const Icon(Icons.bluetooth_disabled),
-              label: const Text('释放蓝牙网关，保留USB共享')),
+              label: const Text('释放手机中转，保留屏幕共享')),
         if (_code != null)
           Card(
               child: Padding(
@@ -491,12 +466,17 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                             label: const Text('复制连接码')),
                       ]))),
         const SizedBox(height: 16),
-        const Text('屏幕画面上传至云端用于理解任务和核验结果。停止后需重新连接和授权，未确认的旧动作不会重发。'),
+        const Text(
+            '画面用于理解任务和核验结果。返回或进入设置不会停止共享；仅主动停止、系统停止或真实断开连接后，才需要重新开始共享。旧操作不会重放。'),
       ]),
       bottomNavigationBar: SafeArea(
           child: Padding(
               padding: const EdgeInsets.all(16),
               child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.error,
+                      side: BorderSide(
+                          color: Theme.of(context).colorScheme.error)),
                   onPressed: _stopping ? null : _stop,
                   icon: const Icon(Icons.stop_circle_outlined),
                   label: Text(_stopping ? '正在停止…' : '停止控制与共享')))),

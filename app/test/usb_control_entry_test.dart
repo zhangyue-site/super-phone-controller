@@ -47,6 +47,6 @@ void main() {
     expect(selected, 0);
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
-    expect(stops, 1);
+    expect(stops, 0); // Page disposal only removes observation.
   });
 }

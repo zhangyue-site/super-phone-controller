@@ -11,6 +11,7 @@ import 'ble_ota_service.dart';
 import 'firmware_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
+import 'product_widgets.dart';
 
 /// 屏幕 1：扫描并选择要刷的板子。
 ///
@@ -365,7 +366,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
               child: InfoBanner(
                 icon: Icons.bluetooth_disabled,
                 color: AppTheme.colors(context).danger,
-                text: _error!,
+                text: productError(_error!),
               ),
             ),
           Expanded(

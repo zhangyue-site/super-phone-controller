@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:flutter_blue_plus_platform_interface/flutter_blue_plus_platform_interface.dart';
 import 'package:pcflash/device_screen.dart';
+import 'package:pcflash/usb_target_screen.dart';
 import 'package:pcflash/usb_launch.dart';
 import 'package:pcflash/screen_share.dart';
 
@@ -91,7 +92,13 @@ void main() {
           })),
           (_) {});
       await tester.pumpAndSettle();
-      expect(find.textContaining('已识别 · AABBCCDDEEFF'), findsOneWidget);
+      expect(
+          tester
+              .widget<UsbTargetScreen>(find.byType(UsbTargetScreen))
+              .attachment
+              .serial,
+          'AABBCCDDEEFF');
+      expect(find.text('已识别控制板'), findsOneWidget);
       expect(bluetooth.reads, 0);
       expect(infoCalls, 1);
       await tester.pump(const Duration(seconds: 6));
@@ -103,7 +110,13 @@ void main() {
             .complete({'serial': 'AABBCCDDEEFF', 'session': 'AABBCCDDEEFF:1'});
       }
       await tester.pumpAndSettle();
-      expect(find.textContaining('已识别 · AABBCCDDEEFF'), findsOneWidget);
+      expect(
+          tester
+              .widget<UsbTargetScreen>(find.byType(UsbTargetScreen))
+              .attachment
+              .serial,
+          'AABBCCDDEEFF');
+      expect(find.text('已识别控制板'), findsOneWidget);
       expect(find.textContaining('首次连接：'), findsNothing);
       expect(find.text('请打开手机蓝牙，开启后会自动寻找控制板'), findsNothing);
       expect(find.text('被控手机'), findsOneWidget);

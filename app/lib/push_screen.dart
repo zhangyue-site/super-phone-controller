@@ -7,6 +7,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble_ota_service.dart';
 import 'theme.dart';
 import 'widgets.dart';
+import 'product_widgets.dart';
 
 /// 屏幕 3：推送进度。
 ///
@@ -49,7 +50,7 @@ class _PushScreenState extends State<PushScreen> {
   int _lastSentAt = 0;
   Duration _lastSentAtWall = Duration.zero;
 
-  static const _steps = ['连接设备', '协商 MTU', '传输固件', '校验 sha256', '等待重启确认'];
+  static const _steps = ['连接控制板', '准备传输', '传输固件', '校验完整性', '重启后核对版本'];
 
   @override
   void initState() {
@@ -180,7 +181,7 @@ class _PushScreenState extends State<PushScreen> {
       child: Scaffold(
         appBar: AppBar(
           automaticallyImplyLeading: false,
-          title: Text(_done ? (_success ? '升级完成' : '更新未完成') : '第 3 步：传输固件'),
+          title: Text(_done ? (_success ? '升级完成' : '更新未完成') : '正在更新控制板'),
           actions: [
             if (!_done)
               TextButton(
@@ -215,7 +216,7 @@ class _PushScreenState extends State<PushScreen> {
               InfoBanner(
                   icon: Icons.error_outline,
                   color: AppTheme.colors(context).danger,
-                  text: _failMsg!),
+                  text: productError(_failMsg!)),
             ],
             if (_done && _success) ...[
               const SizedBox(height: 18),
@@ -248,7 +249,7 @@ class _PushScreenState extends State<PushScreen> {
               onPressed: () => setState(() => _showLogs = !_showLogs),
               icon: Icon(_showLogs ? Icons.expand_less : Icons.expand_more,
                   size: 18, color: AppTheme.colors(context).textDim),
-              label: Text('日志（${_logs.length}）',
+              label: Text('详细诊断（${_logs.length}）',
                   style: TextStyle(
                       color: AppTheme.colors(context).textDim, fontSize: 13)),
             ),

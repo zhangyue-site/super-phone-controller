@@ -4,6 +4,8 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble_ota_service.dart';
 import 'control_client.dart';
 import 'control_screen.dart';
+import 'product_widgets.dart';
+import 'product_settings.dart';
 
 /// Explicit possession of the board's single BLE link; never starts capture.
 class ControllerGatewayScreen extends StatefulWidget {
@@ -61,7 +63,7 @@ class _ControllerGatewayScreenState extends State<ControllerGatewayScreen> {
       await Navigator.of(context).push(MaterialPageRoute<void>(
           builder: (_) => ControlScreen(service: _service, client: client)));
     } catch (e) {
-      if (mounted) setState(() => _error = '网关未建立：$e。请先在原网关手机释放蓝牙连接，再重试。');
+      if (mounted) setState(() => _error = '手机中转未连接：$e。请先在原中转手机释放蓝牙连接，再重试。');
     } finally {
       await client.shutdown();
       await _service.disconnect();
@@ -81,29 +83,35 @@ class _ControllerGatewayScreenState extends State<ControllerGatewayScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('此手机作为蓝牙网关')),
+        appBar: AppBar(title: const Text('手机蓝牙中转'), actions: [
+          IconButton(
+              tooltip: '设置与诊断',
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                      builder: (_) =>
+                          ProductSettingsScreen(diagnostic: _error))))
+        ]),
         body: ListView(padding: const EdgeInsets.all(24), children: [
           const Text('此手机通过网络中转板端任务，无需连接 USB 或共享本机屏幕。被控手机仍须通过 USB 共享画面。'),
           const SizedBox(height: 12),
           const Text(
-              '控制板只允许一个蓝牙网关。请先在原网关手机退出控制并断开蓝牙，再连接本机；连接成功后仍需云端握手，不能以蓝牙连接判断云在线。返回此页会释放本机网关，旧动作不会重发。'),
+              '控制板同一时刻只连接一台中转手机。请先在原手机停止操作并释放连接，再连接本机。连接后仍会检查云端状态；返回此页会释放本机中转，旧操作不会重放。'),
           const SizedBox(height: 16),
           FilledButton(
               onPressed: _busy ? null : _search,
-              child: Text(_busy ? '正在建立网关…' : '原网关已释放，扫描控制板')),
+              child: Text(_busy ? '正在连接手机中转…' : '原连接已释放，扫描控制板')),
           if (_error != null)
-            Semantics(
-                liveRegion: true,
-                child: Text(_error!,
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.error))),
+            ProductError(_error!.contains('固件')
+                ? _error!
+                : '手机中转尚未连接。请确认原手机已释放蓝牙，检查本机蓝牙和网络后重试。'),
           for (final result in _devices.values)
             Card(
                 child: ListTile(
                     title: Text(result.device.platformName.isEmpty
                         ? 'PhoneCtl 控制板'
                         : result.device.platformName),
-                    subtitle: Text(result.device.remoteId.str),
+                    subtitle: const Text('选择此控制板进行连接'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: _busy ? null : () => _connect(result))),
         ]),

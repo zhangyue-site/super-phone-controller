@@ -53,10 +53,10 @@ void main() {
       'running': '任务执行中',
       'verifying': '正在核验结果',
       'speaking': '正在播报结果',
-      'done': '任务已完成',
+      'done': '操作已结束，结果待确认',
       'error': '任务失败',
       'waiting': '等待控制板或新画面',
-      'idle': '等待语音任务',
+      'idle': '等待新任务',
       'stopped': '任务已停止',
     };
     for (final entry in labels.entries) {

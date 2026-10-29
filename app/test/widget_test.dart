@@ -113,7 +113,7 @@ void main() {
     FlutterBluePlusPlatform.instance = bluetooth;
     await tester.pumpWidget(const PcFlashApp());
     await tester.pumpAndSettle();
-    expect(find.text('USB 控制板'), findsOneWidget);
+    expect(find.text('控制板连接'), findsOneWidget);
     expect(find.text('正在连接'), findsOneWidget);
     expect(find.byType(TextFormField), findsNothing);
     expect(bluetooth.adapterReads, 0);

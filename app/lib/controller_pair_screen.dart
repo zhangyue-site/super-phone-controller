@@ -107,8 +107,8 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
                   : () => Navigator.of(context).push(MaterialPageRoute<void>(
                       builder: (_) => const ControllerGatewayScreen())),
               icon: const Icon(Icons.bluetooth),
-              label: const Text('使用此手机作为蓝牙网关')),
-          const Text('Wi-Fi 直连模式由板子联网；蓝牙应用中转模式由唯一网关手机联网。切换前需释放原网关。'),
+              label: const Text('使用此手机中转蓝牙连接')),
+          const Text('控制板可直接连接 Wi-Fi，也可通过一台手机中转蓝牙与网络；切换前请先释放原连接。'),
           const SizedBox(height: 24),
           Form(
               key: _form,

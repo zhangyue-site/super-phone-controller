@@ -57,6 +57,8 @@ void main() {
     await tester.pumpAndSettle();
     final button = tester.widget<FilledButton>(find.byType(FilledButton));
     expect(button.onPressed, isNotNull);
+    await tester.scrollUntilVisible(find.text('开始屏幕共享并连接'), 160,
+        scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text('开始屏幕共享并连接'));
     await tester.pump();
     expect(identities, 2);
@@ -166,6 +168,8 @@ void main() {
     await tester.tap(find.text('停止控制与共享'));
     await tester.pumpAndSettle();
     expect(find.text('正在停止…'), findsOneWidget);
+    await tester.scrollUntilVisible(find.byType(FilledButton), 160,
+        scrollable: find.byType(Scrollable).first);
     expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
         isNull);
     first.complete(info('SAMEWIDGETTEST'));
@@ -173,10 +177,14 @@ void main() {
     expect(find.text('正在停止…'), findsNothing);
     await tester.drag(find.byType(ListView), const Offset(0, -250));
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('开始屏幕共享并连接'), 160,
+        scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text('开始屏幕共享并连接'));
     await tester.pump();
     expect(identities, 2);
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.byType(FilledButton), 160,
+        scrollable: find.byType(Scrollable).first);
     expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
         isNull);
     expect(find.text('正在请求授权或连接…'), findsOneWidget);

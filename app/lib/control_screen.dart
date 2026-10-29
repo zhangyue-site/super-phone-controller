@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'ble_ota_service.dart';
 import 'control_client.dart';
+import 'product_widgets.dart';
+import 'product_settings.dart';
 
 class ControlScreen extends StatefulWidget {
   final BleOtaService? service;
@@ -254,36 +256,39 @@ class _ControlScreenState extends State<ControlScreen> {
       'saved': '已存为技能'
     };
     return Scaffold(
-      appBar: AppBar(title: const Text('手机控制')),
+      appBar: AppBar(title: const Text('任务'), actions: [
+        IconButton(
+            tooltip: '设备与设置',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => ProductSettingsScreen(
+                    client: _client, diagnostic: _error))),
+            icon: const Icon(Icons.settings_outlined))
+      ]),
       body: ListView(padding: const EdgeInsets.all(16), children: [
-        const Text('文字下发 · 确认后执行',
+        const Text('输入任务，先看计划',
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         Text(_busy
             ? '正在连接…'
             : _client.authorized
-                ? '已连接，可发送任务'
+                ? '可生成计划，执行前将检查操作许可'
                 : '控制连接已结束'),
         if (!_busy && !_client.authorized)
           OutlinedButton(onPressed: _connect, child: const Text('重新连接云端控制')),
-        Text(_client.connectionStatus),
-        if (_client.canWifiUpgrade) ...[
-          Text(_client.upgradeStatus),
-          OutlinedButton(
-              onPressed: _busy || _stopping
-                  ? null
-                  : () {
-                      _client.requestWifiUpgrade();
-                      setState(() =>
-                          _error = '已请求板端检查 Wi-Fi 固件；请求接受不代表升级成功，重启后需核验版本。');
-                    },
-              child: const Text('检查并请求板端 Wi-Fi 升级')),
-        ],
-        Text(_client.isPaired
-            ? '目标设备：${_client.deviceId}。此手机仅发送命令，无需共享本机屏幕。'
-            : '任务经控制板执行；请保持被控手机解锁并开启屏幕共享。'),
+        Card(
+            child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_client.authorized ? '连接已建立' : '需要重新连接',
+                          style: Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height: 8),
+                      const Text(
+                          '本机仅发送任务，无需共享本机屏幕。生成计划后由你确认，执行时再检查被控画面与控制板许可。'),
+                    ]))),
         if (!_client.supportsSkillReplay)
-          const Text('技能回放暂未接通（HTTP联调中）。已保存技能保留；保存不代表当前可回放，请继续使用普通文字任务。'),
+          const Text('技能回放暂未接通（联调中）。已保存技能保留；保存不代表当前可回放，请继续使用普通文字任务。'),
         if (_client.supportsSkillReplay)
           OutlinedButton(
               onPressed: _busy || _stopping ? null : _loadSkills,
@@ -308,6 +313,21 @@ class _ControlScreenState extends State<ControlScreen> {
                             child: const Text('使用技能')),
                       ]))),
         const SizedBox(height: 16),
+        if (_task.isEmpty) ...[
+          Text('可以先试试', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final example in ['打开设置', '打开设置搜索电池'])
+              ActionChip(
+                  label: Text(example),
+                  onPressed: _busy || _stopping
+                      ? null
+                      : () {
+                          _text.text = example;
+                        }),
+          ]),
+          const SizedBox(height: 12),
+        ],
         TextField(
             controller: _text,
             maxLength: 120,
@@ -321,14 +341,7 @@ class _ControlScreenState extends State<ControlScreen> {
         FilledButton(
             onPressed: _busy || _stopping ? null : () => _run('prepare'),
             child: Text(_busy ? '正在请求…' : '生成计划')),
-        if (_error != null)
-          Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Semantics(
-                  liveRegion: true,
-                  child: Text(_error!,
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.error)))),
+        if (_error != null) ProductError(_error!),
         if (_task.isNotEmpty)
           Card(
               child: Padding(
@@ -360,7 +373,7 @@ class _ControlScreenState extends State<ControlScreen> {
                             child: const Text('刷新状态')),
                       ]))),
         const SizedBox(height: 12),
-        const Text('A 下发指令并查看计划与结果，确认后由控制板操作 B。离开此页不会自动取消任务；也可使用控制板停止按钮。'),
+        const Text('确认计划后，控制板会操作被控手机。进入设置不会取消任务；停止按钮可请求立即停止，结果按真实回执更新。'),
       ]),
       bottomNavigationBar: SafeArea(
           child: Padding(

@@ -26,6 +26,7 @@ class ControlClient {
   bool get isPaired => _paired;
   bool get supportsSkillReplay => _board != null;
   bool get canWifiUpgrade => ownsGateway && _relay?.supportsMaintenance == true;
+  bool get usesBoardLink => _board != null || _relayBoard != null;
   bool get ownsGateway => _relay != null && authorized;
   String get upgradeStatus {
     final stage = _relay?.diagnostics['otaStage'];

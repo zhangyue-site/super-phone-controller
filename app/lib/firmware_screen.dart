@@ -156,7 +156,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
                 builder: (dialogContext) => AlertDialog(
                   title: const Text('共享屏幕给你的 AI'),
                   content: const Text(
-                      '当前手机画面将传给云端 AI。操作由控制板 HID 完成，App 只提供画面。请选择共享整个屏幕，才能在桌面和微信之间导航。你可随时从系统投屏入口或通知停止；一次共享约 4 分钟。'),
+                      '当前手机画面会提供给云端 AI，由控制板执行操作。请选择共享整个屏幕。有效共享会保持到你主动停止、系统停止或连接断开；短断网自动恢复，不会重放旧操作。'),
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.pop(dialogContext, false),
@@ -354,7 +354,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
             const Padding(
               padding: EdgeInsets.only(bottom: 12),
               child: Text(
-                  'USB控制板已识别。确认系统“共享整个屏幕”后，画面将上传云端AI。取消后可手动重新开启；拔出控制板会停止共享。HID许可仍按板端提示开启。'),
+                  'USB控制板已识别。确认系统“共享整个屏幕”后，画面将上传云端AI。取消后可手动重新开启；拔出控制板会停止共享。执行操作前会按控制板实际许可检查。'),
             ),
           if (_error != null) ...[
             InfoBanner(
@@ -370,48 +370,50 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
                 label: const Text('重新连接控制板')),
             const SizedBox(height: 16),
           ],
-          Card(
-              child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const Text('AI 手机画面',
-                            style: TextStyle(fontWeight: FontWeight.bold)),
-                        Text(_screenStatus.capture),
-                        Text(_screenStatus.taskLabel),
-                        if (_screenStatus.reply.isNotEmpty)
-                          Text(_screenStatus.reply),
-                        if (_screenStatus.state.isNotEmpty &&
-                            !_screenStatus.pointerReady)
-                          const Text('等待控制板协议确认；开始操作前请在板端同意 HID 控制'),
-                        for (final skill in _screenStatus.skills)
-                          Text('技能：$skill'),
-                        const Text(
-                            '先共享整屏，语音发起任务；说“存为技能”固化为专项技能。回放从桌面开始，画面变化时再由 AI 定位。当前先支持微信，例如“打开微信找到测试联系人”。旋转屏幕后请重新共享。'),
-                        FilledButton.icon(
-                            onPressed:
-                                _busy || !_connected ? null : _shareScreen,
-                            icon: const Icon(Icons.screen_share_outlined),
-                            label: const Text('共享屏幕给 AI')),
-                        TextButton(
-                            onPressed: () async {
-                              await ScreenShare.stop();
-                              if (mounted) {
-                                setState(() => _screenStatus =
-                                    const ScreenTaskStatus(capture: '已停止共享'));
-                              }
-                            },
-                            child: const Text('停止共享')),
-                      ]))),
+          if (widget.usbAttachment != null)
+            Card(
+                child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Text('AI 手机画面',
+                              style: TextStyle(fontWeight: FontWeight.bold)),
+                          Text(_screenStatus.capture),
+                          Text(_screenStatus.taskLabel),
+                          if (_screenStatus.reply.isNotEmpty)
+                            Text(_screenStatus.reply),
+                          if (_screenStatus.state.isNotEmpty &&
+                              !_screenStatus.pointerReady)
+                            const Text('执行任务时检查控制板许可；不需要每个任务重新共享屏幕'),
+                          for (final skill in _screenStatus.skills)
+                            Text('技能：$skill'),
+                          const Text(
+                              '先共享整屏，语音发起任务；说“存为技能”固化为专项技能。回放从桌面开始，画面变化时再由 AI 定位。当前先支持微信，例如“打开微信找到测试联系人”。旋转屏幕后请重新共享。'),
+                          FilledButton.icon(
+                              onPressed:
+                                  _busy || !_connected ? null : _shareScreen,
+                              icon: const Icon(Icons.screen_share_outlined),
+                              label: const Text('共享屏幕给 AI')),
+                          TextButton(
+                              onPressed: () async {
+                                await ScreenShare.stop();
+                                if (mounted) {
+                                  setState(() => _screenStatus =
+                                      const ScreenTaskStatus(capture: '已停止共享'));
+                                }
+                              },
+                              child: const Text('停止共享')),
+                        ]))),
           const SizedBox(height: 12),
           const InfoBanner(
-              icon: Icons.info_outline, text: '第 2 步：选择固件。传输时请保持手机靠近控制板，避免断电。'),
+              icon: Icons.info_outline,
+              text: '先检查当前版本，再选择官方固件。维护会中断操作，传输时请靠近控制板并保持供电。'),
           const SizedBox(height: 16),
           _SourceCard(
             icon: Icons.cloud_download_outlined,
             title: '下载最新固件',
-            subtitle: '通过已连接的控制板自动授权，无需选择文件',
+            subtitle: '核对控制板身份后下载官方固件',
             primary: true,
             onTap: _busy ? null : _fetchFromServer,
           ),
@@ -419,7 +421,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
           _SourceCard(
             icon: Icons.folder_open_outlined,
             title: '选择本地固件（高级）',
-            subtitle: '仅用于恢复，选择 app.bin 应用镜像',
+            subtitle: '高级恢复：选择应用镜像；写入仍需控制板升级授权，USB软件救援为独立维护路径',
             onTap: _busy ? null : _pickLocal,
           ),
           if (_busy) ...[
