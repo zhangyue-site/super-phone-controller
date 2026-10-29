@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -29,12 +30,13 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   ControlClient? _control;
   Future<void>? _startFuture;
   bool _busy = false, _active = false, _polling = false, _stopping = false;
-  bool _pointerReady = false, _lost = false;
+  bool _pointerReady = false, _lost = false, _externalGateway = false;
   int _generation = 0;
   String _capture = '等待屏幕共享授权', _relay = '尚未连接';
   String? _error, _code;
   DateTime? _codeExpiry;
   DateTime? _captureRenewed;
+  bool? _expectedWindowMode;
   bool _current(int generation) =>
       mounted && !_lost && widget.isCurrent() && generation == _generation;
 
@@ -75,13 +77,14 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         await _control?.shutdown();
         if (!_current(generation)) return;
       }
+      if (active) await _usbWindow(generation);
+      if (!_current(generation)) return;
       await _control?.refresh();
       if (_active &&
           active &&
-          _control?.authorized == true &&
           _captureRenewed != null &&
           DateTime.now().difference(_captureRenewed!).inSeconds >= 60) {
-        await _control!.renewCapture(widget.attachment.session);
+        await ScreenShare.renewUsb(widget.attachment);
         _captureRenewed = DateTime.now();
       }
       if (!_current(generation)) return;
@@ -101,6 +104,49 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     } finally {
       _polling = false;
     }
+  }
+
+  Future<void> _usbWindow(int generation) async {
+    Future<Map<String, dynamic>> request(Map<String, dynamic> body) async {
+      final raw = await ScreenShare.channel.invokeMethod<String>('usbWindow', {
+        'usbSession': widget.attachment.session,
+        'body': jsonEncode(body),
+      });
+      if (!_current(generation)) throw StateError('USB窗口会话已改变');
+      final value = jsonDecode(raw ?? '{}');
+      if (value is! Map<String, dynamic>) {
+        throw const FormatException('USB窗口响应无效');
+      }
+      return value;
+    }
+
+    final window = await request({'operation': 'poll'});
+    if (window['state'] == 'idle') return;
+    final nonce = window['nonce'],
+        mode = window['mode'],
+        revision = window['generation'],
+        ttl = window['expiresInMs'];
+    if (window['state'] != 'prepare' ||
+        nonce is! String ||
+        !RegExp(r'^[0-9a-f]{32}$').hasMatch(nonce) ||
+        (mode != 'hid' && mode != 'normal') ||
+        revision is! int ||
+        ttl is! int ||
+        ttl < 1 ||
+        ttl > 5000) {
+      throw const FormatException('USB切换窗口无效');
+    }
+    await UsbLaunch.channel.invokeMethod<void>('expectMode',
+        {'session': widget.attachment.session, 'hid': mode == 'hid'});
+    if (!_current(generation)) return;
+    _expectedWindowMode = mode == 'hid';
+    final ready = await request({
+      'operation': 'ready',
+      'nonce': nonce,
+      'mode': mode,
+      'generation': revision
+    });
+    if (ready['state'] != 'ready') throw StateError('USB切换窗口未确认');
   }
 
   Future<String> _usbIdentity() async {
@@ -169,6 +215,10 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
           if (!_current(generation) || !_active || _stopping) {
             throw StateError('共享或 USB 会话已失效');
           }
+          if (_expectedWindowMode == hid) {
+            _expectedWindowMode = null;
+            return;
+          }
           await UsbLaunch.channel.invokeMethod<void>(
               'expectMode', {'session': widget.attachment.session, 'hid': hid});
         };
@@ -231,7 +281,11 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         _capture = '正在共享整个屏幕';
         _relay = '正在连接云端中继';
       });
-      await _connectBoard(identity, generation);
+      if (!_externalGateway) {
+        await _connectBoard(identity, generation);
+      } else {
+        _relay = '本机蓝牙已释放；等待控制手机网关或板端 Wi-Fi';
+      }
     } catch (e) {
       if (_current(generation)) setState(() => _error = '连接未完成：$e');
     } finally {
@@ -319,7 +373,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   @override
   Widget build(BuildContext context) {
     final connected = _control?.authorized == true;
-    final ready = _active && connected && widget.isCurrent();
+    final ready =
+        _active && (connected || _externalGateway) && widget.isCurrent();
     return Scaffold(
       appBar: AppBar(title: const Text('被控手机')),
       body: ListView(padding: const EdgeInsets.all(20), children: [
@@ -368,6 +423,31 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
               onPressed: _busy || _stopping ? null : _pairingCode,
               icon: const Icon(Icons.devices),
               label: const Text('连接控制手机')),
+        if (!_externalGateway)
+          OutlinedButton.icon(
+              onPressed: _busy || _stopping
+                  ? null
+                  : () async {
+                      setState(() => _busy = true);
+                      try {
+                        await _control?.shutdown();
+                        await widget.service?.disconnect();
+                        if (mounted) {
+                          setState(() {
+                            _externalGateway = true;
+                            _control = null;
+                            _code = null;
+                            _relay = '本机蓝牙已释放，USB画面继续共享；请在控制手机接管网关或使用板端Wi-Fi';
+                          });
+                        }
+                      } catch (e) {
+                        if (mounted) setState(() => _error = '交接未完成：$e');
+                      } finally {
+                        if (mounted) setState(() => _busy = false);
+                      }
+                    },
+              icon: const Icon(Icons.bluetooth_disabled),
+              label: const Text('释放蓝牙网关，保留USB共享')),
         if (_code != null)
           Card(
               child: Padding(

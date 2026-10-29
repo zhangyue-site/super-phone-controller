@@ -86,6 +86,40 @@ class ScreenShare {
     }
   }
 
+  static Future<void> renewUsb(UsbAttachment usb) async {
+    final client = http.Client();
+    try {
+      final info = await UsbLaunch.channel
+          .invokeMapMethod<String, dynamic>('info', {'session': usb.session});
+      final device = info?['device'];
+      if (info?['usbSerial'] != usb.serial || device is! String) {
+        throw StateError('USB身份已改变');
+      }
+      final challenge = await _post(
+          client, 'usb-challenge', {'device': device, 'serial': usb.serial});
+      final nonce = challenge['challenge'];
+      if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
+        throw const FormatException('USB续期挑战无效');
+      }
+      final proof = await UsbLaunch.channel.invokeMapMethod<String, dynamic>(
+          'sign', {'session': usb.session, 'nonce': nonce});
+      if (proof?['device'] != device ||
+          proof?['usbSerial'] != usb.serial ||
+          proof?['proof'] is! String) {
+        throw StateError('USB签名身份不一致');
+      }
+      await channel.invokeMethod<void>('renewUsbCapture', {
+        'usbSession': usb.session,
+        'device': device,
+        'serial': usb.serial,
+        'challenge': nonce,
+        'proof': proof!['proof']
+      });
+    } finally {
+      client.close();
+    }
+  }
+
   static Future<void> startUsb(UsbAttachment usb,
       {http.Client? client, bool Function()? isCurrent}) async {
     void check() {

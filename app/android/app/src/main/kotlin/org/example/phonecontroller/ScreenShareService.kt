@@ -26,6 +26,34 @@ class ScreenShareService: Service() {
  companion object {
  @Volatile private var current: ScreenShareService?=null
  private val renewalWorker=ThreadPoolExecutor(1,1,0L,TimeUnit.MILLISECONDS,ArrayBlockingQueue<Runnable>(1))
+ fun usbWindow(session: String, body: JSONObject, complete: (String?)->Unit) {
+  val service=current
+  if(service==null) { complete(null);return }
+  try { renewalWorker.execute {
+   var answer: String?=null
+   var c: HttpsURLConnection?=null
+   try {
+    val capability=service.ticket
+    val expectedProjection=service.projection
+    check(service.renewalValid(session,capability,expectedProjection))
+    c=URL(BuildConfig.CONTROLLER_BASE_URL+"/app-relay/usb-window").openConnection() as HttpsURLConnection
+    c.requestMethod="POST";c.connectTimeout=1500;c.readTimeout=1500;c.doOutput=true
+    c.setRequestProperty("Authorization","Bearer $capability");c.setRequestProperty("Content-Type","application/json")
+    val bytes=body.toString().toByteArray(Charsets.UTF_8)
+    c.setFixedLengthStreamingMode(bytes.size);c.outputStream.use { it.write(bytes) }
+    check(c.responseCode==200)
+    val response=c.inputStream.use { service.readBounded(it,4097) }
+    check(response.size<=4096 && service.renewalValid(session,capability,expectedProjection))
+    answer=String(response,Charsets.UTF_8)
+   } catch(_: Exception) {} finally { c?.disconnect();Handler(Looper.getMainLooper()).post { complete(answer) } }
+  } } catch(_: RejectedExecutionException) { complete(null) }
+ }
+ fun renewUsbCapture(proof: JSONObject, session: String, complete: (Boolean)->Unit) {
+  val service=current
+  if(service==null) { complete(false);return }
+  try { renewalWorker.execute { service.renew("",session,complete,proof) } }
+  catch(_: RejectedExecutionException) { complete(false) }
+ }
  fun renewCapture(controlTicket: String, session: String, complete: (Boolean)->Unit) {
   val service=current
   if(service==null) { complete(false);return }
@@ -69,19 +97,19 @@ class ScreenShareService: Service() {
   current===this && active && running && expectedProjection!=null && projection===expectedProjection &&
   ticket==capability && capability.isNotEmpty() && usbOwnerSession==session &&
   UsbLaunchBridge.matches(session) && SystemClock.elapsedRealtime()<until
- private fun renew(controlTicket: String,session: String,complete: (Boolean)->Unit) {
+ private fun renew(controlTicket: String,session: String,complete: (Boolean)->Unit, usbProof: JSONObject?=null) {
   var c: HttpsURLConnection?=null
   var renewed=false
   try {
-   if(!Regex("[A-Za-z0-9_-]{43}").matches(controlTicket) || session.isEmpty())return
+   if((usbProof==null && !Regex("[A-Za-z0-9_-]{43}").matches(controlTicket)) || session.isEmpty())return
    val capability=ticket
    val expectedProjection=projection
    synchronized(this) { if(!renewalValid(session,capability,expectedProjection))return }
-   c=URL(BuildConfig.CONTROLLER_BASE_URL+"/app-control/screen-renew").openConnection() as HttpsURLConnection
+   c=URL(BuildConfig.CONTROLLER_BASE_URL+(if(usbProof==null) "/app-control/screen-renew" else "/app-screen/usb-renew")).openConnection() as HttpsURLConnection
    renewalConnection=c
    c.requestMethod="POST";c.connectTimeout=3000;c.readTimeout=3000;c.doOutput=true
-   c.setRequestProperty("Authorization","Bearer $controlTicket");c.setRequestProperty("Content-Type","application/json")
-   val body=JSONObject().put("ticket",capability).toString().toByteArray(Charsets.UTF_8)
+   c.setRequestProperty("Authorization","Bearer ${if(usbProof==null) controlTicket else capability}");c.setRequestProperty("Content-Type","application/json")
+   val body=(if(usbProof==null) JSONObject().put("ticket",capability) else usbProof).toString().toByteArray(Charsets.UTF_8)
    c.setFixedLengthStreamingMode(body.size);c.outputStream.use { it.write(body) }
    if(c.responseCode!=200)return
    val bytes=c.inputStream.use { readBounded(it,4097) }

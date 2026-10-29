@@ -118,6 +118,35 @@ class MainActivity: FlutterActivity() {
      }
      result.success(null)
     }
+    "usbWindow" -> {
+     val session=call.argument<String>("usbSession")
+     val body=call.argument<String>("body")
+     if(session==null || body==null || body.length>1024 || !UsbLaunchBridge.matches(session)) {
+      result.error("usb_invalid","USB窗口会话无效",null)
+     } else {
+      try {
+       ScreenShareService.usbWindow(session,org.json.JSONObject(body)) { response ->
+        if(response!=null)result.success(response) else result.error("usb_window_failed","USB窗口握手失败",null)
+       }
+      } catch(_: Exception) { result.error("usb_invalid","USB窗口请求无效",null) }
+     }
+    }
+    "renewUsbCapture" -> {
+     val session=call.argument<String>("usbSession")
+     val device=call.argument<String>("device")
+     val serial=call.argument<String>("serial")
+     val challenge=call.argument<String>("challenge")
+     val proof=call.argument<String>("proof")
+     if(session==null || !UsbLaunchBridge.matches(session) || serial!=UsbLaunchBridge.serialFor(session) || device==null ||
+       challenge==null || proof==null || !Regex("[0-9a-fA-F]{64}").matches(challenge) || !Regex("[0-9a-fA-F]{64}").matches(proof)) {
+      result.error("usb_invalid","USB续期身份无效",null)
+     } else {
+      val body=org.json.JSONObject().put("device",device).put("serial",serial).put("challenge",challenge).put("proof",proof)
+      ScreenShareService.renewUsbCapture(body,session) { renewed ->
+       if(renewed)result.success(null) else result.error("capture_renew_failed","USB共享续期未完成",null)
+      }
+     }
+    }
     "renewCapture" -> {
      val controlTicket=call.argument<String>("controlTicket")
      val session=call.argument<String>("usbSession")

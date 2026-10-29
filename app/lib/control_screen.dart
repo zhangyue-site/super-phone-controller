@@ -52,6 +52,9 @@ class _ControlScreenState extends State<ControlScreen> {
   Future<void> _poll() async {
     try {
       await _client.refresh();
+      if (mounted && !_client.authorized) {
+        setState(() => _error = _client.connectionStatus);
+      }
     } catch (e) {
       if (mounted) setState(() => _error = '连接续期失败：$e');
     }
@@ -122,8 +125,8 @@ class _ControlScreenState extends State<ControlScreen> {
       _error = null;
     });
     try {
-      if (!_client.authorized) await _authorize();
-      final result = await _client.command('stop');
+      final result =
+          await _client.command('stop', taskId: _task['task_id'] as String?);
       if (mounted && generation == _generation) {
         setState(() {
           _task = result;
@@ -239,6 +242,9 @@ class _ControlScreenState extends State<ControlScreen> {
       'done': _task['verified'] == true ? '结果已核验' : '执行结束，尚未核验',
       'error': '未完成',
       'stopped': '已停止',
+      'stopping': '停止请求已发送，等待板端确认',
+      'failed': '任务失败',
+      'cancelled': '已取消',
       'expired': '已过期',
       'idle': '暂无任务',
       'replaced': '已替换',
@@ -257,6 +263,19 @@ class _ControlScreenState extends State<ControlScreen> {
                 : '控制连接已结束'),
         if (!_busy && !_client.authorized)
           OutlinedButton(onPressed: _connect, child: const Text('重新连接云端控制')),
+        Text(_client.connectionStatus),
+        if (_client.canWifiUpgrade) ...[
+          Text(_client.upgradeStatus),
+          OutlinedButton(
+              onPressed: _busy || _stopping
+                  ? null
+                  : () {
+                      _client.requestWifiUpgrade();
+                      setState(() =>
+                          _error = '已请求板端检查 Wi-Fi 固件；请求接受不代表升级成功，重启后需核验版本。');
+                    },
+              child: const Text('检查并请求板端 Wi-Fi 升级')),
+        ],
         Text(_client.isPaired
             ? '目标设备：${_client.deviceId}。此手机仅发送命令，无需共享本机屏幕。'
             : '任务经控制板执行；请保持被控手机解锁并开启屏幕共享。'),
@@ -300,9 +319,11 @@ class _ControlScreenState extends State<ControlScreen> {
         if (_error != null)
           Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Text(_error!,
-                  style:
-                      TextStyle(color: Theme.of(context).colorScheme.error))),
+              child: Semantics(
+                  liveRegion: true,
+                  child: Text(_error!,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error)))),
         if (_task.isNotEmpty)
           Card(
               child: Padding(

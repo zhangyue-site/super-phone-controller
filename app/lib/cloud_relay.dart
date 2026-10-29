@@ -11,6 +11,14 @@ class CloudRelay {
   final Future<void> Function(bool hid)? beforeModeChange;
   Timer? _timer;
   String? _nonce;
+  DateTime? _heartbeat;
+  bool _upgradeRequested = false, _maintenanceSupported = false;
+  Map<String, dynamic> diagnostics = {};
+  void requestWifiUpgrade() {
+    if (_closed) throw StateError('网关已结束');
+    _upgradeRequested = true;
+  }
+
   bool _busy = false, _closed = false;
   CloudRelay(
       {required this.post,
@@ -20,6 +28,7 @@ class CloudRelay {
       required this.onError,
       this.beforeModeChange});
   bool get isClosed => _closed;
+  bool get supportsMaintenance => _maintenanceSupported;
 
   Future<void> start() async {
     if (_closed || _timer != null) throw StateError("控制会话不可重复启动");
@@ -29,6 +38,7 @@ class CloudRelay {
       throw const FormatException("板子会话无效");
     }
     await post("attach", {"receipt": initial});
+    _maintenanceSupported = initial.containsKey("relayOnline");
     _nonce = nonce;
     if (_closed) {
       try {
@@ -43,7 +53,20 @@ class CloudRelay {
     if (_busy || _closed) return;
     _busy = true;
     try {
-      final command = await post("poll", {"nonce": _nonce});
+      final maintenance = !_maintenanceSupported
+          ? null
+          : _upgradeRequested
+              ? 11
+              : (_heartbeat == null ||
+                      DateTime.now().difference(_heartbeat!).inSeconds >= 5)
+                  ? 12
+                  : null;
+      var command = maintenance == null
+          ? await post("poll", {"nonce": _nonce})
+          : await post('maintenance', {'nonce': _nonce, 'op': maintenance});
+      if (command["state"] == "busy") {
+        command = await post("poll", {"nonce": _nonce});
+      }
       if (_closed || command["state"] != "action") return;
       final packet = command["packet"],
           seq = command["seq"],
@@ -53,7 +76,8 @@ class CloudRelay {
           seq is! int ||
           op is! int ||
           op < 1 ||
-          op > 7) {
+          op > 12 ||
+          (op > 7 && op < 11)) {
         throw const FormatException("云端动作格式无效");
       }
       final bytes = List.generate(
@@ -68,6 +92,7 @@ class CloudRelay {
       Map<String, dynamic>? receipt;
       while (!_closed && DateTime.now().isBefore(until)) {
         final r = await read().timeout(const Duration(seconds: 2));
+        diagnostics = r;
         if (r["nonce"] != _nonce) throw StateError("板子会话已改变");
         if (r["seq"] == seq &&
             r["op"] == op &&
@@ -87,6 +112,8 @@ class CloudRelay {
       final result = await post(
           "ack", {"nonce": _nonce, "id": command["id"], "receipt": receipt});
       if (result["state"] != "acknowledged") throw StateError("板端动作失败");
+      if (op == 12) _heartbeat = DateTime.now();
+      if (op == 11) _upgradeRequested = false;
       if (op == 5) await close();
     } catch (error) {
       await close();

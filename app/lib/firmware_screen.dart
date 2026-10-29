@@ -236,6 +236,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
           throw const FormatException('下载版本与固件不符');
         }
         await _loadBytes(result.bytes, 'app.bin');
+        widget.service.retainOfficialUpgrade(result);
       } finally {
         client.close();
       }

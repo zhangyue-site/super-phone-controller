@@ -3,8 +3,10 @@ import 'dart:convert';
 class BoardInfo {
   final String device, version, elfSha256, boot;
   final int imageState;
+  final String? otaAuth;
   const BoardInfo(
-      this.device, this.version, this.elfSha256, this.boot, this.imageState);
+      this.device, this.version, this.elfSha256, this.boot, this.imageState,
+      {this.otaAuth});
   static BoardInfo parse(List<int> bytes) {
     final dynamic obj = jsonDecode(utf8.decode(bytes));
     if (obj is! Map ||
@@ -21,7 +23,8 @@ class BoardInfo {
       throw const FormatException('控制板启动信息无效');
     }
     return BoardInfo(obj['device'], obj['version'], obj['elfSha256'],
-        obj['boot'], obj['imageState']);
+        obj['boot'], obj['imageState'],
+        otaAuth: obj['otaAuth'] as String?);
   }
 
   bool confirms(BoardInfo before, String targetVersion, String targetElf) =>

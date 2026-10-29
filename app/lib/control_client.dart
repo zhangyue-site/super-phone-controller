@@ -24,6 +24,32 @@ class ControlClient {
   Future<void> Function(bool hid)? onModeChange;
   ControlClient({http.Client? client}) : _http = client;
   bool get isPaired => _paired;
+  bool get canWifiUpgrade => ownsGateway && _relay?.supportsMaintenance == true;
+  bool get ownsGateway => _relay != null && authorized;
+  String get upgradeStatus {
+    final stage = _relay?.diagnostics['otaStage'];
+    return switch (stage) {
+      1 => '正在检查 Wi-Fi 固件',
+      2 => '正在写入固件',
+      3 => '板端准备重启，需重新连接核验版本',
+      4 => '板端报告已是当前版本',
+      5 => 'Wi-Fi 升级失败，请检查网络或使用蓝牙升级/USB救援',
+      _ => '升级状态尚未确认'
+    };
+  }
+
+  void requestWifiUpgrade() {
+    if (!ownsGateway) throw StateError('仅当前蓝牙网关可请求板端 Wi-Fi 升级');
+    _relay!.requestWifiUpgrade();
+  }
+
+  String get connectionStatus => _relayError != null
+      ? '蓝牙网关已停止：$_relayError'
+      : _relay != null
+          ? (_relay!.isClosed ? '蓝牙网关已释放' : '此手机持有蓝牙网关；云端动作需回执确认')
+          : _paired
+              ? '已绑定目标；云端在线状态以任务回执为准'
+              : '等待控制板授权';
 
   Future<void> renewCapture(String usbSession) async {
     if (!authorized || _paired || _relay == null || _ticket == null) {
@@ -245,14 +271,7 @@ class ControlClient {
       if (parameters != null) 'parameters': parameters
     };
     if (_board != null) return _board!.controlRequest(body);
-    return _post(
-        'command',
-        {
-          'operation': operation,
-          if (text != null) 'text': text,
-          if (taskId != null) 'task_id': taskId
-        },
-        auth: true);
+    return _post('command', {...body}, auth: true);
   }
 
   void close() => unawaited(shutdown());

@@ -1,3 +1,5 @@
+import 'app_ota_client.dart';
+import 'controller_config.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'board_rpc.dart';
@@ -91,6 +93,7 @@ class BleOtaService {
   BluetoothCharacteristic? _stat;
   BluetoothCharacteristic? _info;
   BluetoothCharacteristic? _auth;
+  BluetoothCharacteristic? _upgradeAuth;
   BluetoothCharacteristic? _localControl;
   bool get supportsLocalControl => _localControl != null && !_busy;
   Future<Map<String, dynamic>> readLocalControl() async {
@@ -114,6 +117,12 @@ class BleOtaService {
       throw StateError('请先升级支持双手机控制的新固件，并保持蓝牙连接；不使用手机直连服务器替代');
     }
     return rpc.request(request);
+  }
+
+  String? _otaTicket, _otaDigest;
+  void retainOfficialUpgrade(DownloadedFirmware image) {
+    _otaTicket = image.ticket;
+    _otaDigest = sha256.convert(image.bytes).toString();
   }
 
   bool _busy = false;
@@ -175,6 +184,9 @@ class BleOtaService {
           .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000005'))
           .firstOrNull;
 
+      _upgradeAuth = svc.characteristics
+          .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000009'))
+          .firstOrNull;
       _localControl = svc.characteristics
           .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000008'))
           .firstOrNull;
@@ -315,6 +327,29 @@ class BleOtaService {
         throw StateError('请先更新控制板基础固件以支持重启确认');
       }
       target.assertUpgradeAllowed(before.version);
+      if (before.otaAuth != null) {
+        if (before.otaAuth != 'hmac-sha256-v1' || _upgradeAuth == null) {
+          throw StateError('此控制板升级授权协议不受支持');
+        }
+        if (_otaTicket == null ||
+            _otaDigest != sha256.convert(data).toString()) {
+          throw StateError('请先从服务器下载官方固件，再进行受保护的蓝牙升级');
+        }
+        final challenge = await _upgradeAuth!.read();
+        final client = AppOtaClient(Uri.parse(ControllerConfig.base));
+        try {
+          final authorization = await client.authorizeBle(
+              _otaTicket!,
+              before.device,
+              before.boot,
+              challenge,
+              (bytes) => signDownloadChallenge(Uint8List.fromList(bytes)));
+          checkActive();
+          await _upgradeAuth!.write(authorization, withoutResponse: false);
+        } finally {
+          client.close();
+        }
+      }
       checkActive();
       yield const PushProgress(step: '连接设备', log: '设备连接就绪');
 

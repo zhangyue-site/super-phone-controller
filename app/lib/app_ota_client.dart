@@ -7,7 +7,8 @@ import 'firmware_image.dart';
 class DownloadedFirmware {
   final Uint8List bytes;
   final String version;
-  const DownloadedFirmware(this.bytes, this.version);
+  final String? ticket;
+  const DownloadedFirmware(this.bytes, this.version, {this.ticket});
 }
 
 class AppOtaClient {
@@ -25,11 +26,14 @@ class AppOtaClient {
 
   Uri _uri(String path) => Uri.parse(
       "${base.toString().replaceFirst(RegExp(r'/$'), '')}/app-ota/$path");
-  Future<Map<String, dynamic>> _post(
-      String path, Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
+      {String? ticket}) async {
     final response = await _client
         .post(_uri(path),
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              if (ticket != null) 'Authorization': 'Bearer $ticket'
+            },
             body: jsonEncode(body))
         .timeout(const Duration(seconds: 25));
     if (response.statusCode != 200) {
@@ -41,6 +45,35 @@ class AppOtaClient {
     final dynamic obj = jsonDecode(response.body);
     if (obj is! Map<String, dynamic>) throw const FormatException('升级服务响应无效');
     return obj;
+  }
+
+  Future<List<int>> authorizeBle(String ticket, String device, String boot,
+      List<int> challenge, Future<List<int>> Function(List<int>) sign) async {
+    if (challenge.length != 32) throw const FormatException('蓝牙升级挑战无效');
+    String hex(List<int> bytes) =>
+        bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final proof = await sign(challenge);
+    final result = await _post(
+        'ble-authorize',
+        {
+          'device': device,
+          'boot': boot,
+          'challenge': hex(challenge),
+          'proof': hex(proof),
+        },
+        ticket: ticket);
+    final authorization = result['authorization'];
+    final ttl = result['expiresIn'];
+    if (result['scope'] != 'ble-ota' ||
+        ttl is! int ||
+        ttl < 1 ||
+        ttl > 60 ||
+        authorization is! String ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(authorization)) {
+      throw const FormatException('蓝牙升级授权无效');
+    }
+    return List.generate(32,
+        (i) => int.parse(authorization.substring(i * 2, i * 2 + 2), radix: 16));
   }
 
   Future<DownloadedFirmware> download(
@@ -94,6 +127,6 @@ class AppOtaClient {
     if (bytes.length != size || sha256.convert(bytes).toString() != digest) {
       throw const FormatException('固件下载不完整或 SHA256 校验失败，请重试');
     }
-    return DownloadedFirmware(bytes, version);
+    return DownloadedFirmware(bytes, version, ticket: ticket);
   }
 }

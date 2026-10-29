@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'control_client.dart';
+import 'controller_gateway_screen.dart';
 import 'control_screen.dart';
 
 /// Controller phone A redeems a short-lived code explicitly shared by phone B.
@@ -99,6 +100,15 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
           const Text('在被控手机连接控制板后生成连接码。连接码为一次性使用，2分钟后过期。'),
           const SizedBox(height: 12),
           const Text('此手机用于发送任务和查看进度，无需共享此手机的屏幕。'),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+              onPressed: _busy
+                  ? null
+                  : () => Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => const ControllerGatewayScreen())),
+              icon: const Icon(Icons.bluetooth),
+              label: const Text('使用此手机作为蓝牙网关')),
+          const Text('Wi-Fi 直连模式由板子联网；蓝牙应用中转模式由唯一网关手机联网。切换前需释放原网关。'),
           const SizedBox(height: 24),
           Form(
               key: _form,
