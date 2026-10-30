@@ -1,3 +1,4 @@
+import 'target_check_errors.dart';
 import 'diagnostics.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -43,6 +44,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   int _generation = 0;
   String _capture = '等待屏幕共享授权', _relay = '尚未连接';
   String? _error, _code;
+  final _checkErrors = TargetCheckErrors();
   ScreenTaskStatus _feedback = const ScreenTaskStatus(capture: '状态待更新');
   DateTime? _codeExpiry;
   DateTime get _captureNow => widget.captureClock?.call() ?? DateTime.now();
@@ -69,12 +71,14 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     if (_polling || _busy || _stopping || !mounted || _lost) return;
     _polling = true;
     final generation = _generation;
+    var phase = TargetCheckPhase.status;
     try {
       if (!widget.isCurrent()) {
         SafeDiagnostics.record('target_release',
             phase: 'shutdown', reason: 'usb_unavailable');
         _lost = true;
         _generation++;
+        _checkErrors.reset(_generation);
         await _control?.shutdown();
         await _stopCapture();
         if (mounted) {
@@ -88,6 +92,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       final status = await ScreenShare.status();
       final active = await ScreenShare.isActive();
       if (!_current(generation)) return;
+      setState(() => _checkErrors.succeed(TargetCheckPhase.status, generation));
       if (!active && _active) {
         SafeDiagnostics.record('target_release',
             phase: 'shutdown', reason: 'capture_inactive');
@@ -99,23 +104,50 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         try {
           await TargetSession.maintainCapture(widget.attachment,
               clock: widget.captureClock, renew: widget.renewCapture);
+          if (_current(generation)) {
+            setState(() =>
+                _checkErrors.succeed(TargetCheckPhase.capture, generation));
+          }
         } catch (e) {
-          if (_current(generation)) setState(() => _error = '云端画面连接正在恢复：$e');
+          if (_current(generation)) {
+            setState(() =>
+                _checkErrors.fail(TargetCheckPhase.capture, e, generation));
+          }
         }
       }
       if (!_current(generation)) return;
       try {
-        if (active) await _usbWindow(generation);
+        if (active) {
+          await _usbWindow(generation);
+          if (_current(generation)) {
+            setState(() =>
+                _checkErrors.succeed(TargetCheckPhase.window, generation));
+          }
+        }
       } catch (e) {
-        if (_current(generation)) setState(() => _error = 'USB控制窗口暂不可用：$e');
+        if (_current(generation)) {
+          setState(
+              () => _checkErrors.fail(TargetCheckPhase.window, e, generation));
+        }
       }
       if (!_current(generation)) return;
       try {
-        await _control?.refresh();
+        final control = _control;
+        if (control?.authorized == true) {
+          await control!.refresh();
+          if (_current(generation) && control.authorized) {
+            setState(
+                () => _checkErrors.succeed(TargetCheckPhase.renew, generation));
+          }
+        }
       } catch (e) {
-        if (_current(generation)) setState(() => _error = '网关续期失败：$e');
+        if (_current(generation)) {
+          setState(
+              () => _checkErrors.fail(TargetCheckPhase.renew, e, generation));
+        }
       }
       if (!_current(generation)) return;
+      phase = TargetCheckPhase.recovery;
       final recovered =
           active && await TargetSession.maintainGateway(widget.attachment);
       if (!_current(generation)) return;
@@ -125,7 +157,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         _feedback = status;
         _pointerReady = recovered ? false : status.pointerReady;
         if (recovered) {
-          _error = null;
+          _checkErrors.succeed(TargetCheckPhase.recovery, generation);
+          _checkErrors.succeed(TargetCheckPhase.renew, generation);
           _relay = '手机中转已恢复；旧任务已停止，请重新确认新任务';
         }
         if (_control != null && !_control!.authorized) {
@@ -139,7 +172,9 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         }
       });
     } catch (e) {
-      if (_current(generation)) setState(() => _error = '状态检查失败：$e');
+      if (_current(generation)) {
+        setState(() => _checkErrors.fail(phase, e, generation));
+      }
     } finally {
       _polling = false;
     }
@@ -250,6 +285,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     if (_busy || _stopping || !widget.isCurrent()) return;
     _manuallyStopped.remove(widget.attachment.serial);
     final generation = ++_generation;
+    _checkErrors.reset(generation);
     setState(() {
       _busy = true;
       _error = null;
@@ -325,6 +361,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     if (_stopping) return;
     _manuallyStopped.add(widget.attachment.serial);
     _generation++;
+    _checkErrors.reset(_generation);
     setState(() {
       _stopping = true;
       _code = null;
@@ -362,6 +399,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   @override
   void dispose() {
     _generation++;
+    _checkErrors.reset(_generation);
     _timer?.cancel();
     TargetSession.removeView(this);
     if (!TargetSession.owns(_control)) {
@@ -407,6 +445,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                   : '正在检查手机中转连接',
           error: _error,
         ),
+        for (final message in _checkErrors.messages) ProductError(message),
         Card(
             child: Padding(
                 padding: const EdgeInsets.all(16),
