@@ -24,6 +24,8 @@
 #endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "esp_heap_caps.h"
 using namespace controller;
 static AdbGate gate;
 static std::atomic<uint64_t> status(0),failure(0);
@@ -31,6 +33,16 @@ static int connect_error=0;
 static TaskHandle_t worker;
 static int fd=-1,listener=-1;
 static uint32_t next_stream=2;
+static SemaphoreHandle_t command_mutex;
+static std::atomic<int> command_state(0); // 0 idle, 1 queued, 2 complete
+static std::atomic<bool> command_ok(false);
+static const char *command_error="";
+static bool command_transport_broken=false;
+static AdbCommand queued_command;
+static uint32_t command_ticket;
+static char *command_expected,*command_output;
+static bool execute_queued(unsigned char *data);
+
 static unsigned active_epoch;
 static int64_t deadline;
 static bool live(){return gate.active(active_epoch) && controller_usb_net_peer()!=0;}
@@ -104,7 +116,7 @@ static bool authenticate(unsigned char *data){
  mbedtls_pk_free(&key);return ok;
 }
 static bool shell_probe(unsigned char *data){
- const char command[]="shell:echo __CONTROLLER_ADB_OK__";
+ const char command[]="shell:f=/data/local/tmp/controller-ime.restore; if test -f \"$f\"; then o=$(cat \"$f\"); case \"$o\" in ''|*[!a-zA-Z0-9_./$]*) exit 40;; esac; ime set \"$o\" >/dev/null && rm -f \"$f\" || exit 41; fi; echo __CONTROLLER_ADB_OK__";
  if(!packet(ADB_OPEN,1,0,command,sizeof(command)))return false;
  AdbHeader h;uint32_t remote=0;bool marker=false;size_t matched=0;
  while(receive(h,data)){
@@ -122,6 +134,62 @@ static bool shell_probe(unsigned char *data){
  }
  return false;
 }
+// ADB is restricted to the approved ADB Keyboard text injection. It cannot observe UI, capture screenshots, launch apps, or synthesize touch input.
+static bool shell_command(const char *command,char *out,unsigned capacity,unsigned char *data){
+ char service[4096];int n=snprintf(service,sizeof(service),"shell:%s; echo __PC_EXIT_$?__",command);
+ if(n<=0||n>=(int)sizeof(service))return false;
+ command_transport_broken=true;
+ AdbStream s(next_stream++);unsigned used=0;AdbReply reply;
+ deadline=esp_timer_get_time()+12000000;
+ if(!packet(ADB_OPEN,s.local,0,service,n+1))return false;
+ bool complete=false;
+ while(live()&&esp_timer_get_time()<deadline){
+  AdbHeader h;if(!receive(h,data))break;
+  auto e=s.receive(h.command,h.arg0,h.arg1);
+  if(e==StreamEvent::ERROR)break;
+  if(e==StreamEvent::DATA){
+   reply.feed((char*)data,h.length);
+   for(unsigned i=0;i<h.length;i++)if(data[i]!='\r'){
+    if(used+1>=capacity){if(s.remote)packet(ADB_CLSE,s.local,s.remote);return false;}
+    out[used++]=data[i];
+   }
+   if(!packet(ADB_OKAY,s.local,s.remote))break;
+  }else if(e==StreamEvent::CLOSED){packet(ADB_CLSE,s.local,h.arg0);complete=true;break;}
+ }
+ out[used]=0;
+ if(!complete&&s.remote&&live())packet(ADB_CLSE,s.local,s.remote);
+ if(complete)command_transport_broken=false;
+ bool ok=complete&&reply.success();
+ if(ok){char *marker=strstr(out,"__PC_EXIT_0__");if(marker)*marker=0;}
+ return ok;
+}
+static bool execute_queued(unsigned char *data){
+ command_transport_broken=false;
+ if(!live()||!command_output){command_error="adb_unavailable";return false;}
+ command_output[0]=0;
+ if(queued_command.op!=AdbOp::TYPE_TEXT){command_error="invalid_command";return false;}
+ char command[4096];if(!adb_command(queued_command,command,sizeof(command))){command_error="invalid_command";return false;}
+ bool ok=shell_command(command,command_output,48001,data);if(!ok)command_error="input_failed";return ok;
+}
+bool controller_adb_execute(const AdbCommand &command,const char *expected,char *out,unsigned capacity,uint32_t ticket,const char **error){
+ auto fail=[&](const char *reason){if(error)*error=reason;return false;};
+ if(error)*error="";
+ if(!out||capacity<1||!command_mutex||!command_output||!command_expected||!gate.active(ticket))return fail("adb_unavailable");
+ if(xSemaphoreTake(command_mutex,pdMS_TO_TICKS(100))!=pdTRUE)return fail("busy");
+ if(command_state!=0||controller_adb_stage()!=3){xSemaphoreGive(command_mutex);return fail("adb_unavailable");}
+ size_t size=expected?strlen(expected):0;
+ if(command.op!=AdbOp::TYPE_TEXT||size!=0){xSemaphoreGive(command_mutex);return fail("invalid_command");}
+ command_expected[0]=0;command_output[0]=0;queued_command=command;command_ticket=ticket;command_ok=false;command_error="";command_state=1;
+ // The storage belongs to this module, so cancellation cannot leave a stack pointer queued.
+ while(command_state==1&&gate.active(ticket))vTaskDelay(pdMS_TO_TICKS(20));
+ bool ok=command_state==2&&command_ok&&gate.active(ticket);
+ if(ok){size_t n=strlen(command_output);if(n>=capacity)ok=false;else memcpy(out,command_output,n+1);}
+ // Wait for transport owner to release the buffers before a new request can reuse them.
+ while(command_state==1)vTaskDelay(pdMS_TO_TICKS(20));
+ if(!ok&&error)*error=*command_error?command_error:!gate.active(ticket)?"cancelled":"input_failed";
+ command_state=0;xSemaphoreGive(command_mutex);return ok;
+}
+
 // Only this fixed server destination is permitted. TLS stays on the board.
 static bool proxy_write(int client,const unsigned char *data,size_t length){
  size_t done=0;
@@ -169,6 +237,14 @@ static bool proxy_session(int client,unsigned char *data){
 }
 static bool proxy_loop(unsigned char *data){
  while(live()){
+  if(command_state==1){
+   int64_t began=esp_timer_get_time();
+   bool ok=command_ticket==active_epoch&&execute_queued(data);
+   ESP_LOGI("adb_local","Command op=%d ok=%d error=%s bytes=%u elapsed_ms=%lld",(int)queued_command.op,ok,command_error,(unsigned)strlen(command_output),(esp_timer_get_time()-began)/1000);
+   command_ok=ok;command_state=2;
+   // Safe refusals still need this same ADB tunnel to ACK and fetch TTS.
+   if(!ok&&command_transport_broken)return false;
+  }
   fd_set inputs;FD_ZERO(&inputs);FD_SET(listener,&inputs);FD_SET(fd,&inputs);
   timeval timeout={0,100000};int n=select((listener>fd?listener:fd)+1,&inputs,nullptr,nullptr,&timeout);
   if(n<0){if(errno==EINTR)continue;return false;}
@@ -207,11 +283,15 @@ static void run(void*){
    state(active_epoch,3);ESP_LOGI("adb_local","Authorized USB-local ADB shell probe succeeded; no phone action executed");
    if(listener>=0)proxy_loop(data);
   }
+  if(command_state==1){command_ok=false;command_state=2;}
   if(fd>=0){shutdown(fd,SHUT_RDWR);close(fd);fd=-1;}
   if(gate.finish(active_epoch)){failure=((uint64_t)(active_epoch&~1u)<<32)|(unsigned)(reason?reason:7);state(active_epoch&~1u,5);}
  }
 }
 void controller_adb_init(){
+ command_mutex=xSemaphoreCreateMutex();
+ command_expected=(char*)heap_caps_malloc(48001,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+ command_output=(char*)heap_caps_malloc(786433,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
  listener=socket(AF_INET,SOCK_STREAM,0);
  if(listener>=0){
   sockaddr_in address={};address.sin_family=AF_INET;address.sin_port=htons(18843);inet_pton(AF_INET,"127.0.0.1",&address.sin_addr);
@@ -239,6 +319,7 @@ int controller_adb_error(){uint64_t snapshot=failure.load();return (uint32_t)(sn
 bool controller_adb_network_available(){return listener>=0 && controller_adb_stage()==3;}
 
 #else
+bool controller_adb_execute(const controller::AdbCommand&,const char*,char*,unsigned,uint32_t,const char **error){if(error)*error="adb_unavailable";return false;}
 void controller_adb_init(){}
 bool controller_adb_activate(uint32_t){return false;}
 uint32_t controller_adb_ticket(){return 0;}

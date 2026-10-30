@@ -1,4 +1,8 @@
 #include <stdio.h>
+#include <stdint.h>
+#include "esp_attr.h"
+// Single panel worker owns this bounded DMA staging buffer.
+DMA_ATTR static uint8_t epaper_dma[512];
 #include <string.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
@@ -136,11 +140,16 @@ void epaper_driver_display::read_busy() {
 void epaper_driver_display::spi_write(const uint8_t *buf, int len) {
     if(faulted)return;
     set_cs_0();
-    spi_transaction_t t = {};
-    t.length = 8 * len;
-    t.tx_buffer = buf;
-    esp_err_t ret = spi_device_polling_transmit(spi, &t);
-    if(ret != ESP_OK){faulted=true;ESP_LOGE(TAG,"EPD SPI failed: %s",esp_err_to_name(ret));}
+    while(len>0){
+        int count=len>(int)sizeof(epaper_dma)?sizeof(epaper_dma):len;
+        memcpy(epaper_dma,buf,count);
+        spi_transaction_t t = {};
+        t.length = 8 * count;
+        t.tx_buffer = epaper_dma;
+        esp_err_t ret = spi_device_polling_transmit(spi, &t);
+        if(ret != ESP_OK){faulted=true;ESP_LOGE(TAG,"EPD SPI failed: %s",esp_err_to_name(ret));break;}
+        buf+=count;len-=count;
+    }
     set_cs_1();
 }
 

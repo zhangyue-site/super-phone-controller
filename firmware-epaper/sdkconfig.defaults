@@ -31,3 +31,7 @@ CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM=0
 # Wi-Fi 与 BLE 共用 2.4G 射频，必须开软件共存，否则互相抢时隙导致丢包。
 CONFIG_SW_COEXIST_ENABLE=y
 CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+
+# Screen/audio DMA must keep internal SRAM. TLS record buffers use board PSRAM.
+# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y

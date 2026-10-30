@@ -23,6 +23,30 @@ static const uint8_t report_descriptor[]={
 static char serial_number[13],network_mac[13];
 static std::atomic<int> mouse_command(0);
 static bool mouse_down=false,consumer_down=false;
+// 0 idle, 1 pending, 2 press submitted, 3 released, -1 failed/cancelled.
+static std::atomic<int> ai_home_state(0);
+static std::atomic_flag ai_home_busy=ATOMIC_FLAG_INIT;
+bool controller_usb_ai_home(bool (*live)(unsigned),unsigned sequence){
+ if(ai_home_busy.test_and_set())return false;
+ bool ok=false;
+ if(enabled&&requested&&tud_mounted()&&live(sequence)){
+  int state=ai_home_state.load();
+  if(state==0||state==3||state==-1){
+   ai_home_state=1;
+   for(int i=0;i<300;++i){
+    if(!live(sequence)||!enabled||!requested||!tud_mounted())break;
+    state=ai_home_state.load();
+    if(state==3){ok=true;break;}
+    if(state==-1)break;
+    vTaskDelay(pdMS_TO_TICKS(10));
+   }
+   // A pending command cannot execute after timeout/cancellation. An already
+   // submitted press is released by the USB service or local STOP.
+   int pending=1;ai_home_state.compare_exchange_strong(pending,-1);
+  }
+ }
+ ai_home_busy.clear();return ok&&live(sequence);
+}
 bool controller_usb_phone_key(bool home){
  if(!enabled||!requested||!tud_mounted())return false;
  int empty=0;return mouse_command.compare_exchange_strong(empty,home?6:7);
@@ -74,6 +98,7 @@ void controller_release(){release_pending=true;}
 void controller_usb_request_mode(bool value){requested=value;}
 static void release_reports(){
  mouse_command=0;mouse_down=false;consumer_down=false;
+ if(ai_home_state.load()==1||ai_home_state.load()==2)ai_home_state=-1;
  if(!enabled)return;
  uint8_t keys[6]={};
  for(int report=1;report<=3;++report){
@@ -126,9 +151,17 @@ void controller_usb_service(){
  bool target=requested.load();
  if(target==enabled.load()){
   if(enabled&&tud_mounted()&&tud_hid_ready()){
-   if(consumer_down){uint16_t usage=0;tud_hid_report(3,&usage,sizeof(usage));consumer_down=false;}
+   if(consumer_down){uint16_t usage=0;bool released=tud_hid_report(3,&usage,sizeof(usage));if(released){consumer_down=false;if(ai_home_state.load()==2)ai_home_state=3;}}
    else if(mouse_down){tud_hid_mouse_report(2,0,0,0,0,0);mouse_down=false;}
    else{
+    int pending=1;
+    if(requested.load()&&ai_home_state.compare_exchange_strong(pending,2)){
+     uint16_t usage=0x0223;
+     bool sent=tud_hid_report(3,&usage,sizeof(usage));
+     consumer_down=sent;if(!sent)ai_home_state=-1;
+     controller_event("ai_home",-1,0,0,sent?1:0);
+     return;
+    }
     int command=mouse_command.exchange(0);
     if(command&&requested.load()){
      bool sent;

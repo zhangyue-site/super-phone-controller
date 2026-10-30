@@ -11,10 +11,8 @@
 | 环境变量 | 用途 | 未提供时 |
 | --- | --- | --- |
 | `EPAPER_CONFIG` | 设备 ID 到设备令牌的外部 JSON 映射 | 使用通用 `/etc/phone-controller/devices.example.json` 路径，不内置设备 |
-| `EPAPER_MODEL_CONFIG` | 模型路由 JSON，结构为 `models.providers` | 当前用户 `.config/phone-controller/models.json`；无配置则不能调用模型 |
-| `EPAPER_JEV_CREDENTIAL` | 可选的图像判断提供方凭据 | 当前用户 `.config/phone-controller/jev.json`；不包含默认账号 |
-| `EPAPER_JEV_PROXY` | 可选的图像判断代理 | 默认直连，不连接隐藏的本机代理 |
-| `EPAPER_SPEECH_CONFIG` | 可选的语音合成配置 | 当前用户 `.config/phone-controller/speech.json`；不包含默认账号 |
+| `EPAPER_MODEL_CONFIG` | 模型路由 JSON，结构为 `models.providers` | 请显式配置外部 JSON；不同旧模块的默认路径不作为部署约定 |
+| `EPAPER_SPEECH_CONFIG` | 可选的语音合成配置 | 请显式配置外部 JSON；不包含默认账号 |
 | `EPAPER_ASR` | 部署者配置的识别适配脚本 | 明确报未配置，不回落到维护者服务器路径 |
 | `EPAPER_ASR_CHECK_WAV` | 开发者自有的语音探测样本 | 相对路径 `assets/asr-check.wav`，不包含私人录音 |
 | `EPAPER_QUOTAS` | 可选的额度摘要输入目录 | 当前用户 `.local/state/phone-controller/quotas` |
@@ -23,8 +21,12 @@
 
 ## 接口与验证
 
-设备读取状态和 200×200 位图的接口包括 `/status`、`/screen.bin`、`/screen.png`。此默认分支保留早期展示基线；完整画面上传、手机任务和蓝牙中继接口见仓库首页指向的集成分支。具体请求与安全边界以对应分支源码和测试为准。
+设备读取状态和 200×200 位图的接口包括 `/status`、`/screen.bin`、`/screen.png`。本分支保留早期交互与连续语音实现；新的画面上传、手机任务和蓝牙中继接口见仓库首页指向的公开开发分支。具体请求与安全边界以对应分支源码和测试为准。
 
 真实控制验收需要同时核对：目标身份、用户授权的新画面、同一任务的派发与板端回执、动作后的独立画面结果。模拟数据和单元测试仅证明各自覆盖的逻辑。
 
 `deploy/` 仅保留通用示例，不是维护者的实际服务器配置。历史专属额度采集适配器和旧私有服务器入口已从公开源码移除；可选额度展示仍可读取部署者自行提供的摘要数据。
+
+## 本分支保留的旧协议
+
+[历史交互与语音说明](../docs/legacy-interaction-audio.md)保留了原连续语音、结果音频、停止与会话约束。源代码和原功能历史均保留；旧 ADB 执行路径不作为当前生产控制入口，不因本次文档合并而自动启用。

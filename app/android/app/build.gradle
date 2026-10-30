@@ -5,11 +5,15 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+def releaseStore = System.getenv("ANDROID_KEYSTORE_PATH")
+if (gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") } && !releaseStore) {
+    throw new GradleException("Release signing requires the cloud Android keystore configuration")
+}
+
 android {
     namespace = "org.example.phonecontroller"
-    // flutter.compileSdkVersion 跟随本机 Flutter 版本；CI 上的 Flutter 3.24
-    // 解析成 34，而 androidx.core 1.15 要求 35。显式钉住，不依赖环境。
-    compileSdk = 35
+    // Flutter 3.44 and current BLE/file-picker plugins require API 36.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -32,11 +36,20 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (releaseStore) {
+            release {
+                storeFile file(releaseStore)
+                storePassword System.getenv("ANDROID_STORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.debug
+            if (releaseStore) signingConfig = signingConfigs.release
         }
     }
 }

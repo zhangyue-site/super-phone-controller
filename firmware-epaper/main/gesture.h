@@ -24,7 +24,7 @@ public:
     Gesture feed(bool down, int x, int y, int64_t now_ms);
 
     // 供外部复位（切页/屏幕刷新世代变化时调用，防跨世代误判）。
-    void reset() { active_ = false; }
+    void reset() { active_ = false; release_ms_ = -100000; }
 
 private:
     bool active_ = false;

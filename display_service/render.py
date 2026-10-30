@@ -49,3 +49,24 @@ def render(rows, interaction, page=0, now=None, connected=True):
     text(8,182,stamp+' 更新',small)
     text(91,182,'短按翻页 长按停止',small)
     return im
+
+
+def render_dialogue(reply,state,speech_error=False):
+    """Large result text; the central bottom area matches the board STOP hit target."""
+    font_path=os.environ.get('EPAPER_FONT','/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc')
+    if not os.path.isfile(font_path):font_path='/System/Library/Fonts/STHeiti Medium.ttc'
+    title=ImageFont.truetype(font_path,24);font=ImageFont.truetype(font_path,17)
+    im=Image.new('1',(200,200),1);d=ImageDraw.Draw(im)
+    label='播报不可用' if speech_error else '本轮结果' if state=='done' else '请核对手机' if state=='waiting' else '本轮未完成'
+    d.text((8,5),label,font=title,fill=0)
+    lines=[];line=''
+    for c in reply:
+        if c=='\n' or d.textlength(line+c,font=font)>180:
+            lines.append(line);line=''
+            if c=='\n':continue
+        line+=c
+    if line:lines.append(line)
+    for i,line in enumerate(lines[:4]):d.text((8,39+i*21),line,font=font,fill=0)
+    if len(lines)>4:d.text((170,103),'…',font=font,fill=0)
+    d.rectangle((8,132,191,154),outline=0,width=2);d.text((47,134),'点此停止',font=font,fill=0)
+    return im

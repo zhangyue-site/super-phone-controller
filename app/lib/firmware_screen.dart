@@ -1,14 +1,14 @@
-import 'dart:io';
+import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+import 'app_ota_client.dart';
+import 'screen_share.dart';
 
 import 'ble_ota_service.dart';
+import 'firmware_image.dart';
 import 'push_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -40,11 +40,23 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
   bool _busy = false;
   String? _error;
   String _deviceVersion = '';
+  bool _connected = false;
+  String _screenStatus = '未共享';
+  Timer? _screenTimer;
+  StreamSubscription? _connectionSub;
 
   @override
   void initState() {
     super.initState();
     _deviceVersion = _parseVersion(widget.device.platformName);
+    _connectionSub = widget.device.connectionState.listen((state) {
+      if (mounted && state != BluetoothConnectionState.connected) {
+        setState(() => _connected = false);
+      }
+    });
+    _screenTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      try { final status = await ScreenShare.status(); if (mounted) setState(() => _screenStatus = status); } catch (_) { }
+    });
     _prepare();
   }
 
@@ -54,12 +66,23 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
   }
 
   Future<void> _prepare() async {
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _error = null;
+      _connected = false;
+    });
     try {
       final chunk = await widget.service.connect(widget.device);
+      if (!mounted) {
+        await widget.service.disconnect();
+        return;
+      }
+      final info = await widget.service.readInfo();
       if (!mounted) return;
       setState(() {
+        _deviceVersion = info?.version ?? _deviceVersion;
         _chunkSize = chunk;
+        _connected = true;
         _busy = false;
       });
     } catch (e) {
@@ -71,14 +94,52 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     }
   }
 
+  @override
+  void dispose() {
+    _screenTimer?.cancel();
+    _connectionSub?.cancel();
+    widget.service.disconnect();
+    super.dispose();
+  }
+
+  Future<void> _shareScreen() async {
+    if (_busy || !_connected) return;
+    final accepted = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('共享屏幕给你的 AI'),
+      content: const Text('当前手机画面将传给云端 AI。操作由控制板 HID 完成，App 只提供画面。请选择共享整个屏幕，才能在桌面和微信之间导航。你可随时从系统投屏入口或通知停止；一次共享约 4 分钟。'),
+      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('继续系统确认'))]));
+    if (accepted != true || !mounted) return;
+    setState(() { _busy = true; _error = null; });
+    try { await ScreenShare.start(widget.service); if (mounted) setState(() => _screenStatus = '正在启动共享'); }
+    catch (e) { if (mounted) setState(() => _error = '屏幕共享：$e'); }
+    finally { if (mounted) setState(() => _busy = false); }
+  }
+
   Future<void> _pickLocal() async {
-    final res = await FilePicker.pickFiles(
-      type: FileType.any,
-      withData: true,
-    );
-    final f = res?.files.single;
-    if (f == null || f.bytes == null) return;
-    await _loadBytes(f.bytes!, f.name);
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final res =
+          await FilePicker.pickFiles(type: FileType.any, withData: true);
+      if (!mounted) return;
+      final f = res?.files.single;
+      if (f == null) {
+        setState(() => _busy = false);
+        return;
+      }
+      if (f.bytes == null) throw StateError('无法读取文件，请重新选择');
+      await _loadBytes(f.bytes!, f.name);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = '无法读取固件，请重新选择 app.bin';
+        });
+      }
+    }
   }
 
   Future<void> _fetchFromServer() async {
@@ -87,82 +148,63 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       _error = null;
     });
     try {
-      // 服务器需要设备 token；客户端只做公开预览不可行，这里提示用户。
-      // 实际部署时把 token 内嵌或让用户在设置里填。
-      final res = await http
-          .get(Uri.parse('$otaBase/firmware/image'))
-          .timeout(const Duration(seconds: 30));
-      if (res.statusCode != 200) {
-        throw Exception('服务器返回 ${res.statusCode}（需要设备 token）');
+      final board = await widget.service.readInfo();
+      if (board == null) throw StateError('控制板需先更新一次基础固件以支持自动下载授权');
+      final client = AppOtaClient(Uri.parse(otaBase));
+      try {
+        final result = await client.download(
+            board.device, widget.service.signDownloadChallenge);
+        final image = FirmwareImage.parse(result.bytes);
+        if (image.version != result.version) {
+          throw const FormatException('下载版本与固件不符');
+        }
+        await _loadBytes(result.bytes, 'app.bin');
+      } finally {
+        client.close();
       }
-      await _loadBytes(res.bodyBytes, 'app.bin');
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = '从服务器获取失败：$e\n可以改用本地文件。';
+        _error = '下载失败：$e';
       });
     }
   }
 
   Future<void> _loadBytes(Uint8List bytes, String name) async {
     if (!mounted) return;
-    if (bytes.length < 4096) {
+    setState(() {
+      _info = null;
+      _bytes = null;
+      _error = null;
+    });
+    late final FirmwareImage image;
+    try {
+      image = FirmwareImage.parse(bytes);
+    } on FormatException catch (error) {
       setState(() {
         _busy = false;
-        _error = '这个文件太小，不像是固件（< 4KB）';
+        _error = error.message;
       });
       return;
     }
-    if (bytes.length > BleOtaService.maxImageSize) {
-      setState(() {
-        _busy = false;
-        _error = '文件 ${(bytes.length / 1048576).toStringAsFixed(2)} MB '
-            '超过 OTA 槽位上限 3.25 MB';
-      });
-      return;
-    }
-
-    // ESP32 app 镜像头：byte0 = 0xE9
-    if (bytes[0] != 0xE9) {
-      setState(() {
-        _busy = false;
-        _error = '文件头不是 ESP32 镜像（应为 0xE9），确认选的是 app.bin';
-      });
-      return;
-    }
-
-    final digest = sha256.convert(bytes).toString();
-    // 版本号在 esp_app_desc_t 里，偏移 48 起 32 字节（与 124 的发布脚本一致）
-    String version = '';
-    if (bytes.length > 80) {
-      final raw = bytes.sublist(48, 80);
-      final end = raw.indexOf(0);
-      version = String.fromCharCodes(raw.sublist(0, end < 0 ? 32 : end));
-      // 只保留可打印字符，避免脏数据上屏
-      version = version.replaceAll(RegExp(r'[^\x20-\x7E]'), '').trim();
-    }
-
-    final dir = await getTemporaryDirectory();
-    final f = File('${dir.path}/$name');
-    await f.writeAsBytes(bytes);
 
     setState(() {
       _bytes = bytes;
       _info = FirmwareInfo(
         name: name,
         size: bytes.length,
-        sha256: digest,
-        version: version.isEmpty ? '未知' : version,
+        sha256: image.sha,
+        version: image.version,
       );
       _busy = false;
       _error = null;
     });
   }
 
-  void _start() {
-    if (_bytes == null || _info == null) return;
-    Navigator.of(context).push(MaterialPageRoute(
+  Future<void> _start() async {
+    if (_bytes == null || _info == null || !_connected || _busy) return;
+    await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => PushScreen(
         service: widget.service,
         device: widget.device,
@@ -171,10 +213,13 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         chunkSize: _chunkSize,
       ),
     ));
+    if (mounted && !_connected) await _prepare();
   }
 
   bool get _sameVersion =>
-      _info != null && _deviceVersion.isNotEmpty && _info!.version == _deviceVersion;
+      _info != null &&
+      _deviceVersion.isNotEmpty &&
+      _info!.version == _deviceVersion;
 
   @override
   Widget build(BuildContext context) {
@@ -202,21 +247,41 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           if (_error != null) ...[
-            InfoBanner(icon: Icons.error_outline, color: AppTheme.danger, text: _error!),
+            InfoBanner(
+                icon: Icons.error_outline,
+                color: AppTheme.danger,
+                text: _error!),
             const SizedBox(height: 16),
           ],
+          if (!_connected && !_busy) ...[
+            FilledButton.icon(
+                onPressed: _prepare,
+                icon: const Icon(Icons.bluetooth_connected),
+                label: const Text('重新连接控制板')),
+            const SizedBox(height: 16),
+          ],
+          Card(child: Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('AI 手机画面', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text(_screenStatus),
+            FilledButton.icon(onPressed: _busy || !_connected ? null : _shareScreen, icon: const Icon(Icons.screen_share_outlined), label: const Text('共享屏幕给 AI')),
+            TextButton(onPressed: () async { await ScreenShare.stop(); if (mounted) setState(() => _screenStatus = '已停止共享'); }, child: const Text('停止共享')),
+          ]))),
+          const SizedBox(height: 12),
+          const InfoBanner(
+              icon: Icons.info_outline, text: '第 2 步：选择固件。传输时请保持手机靠近控制板，避免断电。'),
+          const SizedBox(height: 16),
           _SourceCard(
             icon: Icons.cloud_download_outlined,
-            title: '从服务器获取最新',
-            subtitle: 'controller.example.invalid',
+            title: '下载最新固件',
+            subtitle: '通过已连接的控制板自动授权，无需选择文件',
             primary: true,
             onTap: _busy ? null : _fetchFromServer,
           ),
           const SizedBox(height: 10),
           _SourceCard(
             icon: Icons.folder_open_outlined,
-            title: '选择本地固件文件',
-            subtitle: '从下载目录里挑 app.bin',
+            title: '选择本地固件（高级）',
+            subtitle: '仅用于恢复，选择 app.bin 应用镜像',
             onTap: _busy ? null : _pickLocal,
           ),
           if (_busy) ...[
@@ -254,8 +319,16 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: FilledButton(
-            onPressed: (_info != null && !_busy && _error == null) ? _start : null,
-            child: Text(_info == null ? '先选择一个固件' : '开始推送'),
+            onPressed: (_info != null && _connected && !_busy && _error == null)
+                ? _start
+                : null,
+            child: Text(_busy
+                ? '正在准备…'
+                : !_connected
+                    ? '请先连接控制板'
+                    : _info == null
+                        ? '先选择一个固件'
+                        : '下一步：传输固件'),
           ),
         ),
       ),
@@ -282,7 +355,8 @@ class _SourceCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final accent = primary ? AppTheme.accent : AppTheme.text;
     return Material(
-      color: primary ? AppTheme.accent.withOpacity(0.07) : AppTheme.surface,
+      color:
+          primary ? AppTheme.accent.withValues(alpha: 0.07) : AppTheme.surface,
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         onTap: onTap,
@@ -292,7 +366,9 @@ class _SourceCard extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-                color: primary ? AppTheme.accent.withOpacity(0.45) : AppTheme.border),
+                color: primary
+                    ? AppTheme.accent.withValues(alpha: 0.45)
+                    : AppTheme.border),
           ),
           child: Row(
             children: [
@@ -315,7 +391,8 @@ class _SourceCard extends StatelessWidget {
                 ),
               ),
               if (onTap != null)
-                const Icon(Icons.chevron_right, color: AppTheme.textDim, size: 20),
+                const Icon(Icons.chevron_right,
+                    color: AppTheme.textDim, size: 20),
             ],
           ),
         ),

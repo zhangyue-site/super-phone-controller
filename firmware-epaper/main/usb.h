@@ -14,3 +14,6 @@ bool controller_usb_ready(void);
 
 bool controller_usb_mouse(int dx,int dy,bool click);
 bool controller_usb_phone_key(bool home);
+
+// One-shot AI Home request; true means a USB press/release report was submitted, not observed UI success.
+bool controller_usb_ai_home(bool (*live)(unsigned),unsigned sequence);

@@ -28,6 +28,7 @@
 #include "network_screens.h"
 #include "ui_assets.h"
 #include "voice.h"
+#include "audio_feedback.h"
 #include "adb_local.h"
 #include "voice_screens.h"
 #include "preflight.h"
@@ -40,6 +41,7 @@
 #include "ota.h"
 #include "ble_ota.h"
 #include "gesture.h"
+#include "interaction_screens.h"
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
 #include "soc/soc.h"
@@ -47,6 +49,7 @@
 
 static const char *TAG="controller";
 static std::atomic<bool> online(false), stopped(false), stop_pending(false);
+static std::atomic<unsigned> stop_sequence(0);
 #if CONFIG_TINYUSB_NET_MODE_NCM
 static const int HOME_PAGE=5;
 #else
@@ -168,6 +171,7 @@ static bool request(const char *path,uint8_t *out){
 // Operation telemetry is separate from free-form ESP logs/user content.
 static void upload_events(){
  if(controller_ota_busy())return;
+ if(controller_voice_conversing() || controller_voice_stage()==10 || controller_voice_stage()==11)return;
  if(!online || controller_voice_stage()==1 || controller_voice_stage()==2 || controller_voice_stage()==4 || controller_voice_stage()==7)return;
  static char body[4097];size_t size=controller_events_snapshot(body,sizeof(body));if(!size)return;
  char url[256],auth[128];snprintf(url,sizeof(url),"%s/events",server_endpoint());snprintf(auth,sizeof(auth),"Bearer %s",DISPLAY_TOKEN);
@@ -189,7 +193,7 @@ static bool paint(epaper_driver_display &display,const uint8_t *frame,bool full)
  return display.healthy();
 }
 // Clock uses UTC+8 explicitly; never display a fabricated time before SNTP sync.
-static void draw_footer(uint8_t *frame,int mode){
+[[maybe_unused]] static void draw_footer(uint8_t *frame,int mode){
  memset(frame+176*25,255,24*25);
  time_t utc=time(nullptr);
  if(utc>=1704067200){
@@ -205,6 +209,18 @@ static void draw_footer(uint8_t *frame,int mode){
  memcpy(frame+188*25,mode==2?check_hint:mode==1?voice_hint:footer_hint,300); // Two full twelve-row lines fit below the controls.
 }
 bool controller_voice_online(){return online.load();}
+static uint8_t dialogue_frame[5000];
+static std::atomic<bool> dialogue_frame_valid(false);
+static portMUX_TYPE dialogue_mux=portMUX_INITIALIZER_UNLOCKED;
+void controller_dialogue_screen(const unsigned char *frame){
+ taskENTER_CRITICAL(&dialogue_mux);
+ dialogue_frame_valid=frame!=nullptr;
+ if(frame)memcpy(dialogue_frame,frame,5000);
+ taskEXIT_CRITICAL(&dialogue_mux);screen_dirty=true;
+}
+static bool dialogue_copy(uint8_t *frame){
+ taskENTER_CRITICAL(&dialogue_mux);bool valid=dialogue_frame_valid;if(valid)memcpy(frame,dialogue_frame,5000);taskEXIT_CRITICAL(&dialogue_mux);return valid;
+}
 void controller_voice_changed(bool completed){
  // Local completion feedback avoids another TLS round-trip for a 5000-byte screen.
  if(completed)ESP_LOGI(TAG,"Voice recognized; local result shown without fetching task bitmap");
@@ -219,7 +235,7 @@ bool controller_voice_upload(const unsigned char *pcm,unsigned size,unsigned seq
  esp_http_client_set_header(client,"Authorization",auth);esp_http_client_set_header(client,"Host","controller.example.invalid");
  char seq[16];snprintf(seq,sizeof(seq),"%u",sequence);
  esp_http_client_set_header(client,"X-Voice-Session",controller_voice_session());esp_http_client_set_header(client,"X-Voice-Sequence",seq);
- esp_http_client_set_header(client,"Content-Type","application/octet-stream");esp_http_client_set_method(client,HTTP_METHOD_POST);
+ esp_http_client_set_header(client,"Content-Type","application/octet-stream");esp_http_client_set_header(client,"X-Voice-Dialogue","1");esp_http_client_set_method(client,HTTP_METHOD_POST);
  esp_err_t err=esp_http_client_open(client,size);unsigned sent=0;
  if(err==ESP_OK){
   while(sent<size){int n=esp_http_client_write(client,(const char*)pcm+sent,size-sent);if(n<=0)break;sent+=n;}
@@ -231,12 +247,12 @@ bool controller_voice_upload(const unsigned char *pcm,unsigned size,unsigned seq
 bool controller_voice_stream_upload(VoiceStream &stream){
  char url[256],auth[128],seq[16];snprintf(url,sizeof(url),"%s/voice/stream",server_endpoint());
  snprintf(auth,sizeof(auth),"Bearer %s",DISPLAY_TOKEN);snprintf(seq,sizeof(seq),"%u",stream.sequence);
- esp_http_client_config_t cfg={};cfg.url=url;cfg.timeout_ms=5000;cfg.common_name="controller.example.invalid";
+ esp_http_client_config_t cfg={};cfg.url=url;cfg.timeout_ms=15000;cfg.common_name="controller.example.invalid";
  cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.disable_auto_redirect=true;
  auto client=esp_http_client_init(&cfg);if(!client)return false;
  esp_http_client_set_header(client,"Authorization",auth);esp_http_client_set_header(client,"Host","controller.example.invalid");
  esp_http_client_set_header(client,"X-Voice-Session",controller_voice_session());esp_http_client_set_header(client,"X-Voice-Sequence",seq);
- esp_http_client_set_header(client,"Content-Type","application/octet-stream");esp_http_client_set_method(client,HTTP_METHOD_POST);
+ esp_http_client_set_header(client,"Content-Type","application/octet-stream");esp_http_client_set_header(client,"X-Voice-Dialogue","1");esp_http_client_set_method(client,HTTP_METHOD_POST);
  int64_t began=esp_timer_get_time(),first=0;bool ok=esp_http_client_open(client,-1)==ESP_OK;unsigned sent=0;
  auto write=[&](const char *p,unsigned n){return !stream.abort&&esp_http_client_write(client,p,n)==(int)n;};
  while(ok&&!stream.abort){
@@ -285,6 +301,8 @@ static auto current_preflight(){
 }
 bool controller_voice_prepared(){return online && current_preflight()[7]==controller::DONE;}
 static void preparation(uint8_t *frame){
+ int adb_error=controller_adb_error();
+ if(adb_error>0&&adb_error<8){memcpy(frame,interaction_adb_error[adb_error],5000);return;}
  auto rows=current_preflight();memset(frame,255,5000);
  int step=0;while(step<7 && rows[step]==controller::DONE)++step;
  // The tiny display shows one actual current step at readable size, not eight small rows.
@@ -329,29 +347,40 @@ static void screen_task(void*){
   const int current_page=page.load();
   const bool hid=controller_usb_hid_enabled();
   bool success=false;
-  if(current_page==HOME_PAGE+5){
-   const unsigned char *states[]={ota_state_0,ota_state_1,ota_state_2,ota_state_3,ota_state_4,ota_state_5};
-   memcpy(frame,states[controller_ota_stage()],5000);
+  ble_ota_state_t ble_state;uint8_t ble_progress,ble_error;
+  ble_ota_status(&ble_state,&ble_progress,&ble_error);
+  if(ble_ota_busy()||ble_state==BLE_OTA_READY){
+   memcpy(frame,interaction_ble[(int)ble_state],5000);
+   for(int y=143;y<151;++y)for(int x=8;x<192;++x)
+    if(y==143||y==150||x==8||x==191||x<8+184*ble_progress/100)frame[y*25+x/8]&=~(0x80>>(x%8));
+  }else if(current_page==HOME_PAGE+5){
+   memcpy(frame,interaction_ota[controller_ota_stage()],5000);
   }else if(current_page==HOME_PAGE){
-   memcpy(frame,touch_home_screen,5000);
+   int status=stopped?3:controller_voice_prepared()?2:online?1:0;
+   memcpy(frame,interaction_home[status],5000);
   }else if(current_page==HOME_PAGE+1){
-   memcpy(frame,manual_control_screen,5000);
+   memcpy(frame,interaction_manual[0],5000);
   }else if(current_page==HOME_PAGE+2){
-   memcpy(frame,manual_control_screen_2,5000);
+   memcpy(frame,interaction_manual[1],5000);
   }else if(current_page==HOME_PAGE+3){
-   memcpy(frame,manual_control_screen_3,5000);
+   memcpy(frame,interaction_manual[2],5000);
   }else if(current_page==HOME_PAGE+4){
-   memcpy(frame,manual_control_screen_4,5000);
+   memcpy(frame,interaction_manual[3],5000);
+  }else if(current_page==HOME_PAGE+6){
+   memcpy(frame,interaction_sound[(controller_audio_muted()?6:0)+controller_audio_volume()/20],5000);
   }else if(current_page==2){
    memcpy(frame,hid?mode_enabled_screen:mode_disabled_screen,5000);
   }else if(current_page==PAGE_COUNT-1){
    int voice=controller_voice_stage();
+   bool result_shown=(voice==11||voice==3||voice==5)&&dialogue_copy(frame);
+   if(!result_shown){
 #if CONFIG_CONTROLLER_USB_LOCAL
-   if(voice>=7 || voice==0 || voice==6)preparation(frame);
-   else memcpy(frame,voice_screens[(voice>=0&&voice<10)?voice:5],5000);
+   if((voice>=7&&voice<=9) || voice==0 || voice==6){if(controller_voice_prepared())memcpy(frame,interaction_voice[0],5000);else preparation(frame);}
+   else memcpy(frame,interaction_voice[(voice>=0&&voice<12)?voice:5],5000);
 #else
-   memcpy(frame,voice_screens[(voice>=0&&voice<10)?voice:5],5000);
+   memcpy(frame,interaction_voice[(voice>=0&&voice<12)?voice:5],5000);
 #endif
+   }
   }else if(current_page==3){
    int stage=controller_usb_net_stage();memcpy(frame,stage?network_screens[stage-1]:boot_screen,5000);
   }else{
@@ -361,14 +390,14 @@ static void screen_task(void*){
    taskEXIT_CRITICAL(&cache_mux);
    if(!success)memcpy(frame,selected?loading_screen_1:loading_screen_0,5000);
   }
-  if(current_page<=HOME_PAGE)draw_footer(frame,current_page==PAGE_COUNT-1?1:0);
+  memcpy(frame+162*25,interaction_footer,sizeof(interaction_footer));
   if(current_page==HOME_PAGE+5&&controller_ota_stage()==2){
    // Progress is local, drawn without any network round-trip.
    memset(frame+29*25,255,12*25);int percent=controller_ota_progress();
    for(int y=31;y<39;++y)for(int x=8;x<192;++x)
     if(y==31||y==38||x==8||x==191||x<8+184*percent/100)frame[y*25+x/8]&=~(0x80>>(x%8));
   }
-  memcpy(frame+188*25,version_footer,sizeof(version_footer));
+  memset(frame+188*25,255,12*25); // Keep tiny build metadata off the 1.54-inch display.
   if(epoch!=screen_epoch.load() || current_page!=page.load())continue;
   if(memcmp(frame,previous,5000) || previous_epoch!=epoch){
    screen_painting=true;
@@ -397,9 +426,10 @@ static void screen_task(void*){
  }
 }
 static void stop_now(){
+ stop_sequence.fetch_add(1);
  controller_event("stop",page.load());
  taskENTER_CRITICAL(&consent_mux);
- controller_adb_cancel();controller_voice_cancel();stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
+ ble_ota_cancel();controller_ota_cancel();controller_adb_cancel();controller_voice_cancel();controller_audio_interrupt();stopped=true;stop_pending=true;controller_release();controller_usb_request_mode(false);go_page(1);
  taskEXIT_CRITICAL(&consent_mux);
  if(screen_task_handle)xTaskNotifyGive(screen_task_handle);
  ESP_LOGI(TAG,"Local stop latched; no actuator enabled");
@@ -408,21 +438,27 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
  using controller::TouchTarget;
  controller_event("action",page.load(),(int)target);
  switch(target){
+ case TouchTarget::SOUND_SETTINGS:go_page(HOME_PAGE+6);break;
+ case TouchTarget::VOLUME_DOWN:controller_audio_adjust(-20);controller_ota_changed();break;
+ case TouchTarget::VOLUME_UP:controller_audio_adjust(20);controller_ota_changed();break;
+ case TouchTarget::MUTE:controller_audio_toggle_mute();controller_ota_changed();break;
+ case TouchTarget::SOUND_TEST:controller_audio_prompt(controller::SpeechPrompt::TEST);break;
  case TouchTarget::UPDATE:controller_ota_start();screen_dirty=true;break;
  case TouchTarget::START:
+  if(controller_voice_conversing()){stop_now();go_page(HOME_PAGE);break;}
   go_page(PAGE_COUNT-1);
-#if CONFIG_CONTROLLER_USB_LOCAL
-  stopped=false;controller_voice_prepare();
-#endif
+  stopped=false;controller_voice_conversation();
   break;
- case TouchTarget::HOME:controller_voice_hold(false);go_page(HOME_PAGE);break;
+ case TouchTarget::HOME:controller_voice_cancel();go_page(HOME_PAGE);break;
  case TouchTarget::QUOTA:go_page(0);break;
  case TouchTarget::CONTROL:go_page(controller_usb_hid_enabled()?HOME_PAGE+1:2);break;
  case TouchTarget::PHONE_HOME:case TouchTarget::PHONE_BACK:{
+  if(!controller_usb_hid_enabled()){go_page(2);break;}
   bool ok=controller_usb_phone_key(target==TouchTarget::PHONE_HOME);
   controller_event("action",page.load(),(int)target,1,ok?1:0);break;
  }
  case TouchTarget::UP:case TouchTarget::DOWN:case TouchTarget::LEFT:case TouchTarget::RIGHT:case TouchTarget::CLICK:{
+  if(!controller_usb_hid_enabled()){go_page(2);break;}
   bool ok=controller_usb_mouse(target==TouchTarget::LEFT?-24:target==TouchTarget::RIGHT?24:0,
     target==TouchTarget::UP?-24:target==TouchTarget::DOWN?24:0,target==TouchTarget::CLICK);
   controller_event("mouse",page.load(),(int)target,0,ok?1:0);break;
@@ -442,89 +478,120 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
 }
 static void input_task(void*){
  controller::TouchGesture gesture;controller::TouchContact contact_state;int touch_page=-1;
- controller::ButtonGesture side_key;bool touch_voicing=false,key_voicing=false,key_confirming=false;int64_t key_began=0;unsigned key_epoch=0;unsigned touch_voice_epoch=0;
- controller::GestureDetector swipes;int64_t swipe_fired_ms=-100000;
-
- bool power_held=false,power_done=false;int64_t power_began=0;
+ controller::ButtonGesture side_key;controller::ControlButton control_key;controller::GestureDetector swipes;
+ controller::DebouncedButton voice_debounce,power_debounce,external_control_debounce;
+ controller::PressFeedback voice_press,power_press,external_press;
+ unsigned swipe_epoch=0;bool swipe_contact=false;
+ bool touch_voicing=false,key_voicing=false;unsigned touch_voice_epoch=0;
+ bool updating=false;
+ controller::PowerOffHold power_off;controller::StopReleaseGate stop_gate;unsigned seen_stop=stop_sequence.load();
  for(;;){
-  bool down=gpio_get_level(GPIO_NUM_0)==0;
   int64_t now=esp_timer_get_time()/1000;
-  int tx=0,ty=0;int contact=controller_touch_read(tx,ty);
-  auto edge=contact_state.update(contact);
-  // 轨迹手势（滑动/双击/长按）：只在这一处喂点，抬手时最多吐一次结果。
-  auto swipe=swipes.feed(contact==1,tx,ty,now);
-  if(swipe!=controller::Gesture::None){
-   swipe_fired_ms=now;
-   controller_event("swipe",page.load(),(int)swipe);
-   bool in_confirm=page==2 || touch_voicing || key_voicing || key_confirming;
-   switch(swipe){
-   case controller::Gesture::SwipeUp:
-    if(!in_confirm){go_page(controller::next_page(page.load(),HOME_PAGE));}
-    break;
-   case controller::Gesture::SwipeDown:
-    if(!in_confirm){go_page(page.load()<=HOME_PAGE?PAGE_COUNT-1:page.load()-1);}
-    break;
-   case controller::Gesture::DoubleTap:
-    if(!in_confirm){screen_dirty=true;xTaskNotifyGive(screen_task_handle);}
-    break;
-   case controller::Gesture::LongPress:
-    // 长按与既有"按住说话"共用入口；确认页/录音中不抢。
-    if(!in_confirm && page==HOME_PAGE){go_page(PAGE_COUNT-1);touch_voice_epoch=screen_epoch.load();
-     touch_voicing=true;stopped=false;controller_voice_hold(true);}
-    break;
-   default:break;
+  bool voice_raw=gpio_get_level(GPIO_NUM_0)==0,external_control_raw=false;
+#if CONFIG_CONTROLLER_EXTERNAL_KEYS
+  voice_raw=voice_raw||gpio_get_level(GPIO_NUM_1)==0;
+  external_control_raw=gpio_get_level(GPIO_NUM_2)==0;
+#endif
+  bool down=voice_debounce.update(voice_raw,now);
+  bool power_down=power_debounce.update(gpio_get_level(GPIO_NUM_18)==0,now);
+  bool external_control_down=external_control_debounce.update(external_control_raw,now);
+  bool control_down=power_down||external_control_down;
+  bool voice_pressed=voice_press.update(down),power_pressed=power_press.update(power_down),external_pressed=external_press.update(external_control_down);
+  if(voice_pressed||power_pressed||external_pressed)controller_audio_prompt(controller::SpeechPrompt::CLICK);
+  int tx=0,ty=0;int contact=controller_touch_read(tx,ty);auto edge=contact_state.update(contact);
+  auto target=contact==1?controller::touch_target(page.load(),tx,ty,HOME_PAGE):controller::TouchTarget::NONE;
+  if(edge==controller::TouchEdge::DOWN)controller_event("touch_down",page.load(),tx,ty,(int)target);
+  if(edge==controller::TouchEdge::UP)controller_event("touch_up",page.load(),(int)(now-gesture.began),(int)gesture.target,screen_failed?3:screen_painting?2:0);
+  // Stop is acted on at contact-down, including during display refresh and OTA.
+  if(page==PAGE_COUNT-1&&contact==1)target=controller::voice_touch_target(tx,ty,controller_voice_stage(),controller_voice_conversing(),dialogue_frame_valid.load());
+  if(edge==controller::TouchEdge::DOWN&&target!=controller::TouchTarget::STOP)controller_audio_prompt(controller::SpeechPrompt::CLICK);
+  if(edge==controller::TouchEdge::DOWN&&target==controller::TouchTarget::STOP){
+   stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();
+  }
+  if(edge==controller::TouchEdge::DOWN&&target==controller::TouchTarget::FINISH){
+   bool accepted=controller_voice_finish();controller_event("voice_finish",page.load(),0,0,accepted?1:0);
+   gesture.cancel();swipes.reset();swipe_contact=false;
+   vTaskDelay(pdMS_TO_TICKS(20));continue;
+  }
+  auto control_event=control_key.update(control_down,now);
+  bool ota_busy=controller_ota_busy()||ble_ota_busy();
+  if(control_event==controller::ControlEvent::STOP){
+   stop_now();go_page(HOME_PAGE);touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();
+  }else if(control_event==controller::ControlEvent::MUTE){
+   controller_audio_toggle_mute();
+   if(!ota_busy&&!touch_voicing&&!key_voicing)go_page(HOME_PAGE+6);else controller_ota_changed();
+  }else if(control_event==controller::ControlEvent::HOME&&!ota_busy){
+   if(page==HOME_PAGE+6){controller_audio_adjust(-20);controller_ota_changed();}
+   else{controller_voice_cancel();touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();if(page!=HOME_PAGE)go_page(HOME_PAGE);}
+  }
+  // Only the onboard power key can shut down. External B is always a control key.
+  if(power_off.update(power_down,now)){stop_now();gpio_set_level(GPIO_NUM_17,0);}
+  if(seen_stop!=stop_sequence.load()){
+   stop_gate.stop();seen_stop=stop_sequence.load();controller_voice_cancel();
+   controller_audio_prompt(controller::SpeechPrompt::STOPPED);
+  }
+  if(stop_gate.blocked(down,control_down,contact==1)){
+   gesture.cancel();swipes.reset();side_key=controller::ButtonGesture{};control_key=controller::ControlButton{};
+   touch_voicing=key_voicing=false;vTaskDelay(pdMS_TO_TICKS(20));continue;
+  }
+  if(ota_busy){
+   (void)side_key.update(down,now);
+   if(!updating){controller_voice_cancel();touch_voicing=key_voicing=false;}
+   updating=true;
+   gesture.cancel();swipes.reset();vTaskDelay(pdMS_TO_TICKS(20));continue;
+  }
+  updating=false;
+  // Recording release always wins over long-press/double-tap classification.
+  if(touch_voicing){
+   auto voice_contact=controller::voice_contact(contact,tx,ty,screen_epoch.load()==touch_voice_epoch);
+   if(voice_contact==controller::VoiceContact::SEND){touch_voicing=false;controller_voice_hold(false);gesture.cancel();swipes.reset();}
+   else if(voice_contact==controller::VoiceContact::CANCEL){
+    controller_voice_cancel();touch_voicing=false;gesture.cancel();swipes.reset();
+   }
+  }else if(contact<0){gesture.cancel();swipes.reset();}
+  else{
+   auto swipe=controller::Gesture::None;
+   if(edge==controller::TouchEdge::DOWN){swipe_epoch=screen_epoch.load();swipe_contact=true;}
+   if(!screen_painting&&!screen_failed&&page!=2&&!key_voicing&&swipe_contact&&swipe_epoch==screen_epoch.load())
+    swipe=swipes.feed(contact==1,tx,ty,now);
+   else {swipes.reset();swipe_contact=false;}
+   if(contact==0)swipe_contact=false;
+   if(swipe!=controller::Gesture::None){
+    gesture.cancel();
+    switch(swipe){
+    case controller::Gesture::SwipeUp:controller_voice_cancel();go_page(controller::next_page(page.load(),HOME_PAGE));break;
+    case controller::Gesture::SwipeDown:controller_voice_cancel();go_page(controller::previous_page(page.load(),HOME_PAGE));break;
+    case controller::Gesture::DoubleTap:controller_voice_cancel();go_page(HOME_PAGE);break;
+    default:break; // Hold-to-talk starts while held; never start it after release.
+    }
+   }else if(contact==1){
+    if(edge==controller::TouchEdge::DOWN){
+     touch_page=page.load();
+     if(!screen_failed&&!screen_painting)gesture.begin(screen_epoch.load(),painted_epoch.load(),target,now);
+    }else if(screen_painting||page!=touch_page||target!=gesture.target)gesture.cancel();
+   }else if(edge==controller::TouchEdge::UP){
+    auto action=gesture.target;int64_t began=gesture.began;
+    if(!screen_failed&&!screen_painting&&gesture.release(screen_epoch.load(),now))touch_action(action,began,now);
    }
   }
-  if(controller_ota_busy()){if(gpio_get_level(GPIO_NUM_18)==0)controller_ota_cancel();gesture.cancel();swipes.reset();vTaskDelay(pdMS_TO_TICKS(20));continue;}
-  if(contact==1){
-   auto target=controller::touch_target(page.load(),tx,ty,HOME_PAGE);
-   if(touch_voicing){
-    if(screen_epoch.load()!=touch_voice_epoch || target!=controller::TouchTarget::START){controller_voice_cancel();touch_voicing=false;}
-   }else if(edge==controller::TouchEdge::DOWN){
-    touch_page=page.load();
-    if(!screen_failed && !screen_painting)gesture.begin(screen_epoch.load(),painted_epoch.load(),target,now);
-    ESP_LOGI(TAG,"Touch down x=%d y=%d page=%d",tx,ty,touch_page);
-    controller_event("touch",touch_page,tx,ty);
-   }else if(screen_painting || page!=touch_page || target!=gesture.target)gesture.cancel();
-   if(!gesture.active&&!touch_voicing&&!key_voicing&&target==controller::TouchTarget::START&&!screen_painting&&!screen_failed)
-    gesture.begin(screen_epoch.load(),painted_epoch.load(),target,now);
-   if(!touch_voicing && !key_voicing && gesture.active && gesture.target==controller::TouchTarget::START && now-gesture.began>=600){
-    gesture.cancel();go_page(PAGE_COUNT-1);touch_voice_epoch=screen_epoch.load();
-    touch_voicing=true;stopped=false;controller_voice_hold(true);
-   }
-  }else if(contact==0 && edge==controller::TouchEdge::UP){
-   // 刚判定过滑动/双击/长按的抬手不再当按钮点按，防一次滑动+按钮双触发。
-   if(swipe_fired_ms==now){/* consumed by gesture */}
-   else if(touch_voicing){touch_voicing=false;controller_voice_hold(false);gesture.cancel();}
-   else{auto target=gesture.target;int64_t start=gesture.began;
-    if(!screen_failed && !screen_painting && gesture.release(screen_epoch.load(),now))touch_action(target,start,now);
-   }
-  }else if(contact<0){
-   gesture.cancel();if(touch_voicing){touch_voicing=false;controller_voice_cancel();}
-  }
-  switch(side_key.update(down,esp_timer_get_time()/1000)){
-  case controller::ButtonEvent::NEXT:controller_event("button",page.load(),1);go_page(controller::next_page(page.load(),HOME_PAGE));break;
-  case controller::ButtonEvent::HOME:controller_event("button",page.load(),2);controller_voice_cancel();go_page(HOME_PAGE);break;
-  case controller::ButtonEvent::VOICE_DOWN:controller_event("button",page.load(),3);
-   if(page==HOME_PAGE+5){controller_ota_start();}
-   else if(page==2){key_confirming=true;key_began=side_key.pressed;key_epoch=screen_epoch.load();}
-   else if(page>HOME_PAGE){bool ok=controller_usb_phone_key(true);controller_event("action",page.load(),(int)controller::TouchTarget::PHONE_HOME,1,ok);}
-   else if(!touch_voicing){key_voicing=true;go_page(PAGE_COUNT-1);stopped=false;controller_voice_hold(true);}
+  switch(side_key.update(down,now)){
+  case controller::ButtonEvent::NEXT:
+   if(page==HOME_PAGE+6){controller_audio_adjust(20);controller_ota_changed();}
+   else{controller_voice_cancel();touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();go_page(controller::next_page(page.load(),HOME_PAGE));}
    break;
-  case controller::ButtonEvent::VOICE_UP:controller_event("button",page.load(),4);if(key_confirming){key_confirming=false;if(key_epoch==screen_epoch.load())touch_action(controller::TouchTarget::CONFIRM,key_began,now);}
-   else if(key_voicing){key_voicing=false;controller_voice_hold(false);}
+  case controller::ButtonEvent::HOME:
+   controller_voice_cancel();touch_voicing=key_voicing=false;gesture.cancel();swipes.reset();go_page(HOME_PAGE);break;
+  case controller::ButtonEvent::VOICE_DOWN:
+   // A always means hold-to-talk, regardless of the current page. It never
+   // silently confirms HID access or starts a firmware update.
+   if(!touch_voicing){key_voicing=true;go_page(PAGE_COUNT-1);stopped=false;controller_voice_hold(true);}
+   break;
+  case controller::ButtonEvent::VOICE_UP:
+   if(key_voicing){key_voicing=false;controller_voice_hold(false);}
    break;
   default:break;
   }
-  if(page==2 && consent_visible_at>0 && now-consent_visible_at.load()>=15000)go_page(HOME_PAGE);
-  bool power_down=gpio_get_level(GPIO_NUM_18)==0;
-  if(power_down&&!power_held){power_held=true;power_done=false;power_began=now;controller_event("button",page.load(),5);}
-  if(!power_down&&power_held){controller_event("button",page.load(),6);power_held=false;}
-  if(power_down&&power_held&&!power_done&&now-power_began>=1500){
-   power_done=true;stop_now();
-   ESP_LOGI(TAG,"PWR long press: disabling battery power latch; USB may still supply power");
-   gpio_set_level(GPIO_NUM_17,0);
-  }
+  if(page==2&&consent_visible_at>0&&now-consent_visible_at.load()>=15000)go_page(HOME_PAGE);
   vTaskDelay(pdMS_TO_TICKS(20));
  }
 }
@@ -552,6 +619,19 @@ static void console_command(char *line){
 #endif
  }
  else if(strcmp(line,"WIFI OFF")==0){wifi_enabled=false;wifi_connected=false;online=controller_usb_net_has_ip();if(wifi_initialized){esp_wifi_stop();}controller_usb_write("WiFi disabled\r\n");}
+ else if(strcmp(line,"HEAP")==0){char out[180];snprintf(out,sizeof(out),"HEAP internal=%u largest=%u dma=%u dma_largest=%u\r\n",(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),(unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));controller_usb_write(out);}
+ else if(strcmp(line,"AUDIO")==0){char out[120];snprintf(out,sizeof(out),"AUDIO volume=%d muted=%d stage=%d\r\n",controller_audio_volume(),controller_audio_muted(),controller_voice_stage());controller_usb_write(out);}
+ else if(strcmp(line,"AUDIO UP")==0){controller_audio_adjust(20);controller_ota_changed();}
+ else if(strcmp(line,"AUDIO DOWN")==0){controller_audio_adjust(-20);controller_ota_changed();}
+ else if(strcmp(line,"AUDIO MUTE")==0){controller_audio_toggle_mute();controller_ota_changed();}
+ else if(strcmp(line,"AUDIO TEST")==0){controller_audio_prompt(controller::SpeechPrompt::TEST);}
+ else if(strcmp(line,"AUDIO AUDIT")==0){controller_audio_prompt(controller::SpeechPrompt::AUDIT);}
+ else if(strcmp(line,"AUDIO CLICK")==0){controller_audio_prompt(controller::SpeechPrompt::CLICK);}
+ else if(strcmp(line,"VOICE PREPARE")==0){stopped=false;go_page(PAGE_COUNT-1);controller_voice_prepare();controller_usb_write("Voice connection check requested\r\n");}
+ else if(strcmp(line,"VOICE START")==0){stopped=false;go_page(PAGE_COUNT-1);controller_voice_conversation();controller_usb_write("Continuous voice requested\r\n");}
+ else if(strcmp(line,"VOICE DOWN")==0){stopped=false;go_page(PAGE_COUNT-1);controller_voice_hold(true);controller_usb_write("Voice hold requested\r\n");}
+ else if(strcmp(line,"VOICE FINISH")==0){controller_usb_write(controller_voice_finish()?"Voice submitted\r\n":"Not recording\r\n");}
+ else if(strcmp(line,"VOICE UP")==0){controller_voice_hold(false);controller_usb_write("Voice hold released\r\n");}
  else if(strcmp(line,"MIC TEST")==0){controller_voice_test();controller_usb_write("Microphone diagnostic: one second; samples discarded\r\n");}
  else if(strcmp(line,"PAGE")==0)go_page(controller::next_page(page.load(),HOME_PAGE));
  else if(strcmp(line,"SAFE")==0){taskENTER_CRITICAL(&consent_mux);controller_usb_request_mode(false);go_page(0);taskEXIT_CRITICAL(&consent_mux);}
@@ -604,7 +684,11 @@ extern "C" void app_main(){
  ESP_ERROR_CHECK(esp_netif_init());ESP_ERROR_CHECK(esp_event_loop_create_default());
  gpio_config_t power={};power.pin_bit_mask=(1ULL<<6)|(1ULL<<42)|(1ULL<<17);power.mode=GPIO_MODE_OUTPUT;
  ESP_ERROR_CHECK(gpio_config(&power));gpio_set_level(GPIO_NUM_6,0);gpio_set_level(GPIO_NUM_42,1);gpio_set_level(GPIO_NUM_17,1);
- gpio_config_t button={};button.pin_bit_mask=(1ULL<<0)|(1ULL<<18);button.mode=GPIO_MODE_INPUT;button.pull_up_en=GPIO_PULLUP_ENABLE;ESP_ERROR_CHECK(gpio_config(&button));
+ gpio_config_t button={};button.pin_bit_mask=(1ULL<<0)|(1ULL<<18);
+#if CONFIG_CONTROLLER_EXTERNAL_KEYS
+ button.pin_bit_mask|=(1ULL<<1)|(1ULL<<2);
+#endif
+button.mode=GPIO_MODE_INPUT;button.pull_up_en=GPIO_PULLUP_ENABLE;ESP_ERROR_CHECK(gpio_config(&button));
  controller_touch_init();
  controller_usb_start();controller_adb_init();controller_voice_init();
  controller_storage_start();

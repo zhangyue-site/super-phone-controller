@@ -1,4 +1,5 @@
 #include "ota.h"
+#include "ble_ota.h"
 #include "device_config.h"
 #include "usb.h"
 #include "voice.h"
@@ -118,7 +119,7 @@ static void worker(void*){
  busy=false;vTaskDelete(nullptr);
 }
 void controller_ota_start(){
- if(busy.exchange(true))return;
+ if(ble_ota_busy()||busy.exchange(true))return;
  cancelled=false;progress=0;set_stage(1);controller_voice_cancel();controller_usb_request_mode(false);controller_release();
  if(xTaskCreate(worker,"ota",12288,nullptr,3,nullptr)!=pdPASS){busy=false;set_stage(5);}
 }
