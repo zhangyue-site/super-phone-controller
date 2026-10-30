@@ -8,7 +8,7 @@ cc_cmd=${CC:-cc}
 cxx_cmd=${CXX:-c++}
 python_cmd=${PYTHON:-python3}
 "$cc_cmd" -std=c11 -Ifirmware-epaper/main -c firmware-epaper/main/ota_guard.c -o "$task_dir/ota_guard.o"
-for suite in usb_console_policy http_keyboard_policy product_display_policy touch_ui interaction keyboard_policy ble_local_policy usb_consent usb_endpoint_budget power_key_policy ota_resume_policy ota_health hid_pointer relay_display_policy; do
+for suite in tap_consent usb_console_policy http_keyboard_policy product_display_policy touch_ui interaction keyboard_policy ble_local_policy usb_consent usb_endpoint_budget power_key_policy ota_resume_policy ota_health hid_pointer relay_display_policy; do
  "$cxx_cmd" -std=c++17 -pthread -Ifirmware-epaper/main "tests/${suite}_test.cpp" firmware-epaper/main/gesture.cpp "$task_dir/ota_guard.o" -o "$task_dir/$suite"
  "$task_dir/$suite"
  echo "$suite PASS"

@@ -12,7 +12,7 @@ VERSION=re.search(r'set\(PROJECT_VER\s+"([0-9]+\.[0-9]+\.[0-9]+)"\)',(ROOT/'firm
 FONT='/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc'
 # Keep existing hit areas exactly; consent and footer are safety-sensitive.
 LAYOUT={'width':200,'height':200,'title_end':45,'top_begin':45,'top_end':100,'bottom_begin':105,'bottom_end':155,'consent_begin':65,'consent_end':125,'footer_begin':162,'footer_end':188,'footer_split':100,'sound_top_begin':54,'sound_top_end':100,'sound_bottom_begin':108,'sound_bottom_end':154}
-HOMES=[('待连接','请连接被控手机USB'),('需要允许操作','点手机控制 · 按住允许'),('已允许操作','云端与画面请在手机核对'),('手机中转已连接','画面与操作结果请看手机'),('操作已停止','本地操作许可已撤销'),('连接已中断','请重新检查手机与控制板'),('操作未完成','请在手机检查结果'),('网络待连接','本地许可有效 · 检查网络')]
+HOMES=[('待连接','请连接被控手机USB'),('需要允许操作','点手机控制 · 两步确认'),('已允许操作','云端与画面请在手机核对'),('手机中转已连接','画面与操作结果请看手机'),('操作已停止','本地操作许可已撤销'),('连接已中断','请重新检查手机与控制板'),('操作未完成','请在手机检查结果'),('网络待连接','本地许可有效 · 检查网络')]
 OTA=[('控制板升级',f'当前版本 {VERSION}','检查 Wi-Fi 升级','返回首页'),('正在检查版本','请保持供电','等待服务器回复',''),('正在传输固件','请保持供电','停止可取消传输',''),('正在重启','镜像校验已通过','启动结果待手机核验',''),('无需升级','当前已是目标版本','返回继续使用',''),('升级未完成','保留原有效固件','请在手机查看原因','')]
 BLE=[('蓝牙维护','在手机选择升级文件','请保持供电'),('蓝牙传输中','请保持手机靠近','停止可取消传输'),('正在校验固件','正在完成安全写入','请勿拔电'),('即将重启','镜像校验已通过','启动结果待手机核验'),('升级未完成','保留原有效固件','请在手机查看原因')]
 POWER=[('松手关机','继续按住至30秒重启','正在升级时等待安全退出'),('正在停止任务','等待升级安全退出','请保持供电'),('等待安全写入','正在提交固件','暂不关机或重启'),('已待机','按电源键恢复','USB供电时仍保留维护'),('未能安全关闭','请稍后重试','仍可使用手机维护')]
@@ -48,10 +48,12 @@ def generate():
  groups['product_home']=homes
  modes=[]
  for enabled in (False,True):
-  im=blank();text(im,'停止手机操作' if enabled else '允许手机操作',8,23)
-  text(im,'请确认USB连被控手机',43,16)
-  button(im,'按住2秒停止' if enabled else '按住2秒允许','',LAYOUT['consent_begin'],LAYOUT['consent_end'])
-  text(im,'15秒未操作返回首页',137,15);footer(im);modes.append(im)
+  for step in (0,1):
+   im=blank();text(im,('确认停止操作' if enabled else '确认允许操作') if step else ('停止手机操作' if enabled else '允许手机操作'),8,23)
+   text(im,'请确认USB连被控手机' if step else '也可短按BOOT操作',43,16)
+   label=('确认停止' if enabled else '确认允许') if step else '点按下一步'
+   button(im,label,'',LAYOUT['consent_begin'],LAYOUT['consent_end'])
+   text(im,'15秒内完成确认',137,15);footer(im);modes.append(im)
  groups['product_mode']=modes
  for name,states in [('product_ota',OTA),('product_ble',BLE),('product_power',POWER)]:
   frames=[]

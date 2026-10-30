@@ -34,6 +34,7 @@
 #include "boot_screen.h"
 #include "mode_screens.h"
 #include "mode_consent.h"
+#include "tap_consent.h"
 #include "diagnostics.h"
 #include "usb_network.h"
 #include "network_screens.h"
@@ -91,8 +92,11 @@ static TaskHandle_t screen_task_handle;
 static EXT_RAM_BSS_ATTR uint8_t panel_frame[5000];
 static bool panel_frame_valid=false;
 static portMUX_TYPE consent_mux=portMUX_INITIALIZER_UNLOCKED;
+static std::atomic<int> consent_step(0);
+static std::atomic<int64_t> consent_deadline(0);
 static void go_page(int target){
  taskENTER_CRITICAL(&consent_mux);
+ if(target!=2||page.load()!=2){consent_step=0;consent_deadline=0;}
  consent_visible_at=0;screen_epoch.fetch_add(1);page=target;
  controller_event("page",target);
  taskEXIT_CRITICAL(&consent_mux);
@@ -442,7 +446,7 @@ static void screen_task(void*){
   }else if(current_page==HOME_PAGE+6){
    memcpy(frame,product_sound[(controller_audio_muted()?6:0)+controller_audio_volume()/20],5000);
   }else if(current_page==2){
-   memcpy(frame,product_mode[hid?1:0],5000);
+   memcpy(frame,product_mode[(hid?2:0)+consent_step.load()],5000);
   }else if(current_page==PAGE_COUNT-1){
    int voice=controller_voice_stage();
    bool result_shown=(voice==10||voice==11||voice==3||voice==5)&&dialogue_copy(frame,&visible_revision);
@@ -509,6 +513,7 @@ static void screen_task(void*){
    if(current_page==2 && epoch==screen_epoch.load() && page==2){
     painted_hid=hid;painted_epoch=epoch;
     consent_visible_at=esp_timer_get_time()/1000;
+   if(!consent_deadline.load())consent_deadline=consent_visible_at.load()+15000;
    }
    taskEXIT_CRITICAL(&consent_mux);
    if(visible_revision&&current_page==PAGE_COUNT-1&&epoch==screen_epoch.load()&&visible_revision==dialogue_revision.load()){
@@ -579,9 +584,11 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
  case TouchTarget::CONFIRM:{
   taskENTER_CRITICAL(&consent_mux);
   bool same=page==2 && painted_epoch.load()==screen_epoch.load() &&
-            painted_hid.load()==controller_usb_hid_enabled() && !screen_failed;
-  if(controller::can_confirm(consent_visible_at.load(),began,now,same)){
-   bool enable=!painted_hid.load();controller_usb_request_mode(enable);go_page(enable?HOME_PAGE+1:HOME_PAGE);
+            painted_hid.load()==controller_usb_hid_enabled() && !screen_failed&&!screen_painting&&!power_locked&&!controller_ota_busy()&&!ble_ota_busy();
+  if(now<consent_deadline.load()&&controller::consent_short_tap(consent_visible_at.load(),began,now,same)){
+   controller::consent_tap_transition(consent_step.load(),
+    [](){consent_step=1;go_page(2);},
+    [](){bool enable=!painted_hid.load();controller_usb_request_mode(enable);go_page(enable?HOME_PAGE+1:HOME_PAGE);});
   }
   taskEXIT_CRITICAL(&consent_mux);break;
  }
@@ -590,7 +597,7 @@ static void touch_action(controller::TouchTarget target,int64_t began,int64_t no
 }
 static void input_task(void*){
  controller::TouchGesture gesture;controller::TouchContact contact_state;int touch_page=-1;
- controller::LocalConfirmKey confirm_key;int last_trace_contact=-99;int64_t last_trace_at=0;
+ controller::ConsentTapInput touch_confirm,key_confirm,home_confirm;controller::ConsentExitKeyGate side_release;int last_trace_contact=-99;int64_t last_trace_at=0;
  controller::ButtonGesture side_key;controller::ControlButton control_key;controller::GestureDetector swipes;
  controller::DebouncedButton voice_debounce,power_debounce,external_control_debounce;
  controller::PressFeedback voice_press,power_press,external_press;
@@ -632,6 +639,7 @@ static void input_task(void*){
     else{power_standby=true;standby_released=false;power_show(4);gpio_set_level(GPIO_NUM_17,0);}
    }
   }
+  if(page==2)side_release.on_consent_page();
   bool external_control_down=external_control_debounce.update(external_control_raw,now);
   bool control_down=(power_key.ready&&power_down)||external_control_down;
   bool voice_pressed=voice_press.update(down),power_pressed=power_press.update(power_down),external_pressed=external_press.update(external_control_down);
@@ -688,6 +696,24 @@ static void input_task(void*){
    gesture.cancel();swipes.reset();vTaskDelay(pdMS_TO_TICKS(20));continue;
   }
   updating=false;
+  if(page==2){
+   // Confirmation is a separate two-tap flow; ordinary holds/swipes cannot authorize.
+   gesture.cancel();swipes.reset();side_key=controller::ButtonGesture{};
+   unsigned current=screen_epoch.load();
+   bool ready=!screen_painting&&!screen_failed&&painted_epoch.load()==current&&painted_hid.load()==controller_usb_hid_enabled()&&now<consent_deadline.load();
+   auto touch_tap=touch_confirm.update(contact,target==controller::TouchTarget::CONFIRM,ready,current,consent_visible_at.load(),now);
+   auto key_tap=key_confirm.update(down?1:0,true,ready,current,consent_visible_at.load(),now);
+   auto home_tap=home_confirm.update(contact,target==controller::TouchTarget::HOME,ready,current,consent_visible_at.load(),now);
+   // At most one transition per loop, even if touch and BOOT are released together.
+   if(home_tap.confirm){touch_action(controller::TouchTarget::HOME,home_tap.began,now);}
+   else if(touch_tap.confirm||key_tap.confirm){
+    auto tap=touch_tap.confirm?touch_tap:key_tap;
+    controller_event("consent_tap",2,consent_step.load(),touch_tap.confirm?1:2,(int)(now-tap.began));
+    touch_action(controller::TouchTarget::CONFIRM,tap.began,now);
+   }
+   if(page==2&&consent_deadline>0&&now>=consent_deadline.load())go_page(HOME_PAGE);
+   vTaskDelay(pdMS_TO_TICKS(20));continue;
+  }
   // Recording release always wins over long-press/double-tap classification.
   if(touch_voicing){
    auto voice_contact=controller::voice_contact(contact,tx,ty,screen_epoch.load()==touch_voice_epoch);
@@ -729,13 +755,7 @@ static void input_task(void*){
    gesture.cancel();swipes.reset();swipe_contact=false;touch_voicing=true;
    go_page(PAGE_COUNT-1);touch_voice_epoch=screen_epoch.load();stopped=false;controller_voice_hold(true);
   }
-  bool confirmation_page=page==2;
-  bool confirmation_ready=confirmation_page&&!ota_busy&&!screen_painting&&!screen_failed&&painted_epoch.load()==screen_epoch.load()&&painted_hid.load()==controller_usb_hid_enabled();
-  auto confirm_event=confirm_key.update(down,confirmation_page,confirmation_ready,consent_visible_at.load(),now);
-  controller::ButtonEvent side_event=controller::ButtonEvent::NONE;
-  if(confirm_event.consume)side_key=controller::ButtonGesture{};
-  else side_event=side_key.update(down,now);
-  if(confirm_event.confirm){controller_event("touch",2,205,1,(int)(now-confirm_event.began));touch_action(controller::TouchTarget::CONFIRM,confirm_event.began,now);}
+  auto side_event=side_release.admit(down)?side_key.update(down,now):controller::ButtonEvent::NONE;
   switch(side_event){
   case controller::ButtonEvent::NEXT:
    if(page==HOME_PAGE+6){controller_audio_adjust(20);controller_ota_changed();}
@@ -753,7 +773,7 @@ static void input_task(void*){
    break;
   default:break;
   }
-  if(page==2&&consent_visible_at>0&&now-consent_visible_at.load()>=15000)go_page(HOME_PAGE);
+  if(page==2&&consent_deadline>0&&now>=consent_deadline.load())go_page(HOME_PAGE);
   vTaskDelay(pdMS_TO_TICKS(20));
  }
 }
