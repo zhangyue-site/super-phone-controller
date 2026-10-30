@@ -8,7 +8,7 @@ from pathlib import Path
 from . import control
 
 LOCK = threading.Lock()
-EVENTS = frozenset('boot page touch action button stop hid mouse upload'.split())
+EVENTS = frozenset('boot page touch touch_down touch_up action button stop hid mouse upload voice_finish ai_home'.split())
 
 
 def ingest(device, raw):

@@ -1,3 +1,5 @@
+import 'usb_launch.dart';
+import 'app_release.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -28,16 +30,73 @@ class _DeviceScreenState extends State<DeviceScreen> {
   Timer? _autoStop;
   StreamSubscription? _adapterSub;
   bool _opening = false;
+  bool _bluetoothOn = false;
+  UsbAttachment? _usb;
+  final _usbGate = UsbAutoShareGate();
+  int _usbRevision = 0;
+
+  Future<void> _acceptUsb(dynamic value) async {
+    if (!mounted) return;
+    _usbRevision++;
+    final previous = _usb?.session;
+    try {
+      final next = value == null ? null : UsbAttachment.parse(value as Map);
+      setState(() => _usb = next);
+      if (_opening && next != null && next.session != previous && !_svc.busy) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
+      await _tryUsbOpen();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _usb = null;
+          _error = 'USB识别：$e';
+        });
+      }
+    }
+  }
+
+  Future<void> _readUsb() async {
+    final revision = _usbRevision;
+    try {
+      final value = await UsbLaunch.snapshot();
+      if (!mounted || revision != _usbRevision) return;
+      final previous = _usb?.session;
+      setState(() => _usb = value);
+      if (previous != _usb?.session || !_opening) await _tryUsbOpen();
+    } catch (e) {
+      if (mounted && revision == _usbRevision) {
+        setState(() {
+          _usb = null;
+          _error = 'USB识别：$e';
+        });
+      }
+    }
+  }
+
+  Future<void> _tryUsbOpen() async {
+    final usb = _usb;
+    if (!_usbGate.claim(usb, bluetoothOn: _bluetoothOn, opening: _opening)) {
+      return;
+    }
+    await _openDevice(BluetoothDevice.fromId(usb!.remoteId!), usb: usb);
+  }
 
   @override
   void initState() {
     super.initState();
+    UsbLaunch.channel.setMethodCallHandler((call) async {
+      if (call.method == 'changed') await _acceptUsb(call.arguments);
+    });
+    _readUsb();
     _adapterSub = FlutterBluePlus.adapterState.listen((state) {
-      if (!mounted || _opening || state == BluetoothAdapterState.unknown) {
+      if (!mounted || state == BluetoothAdapterState.unknown) {
         return;
       }
-      if (state == BluetoothAdapterState.on) {
+      _bluetoothOn = state == BluetoothAdapterState.on;
+      if (_bluetoothOn) {
         _startScan();
+        _tryUsbOpen();
       } else {
         _stopScan();
         setState(() => _error = '请打开手机蓝牙，开启后会自动寻找控制板');
@@ -120,6 +179,7 @@ class _DeviceScreenState extends State<DeviceScreen> {
 
   @override
   void dispose() {
+    UsbLaunch.channel.setMethodCallHandler(null);
     _autoStop?.cancel();
     _scanSub?.cancel();
     _adapterSub?.cancel();
@@ -134,18 +194,29 @@ class _DeviceScreenState extends State<DeviceScreen> {
     return list;
   }
 
-  Future<void> _open(ScanResult r) async {
+  Future<void> _open(ScanResult r) => _openDevice(r.device, usb: _usb);
+
+  Future<void> _openDevice(BluetoothDevice device, {UsbAttachment? usb}) async {
     if (_opening) return;
     _opening = true;
+    if (usb != null) _usbGate.consume(usb);
     await _stopScan();
     if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => FirmwareScreen(service: _svc, device: r.device),
+      builder: (_) => FirmwareScreen(
+        service: _svc,
+        device: device,
+        usbAttachment: usb,
+        isUsbCurrent: () => mounted && _usb?.session == usb?.session,
+      ),
     ));
     // 从推送页返回后重新扫，避免板子重启后列表是旧的。
     await _svc.disconnect();
     _opening = false;
-    if (mounted) _checkBluetooth();
+    if (mounted) {
+      _checkBluetooth();
+      _tryUsbOpen();
+    }
   }
 
   @override
@@ -156,6 +227,10 @@ class _DeviceScreenState extends State<DeviceScreen> {
         title: const Text('控制板升级'),
         actions: [
           IconButton(
+              tooltip: 'App 版本与更新',
+              onPressed: () => AppRelease.show(context),
+              icon: const Icon(Icons.info_outline)),
+          IconButton(
             tooltip: '重新扫描',
             onPressed: _scanning ? null : _checkBluetooth,
             icon: const Icon(Icons.refresh),
@@ -164,6 +239,27 @@ class _DeviceScreenState extends State<DeviceScreen> {
       ),
       body: Column(
         children: [
+          if (_usb != null)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(children: [
+                Text(_usb!.isBound
+                    ? '已识别USB控制板，正在连接已配对的板子。共享画面将上传云端，需系统授权。'
+                    : '首次连接：请选择当前插入的控制板。只需配对一次，以后插入会自动请求共享整个屏幕。'),
+                if (_usb!.isBound && !_opening)
+                  TextButton(
+                      onPressed: () async {
+                        try {
+                          await UsbLaunch.channel.invokeMethod<void>(
+                              'forget', {'session': _usb!.session});
+                          await _readUsb();
+                        } catch (e) {
+                          if (mounted) setState(() => _error = '重新配对：$e');
+                        }
+                      },
+                      child: const Text('重新选择配对板')),
+              ]),
+            ),
           _ScanBar(
               scanning: _scanning,
               count: devices.length,

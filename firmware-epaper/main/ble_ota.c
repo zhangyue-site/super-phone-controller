@@ -255,6 +255,14 @@ static void hex_string(const uint8_t *data, size_t len, char *out) {
     for (size_t i=0;i<len;i++) { out[i*2]=hex[data[i]>>4]; out[i*2+1]=hex[data[i]&15]; }
     out[len*2]=0;
 }
+// Read-only local connection flags; no credentials, screen pixels or phone actions.
+extern void controller_ble_diagnostic_state(char *out, unsigned size);
+static const ble_uuid128_t DIAG_UUID = BLE_UUID128_INIT(0x06,0,0,0,0,0,0,0,0x61,0x74,0x6f,0x2d,0x61,0x74,0x6f,0x6f);
+static int diag_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    if(ctxt->op!=BLE_GATT_ACCESS_OP_READ_CHR)return BLE_ATT_ERR_UNLIKELY;
+    char out[384];controller_ble_diagnostic_state(out,sizeof(out));
+    return os_mbuf_append(ctxt->om,out,strlen(out))==0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
 static int info_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     if(ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR)return BLE_ATT_ERR_UNLIKELY;
     const esp_app_desc_t *desc=esp_app_get_description();
@@ -345,6 +353,7 @@ static const struct ble_gatt_svc_def GATT_SVCS[] = {
             },
             { .uuid=&INFO_UUID.u, .access_cb=info_access, .flags=BLE_GATT_CHR_F_READ },
             { .uuid=&AUTH_UUID.u, .access_cb=auth_access, .flags=BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE },
+            { .uuid=&DIAG_UUID.u, .access_cb=diag_access, .flags=BLE_GATT_CHR_F_READ },
             {0},
         },
     },
