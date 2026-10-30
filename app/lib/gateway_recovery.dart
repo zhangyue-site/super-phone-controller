@@ -1,6 +1,15 @@
 import 'dart:async';
 import 'package:http/http.dart' as http;
 
+/// BLE link establishment failed after the old task was confirmed stopped
+/// and detached; nothing was written on the new link.
+class BleReconnectFailure implements Exception {
+  final Object cause;
+  const BleReconnectFailure(this.cause);
+  @override
+  String toString() => '蓝牙重新连接失败：$cause';
+}
+
 /// One app-owned retry budget shared by foreground and background observers.
 class GatewayRecoveryGate {
   GatewayRecoveryGate({Duration Function()? elapsed}) {
@@ -63,7 +72,11 @@ class GatewayRecoveryGate {
         _next = null;
         return true;
       } catch (error) {
-        if (!transportError(error)) _blocked = true;
+        // Network loss and BLE link establishment share the bounded
+        // 3-attempt budget; every other failure still stops auto recovery.
+        if (!transportError(error) && error is! BleReconnectFailure) {
+          _blocked = true;
+        }
         return false;
       }
     }();
