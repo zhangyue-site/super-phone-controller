@@ -60,8 +60,9 @@ class UsbProofBridge(context: Context) {
   val connection=manager.openDevice(device)?:error("open")
   var claimedControl=false;var claimedData=false
   try {
-   claimedControl=connection.claimInterface(control,false);check(claimedControl)
-   claimedData=connection.claimInterface(data,false);check(claimedData)
+   // Target identity and CDC interfaces were validated before bounded kernel-driver detachment.
+   claimedControl=UsbInterfaceClaim.acquire { force -> connection.claimInterface(control,force) };check(claimedControl)
+   claimedData=UsbInterfaceClaim.acquire { force -> connection.claimInterface(data,force) };check(claimedData)
    check(connection.controlTransfer(0x21,0x22,1,control.id,null,0,200)>=0)
    val random=ByteArray(16);SecureRandom().nextBytes(random)
    val requestId=random.joinToString(""){"%02x".format(it.toInt() and 255)}
