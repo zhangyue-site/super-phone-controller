@@ -60,6 +60,18 @@ def subject(ticket):
   if item is None:raise ValueError('ticket')
   return item[1]
 
+def _obsolete_frame_response(mailbox,device,ticket,previous,barrier):
+ # Caller holds AUTHORITY then mailbox lock. A stale payload is never accepted.
+ item=AUTHORITY.tickets.get(ticket)
+ if item is None or item[0]<=AUTHORITY.clock() or item[1]!=device:raise ValueError('revoked')
+ if previous.screen_session!=ticket:raise ValueError('screen session changed')
+ current=mailbox.jobs.get(device)
+ if current is previous and not previous.done and not previous.cancelled and previous.video_barrier==barrier:return None
+ if current is not None and current.screen_session and current.screen_session!=ticket:return None
+ active=current is not None and not current.done and not current.cancelled
+ same_source=active and current.screen_session==ticket
+ return {'accepted':False,'reason':'superseded frame' if active else 'no active voice task','barrier':current.video_barrier if same_source else '0'*32}
+
 def handle(handler,config):
  path=handler.path
  if path not in ('/app-screen/challenge','/app-screen/authorize','/app-screen/usb-challenge','/app-screen/usb-authorize','/app-screen/usb-renew','/app-screen/frame','/app-screen/stop','/app-screen/status'):return False
@@ -151,14 +163,17 @@ def handle(handler,config):
     voice_session,voice_sequence,frame_sequence=j.session,j.sequence,j.video_sequence+1
    try:
     result=mailbox.ingest_video(device,voice_session,voice_sequence,frame_sequence,payload,'jpeg',expected_barrier=capture_barrier,source='user-consented-app-screen')
-   except ValueError:
-    with mailbox.lock:
-     if mailbox.jobs.get(device) is j and (j.done or j.cancelled):
-      handler.reply(202,b'{"accepted":false,"reason":"no active voice task","barrier":"00000000000000000000000000000000"}');return True
+   except ValueError as error:
+    if str(error) in ('unknown turn','turn cancelled or expired','capture barrier required','capture superseded','video superseded'):
+     with mailbox.lock:
+      obsolete=_obsolete_frame_response(mailbox,device,ticket,j,capture_barrier)
+      if obsolete is not None:
+       handler.reply(202,json.dumps(obsolete).encode());return True
     raise
    with mailbox.lock:
-    if mailbox.jobs.get(device) is j and (j.done or j.cancelled):
-     handler.reply(202,b'{"accepted":false,"reason":"no active voice task","barrier":"00000000000000000000000000000000"}');return True
+    obsolete=_obsolete_frame_response(mailbox,device,ticket,j,capture_barrier)
+    if obsolete is not None:
+     handler.reply(202,json.dumps(obsolete).encode());return True
     if mailbox._job(device,voice_session,voice_sequence) is not j or j.done or j.video_barrier!=capture_barrier:raise ValueError('superseded')
     j.video_source='user-consented-app-screen'
     result['barrier']=j.video_barrier

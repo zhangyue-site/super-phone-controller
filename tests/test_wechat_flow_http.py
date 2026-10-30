@@ -94,4 +94,4 @@ class WechatHttpTests(unittest.TestCase):
   handler=Handler()
   with patch.object(app_screen,"AUTHORITY",auth),patch.object(app_screen.CONVERSATION,"mailbox",m),patch.object(m,"ingest_video",delayed):
    app_screen.handle(handler,Path("/unused"))
-  self.assertEqual(handler.code,403);self.assertFalse(j.video);self.assertNotEqual(j.video_barrier,old)
+  self.assertEqual(handler.code,202);self.assertFalse(j.video);self.assertNotEqual(j.video_barrier,old)
