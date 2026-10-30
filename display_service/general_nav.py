@@ -19,6 +19,16 @@ def _may_reobserve_settings(task, observation):
   and observation.get("action")=="click" and observation.get("target_label") in ("设置","系统设置")
   and observation.get("safe") is True and observation.get("complete") is False)
 
+MAX_SAME_CLICKS=2
+def _center(box):
+ return ((box[0]+box[2])//2,(box[1]+box[3])//2) if isinstance(box,list) and len(box)==4 else None
+def _repeated_clicks(steps,o):
+ # Same visible label at (nearly) the same place; a different page that only
+ # shares a screen position, such as consecutive list rows, does not count.
+ label=o.get('target_label');center=_center(o.get('bounds'))
+ if not isinstance(label,str) or center is None:return 0
+ return sum(1 for s in steps if s.get('kind')=='click' and (s.get('target_label') or '').strip()==label.strip() and s.get('center') and abs(s['center'][0]-center[0])<=40 and abs(s['center'][1]-center[1])<=40)
+
 def verification_region(raw,bounds):
  # Final evidence may cover the whole screen. System clock/network counters
  # are not the application result and already excluded by signature().
@@ -218,11 +228,15 @@ class GeneralNavigator(WechatNavigator):
   raw,seq,sig=self._frame(j);geometry=(sig['w'],sig['h']);entry=self._action(j,{'op':'hid_home'},sig)
   trace=[];last=self._receipt_frame_floor(j,seq);complete=False;final=None
   frame_replans=1
+  from .general_vision import acked_steps
+  from .keyboard_navigation import ImeLatinCommit
+  # Receipted actions only; a rejected or unacknowledged command never enters.
+  steps=[dict(step=1,op='hid_home')]
   for index in range(18):
    raw,seq,sig=self._frame(j,after=last);last=seq
    if (sig['w'],sig['h'])!=geometry:raise ValueError('共享画面尺寸改变')
    # A saved skill is a method: every run locates its target in the current frame.
-   raw,seq,sig,o=self._observe_frame(j,raw,seq,sig,task)
+   with acked_steps(steps):raw,seq,sig,o=self._observe_frame(j,raw,seq,sig,task)
    last=seq
    input_pending=bool(getattr(j,'keyboard_input',None) and j.keyboard_input.get('stage')!='complete')
    if o.get('complete') is True and not input_pending:complete=True;break
@@ -234,21 +248,28 @@ class GeneralNavigator(WechatNavigator):
     complete=True;break
    if index==17:break
    from .keyboard_navigation import decision
-   try:raw,seq,sig,o=self._repair_drag_schema(j,raw,seq,sig,task,o)
+   try:
+    with acked_steps(steps):raw,seq,sig,o=self._repair_drag_schema(j,raw,seq,sig,task,o)
    except (ValueError,RuntimeError) as error:
     self._log(j,'drag_protocol_failed',reason=str(error)[:120])
     raise ValueError('无法确认拖动区域，本次已停止') from error
    try:
-    raw,seq,sig,o=self._repair_input_schema(j,raw,seq,sig,task,o)
+    with acked_steps(steps):raw,seq,sig,o=self._repair_input_schema(j,raw,seq,sig,task,o)
     last=seq
     command,next_input,observe_only=decision(getattr(j,'keyboard_input',None),o,task,seq)
    except (ValueError,RuntimeError) as error:
     self._log(j,'keyboard_check_failed',reason=str(error)[:120])
+    if isinstance(error,ImeLatinCommit):raise ValueError('输入法把拼音直接提交为英文字母，未出现中文候选；请在被控手机切换到支持实体键盘拼音输入的中文输入法后重试，本次已停止') from error
     raise ValueError('无法确认搜索框、候选词或实际输入文字，本次已停止') from error
    if observe_only:
     j.keyboard_input=next_input
     continue
-   if command is None:command=self._command(o,task)
+   if command is None:
+    command=self._command(o,task)
+    if command.get('kind')=='click' and _repeated_clicks(steps,o)>=MAX_SAME_CLICKS:
+     # Stop before dispatch; an acknowledged tap that changed nothing is not resent.
+     self._log(j,'repeat_click_stopped',target=o.get('target_label','')[:40],clicks=MAX_SAME_CLICKS)
+     raise ValueError('已点击同一目标%d次仍未进入下一步，本次已停止，未再次发送动作'%MAX_SAME_CLICKS)
    if command.get('op')=='hid_pointer' and next_input and next_input.get('stage')=='select_candidate':o=dict(o,bounds=next_input['bounds'])
    sig['_observation_frame']=seq
    stored={'signature':sig,'observation':o,'target':region(raw,o['bounds'])}
@@ -270,6 +291,7 @@ class GeneralNavigator(WechatNavigator):
    frame_replans=1
    if next_input is not None:j.keyboard_input=next_input
    trace.append(stored)
+   steps.append(dict(step=len(steps)+1,op=command['op'],kind=command.get('kind'),screen=o.get('screen'),target_label=o.get('target_label'),center=_center(o.get('bounds'))))
    last=self._receipt_frame_floor(j,last)
   if not complete:raise ValueError('导航超出有界步骤限制或未识别到目标')
   if final is None:raw,seq,sig,final=self._observe_frame(j,raw,seq,sig,task,verify=True)

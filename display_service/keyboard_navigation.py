@@ -1,6 +1,15 @@
 """Visually fenced USB input; no ADB or assumed candidate success."""
 from copy import deepcopy
+import re
 from .keyboard_input import pinyin_plan,choose_candidate,verify_candidate_commit,validate_target
+
+class ImeLatinCommit(ValueError):
+ """The IME committed the typed pinyin as Latin text; nothing is retyped."""
+
+def _latin_commit(plan,o):
+ committed=o.get('committed_text');typed=plan.get('typed_pinyin')
+ if not isinstance(committed,str) or not isinstance(typed,str) or plan.get('desired_text','').isascii() or o.get('candidates'):return False
+ return re.sub(r"[\s']",'',committed).lower()==typed.lower()
 
 def schema_issue_fields(o):
  """Only malformed type_text evidence may be reobserved, never negative evidence."""
@@ -23,6 +32,7 @@ def decision(plan,o,task,frame):
   if o.get('committed_text')==plan['desired_text']:
    result=deepcopy(plan);result.update(stage='complete',committed_prefix=plan['desired_text'],remaining='',frame=frame,verified=True)
    return None,result,True
+  if _latin_commit(plan,o):raise ImeLatinCommit('输入法把拼音直接提交为英文字母，未出现中文候选')
   selection=choose_candidate(plan,o.get('candidates',[]),frame)
   x1,y1,x2,y2=selection['bounds']
   return dict(op='hid_pointer',kind='click',x=(x1+x2)*32767//2000,y=(y1+y2)*32767//2000),selection,False
