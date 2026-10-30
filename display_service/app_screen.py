@@ -105,12 +105,18 @@ def handle(handler,config):
   mailbox=CONVERSATION.mailbox
   if path.endswith('/status'):
    if size!=0:raise ValueError('size')
-   with mailbox.lock:
-    j=mailbox.jobs.get(device)
-    result={'state':j.state if j and not j.cancelled else 'idle','reply':j.reply if j and not j.cancelled else '',
-     'frame':j.video_sequence if j else 0,'pointerReady':bool(j and j.pointer_protocol=='absolute-v1'),
-     'skills':STORE.catalog(device),'barrier':j.video_barrier if j else '',
-     'verified':bool(j and j.done and not j.cancelled and j.state=='done' and getattr(j,'navigation_verified',False))}
+   # Recheck while holding the capture authority lock, then mailbox: revoke
+   # and authorize use the same lock order. Never cache a terminal globally.
+   with AUTHORITY.lock:
+    AUTHORITY._prune(AUTHORITY.clock());item=AUTHORITY.tickets.get(ticket)
+    if item is None or item[1]!=device:raise ValueError('revoked')
+    with mailbox.lock:
+     j=mailbox.jobs.get(device)
+     if j and (j.cancelled or (j.done and getattr(j,'screen_session','')!=ticket)):j=None
+     result={'state':j.state if j else 'idle','reply':j.reply if j else '',
+      'frame':j.video_sequence if j else 0,'pointerReady':bool(j and j.pointer_protocol=='absolute-v1'),
+      'skills':STORE.catalog(device),'barrier':j.video_barrier if j else '',
+      'verified':bool(j and j.done and j.state=='done' and getattr(j,'navigation_verified',False) is True)}
    handler.reply(200,json.dumps(result,ensure_ascii=False).encode());return True
   if path.endswith('/stop'):
    if size!=0:raise ValueError('size')

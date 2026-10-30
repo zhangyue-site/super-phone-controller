@@ -59,8 +59,13 @@ class WechatNavigator:
  def _matches_action_frame(self,expected,sig,current):
   return matches(expected,sig) and ('target' not in expected or region_matches(expected['target'],current))
  def _action(self,j,command,expected):
-  self.m._live(j);current,_,sig=self._frame(j)
-  if not self._matches_action_frame(expected,sig,current):raise ActionFrameChanged("手机页面已变化，本次停止以避免点错")
+  self.m._live(j);current,current_sequence,sig=self._frame(j)
+  if not self._matches_action_frame(expected,sig,current):
+   record=getattr(self,'_record_frame_rejection',None)
+   if record is not None:
+    try:record(j,command,expected,current,sig,current_sequence)
+    except Exception:pass # Optional evidence must never alter the rejection.
+   raise ActionFrameChanged("手机页面已变化，本次停止以避免点错")
   self._log(j,"dispatch",op=command["op"])
   output=self.m.execute(j,command)
   good={"hid_home":"HID_HOME_REPORT_SENT","hid_pointer":"HID_POINTER_REPORT_SENT","hid_text":"HID_TEXT_REPORT_SENT","hid_key":"HID_KEY_REPORT_SENT"}.get(command["op"],"__PC_EXIT_0__")

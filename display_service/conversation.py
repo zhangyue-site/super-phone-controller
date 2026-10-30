@@ -46,7 +46,8 @@ class Conversation:
    for j in self.mailbox.jobs.values():
     if now-j.touched>(60 if j.done else 45) or now-j.created>180:
      if not j.cancelled and not j.done:self.status(j.device,'error','设备执行连接已中断，本次任务未完成；请检查连接后重试。')
-     j.cancelled=True;j.audio=b'';j.video=b'';j.event.set()
+     if not j.done:j.cancelled=True
+     j.audio=b'';j.video=b'';j.event.set()
   with self.history_lock:
    for key,stamp in list(self.history_times.items()):
     if time.monotonic()-stamp>900:self.histories.pop(key,None);self.history_times.pop(key,None)

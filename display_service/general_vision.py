@@ -15,6 +15,8 @@ PROMPT+='\n文字输入通过USB实体键盘，禁止ADB。只有画面可见并
 def normalize_observation(result,width,height):
  if result.get('coordinate_system')!='pixels':raise ValueError('视觉坐标单位未确认')
  result=dict(result)
+ pixel_bounds=result.get('bounds');pixel_end=result.get('end')
+ result.pop('_drag_protocol_defect',None)
  result.pop('_trusted_launcher_blank',None)
  result.pop('_trusted_launcher_settings',None)
  for key,count in (('bounds',4),('end',2)):
@@ -22,6 +24,10 @@ def normalize_observation(result,width,height):
   if box is None:continue
   if not isinstance(box,list) or len(box)!=count or any(type(v)!=int or v<0 or v>(width if i%2==0 else height) for i,v in enumerate(box)):raise ValueError('视觉坐标超出原图')
   result[key]=[v*1000//(width if i%2==0 else height) for i,v in enumerate(box)]
+ if result.get('action')=='drag' and isinstance(pixel_bounds,list) and len(pixel_bounds)==4 and isinstance(pixel_end,list) and len(pixel_end)==2:
+  x1,y1,x2,y2=pixel_bounds
+  if x1<=x2 and y1<=y2 and (x1==x2 or y1==y2):
+   result['_drag_protocol_defect']=dict(reason='zero_width' if x1==x2 else 'zero_height',width=width,height=height)
  candidates=result.get('candidates')
  if candidates is not None:
   if not isinstance(candidates,list) or len(candidates)>12:raise ValueError('候选列表无效')
@@ -43,6 +49,7 @@ class VisionTransportError(ValueError):
 _RETRY_ROUTE=ContextVar('visual_retry_route',default=None)
 _LAST_ROUTE=ContextVar('last_visual_route',default=None)
 _INPUT_SCHEMA_REPAIR=ContextVar('input_schema_repair',default=False)
+_DRAG_SCHEMA_REPAIR=ContextVar('drag_schema_repair',default=False)
 @contextmanager
 def same_provider_retry(error):
  token=_RETRY_ROUTE.set((error.provider,error.model,error.config))
@@ -56,6 +63,14 @@ def input_schema_reobserve():
  token=_RETRY_ROUTE.set(route);schema_token=_INPUT_SCHEMA_REPAIR.set(True)
  try:yield
  finally:_INPUT_SCHEMA_REPAIR.reset(schema_token);_RETRY_ROUTE.reset(token)
+
+@contextmanager
+def drag_schema_reobserve():
+ route=_LAST_ROUTE.get()
+ if route is None:raise ValueError('drag schema requires the current visual route')
+ token=_RETRY_ROUTE.set(route);schema_token=_DRAG_SCHEMA_REPAIR.set(True)
+ try:yield
+ finally:_DRAG_SCHEMA_REPAIR.reset(schema_token);_RETRY_ROUTE.reset(token)
 
 _GO_VISION_BASE='https://opencode.ai/inference/go/openai/v1'
 class _NoGoRedirect(urllib.request.HTTPRedirectHandler):
@@ -140,6 +155,7 @@ def observe(jpeg,query,verify=False):
  payload={"model":model,"max_tokens":1200 if is_store else (500 if verify else 400),"thinking":{"type":"disabled"},"response_format":{"type":"json_object"},"temperature":0,"messages":[{"role":"system","content":VERIFY_PROMPT if verify else STORE_PROMPT if is_store else PROMPT},
  {"role":"user","content":[{"type":"text","text":("独立核验目标是否完成："+query if verify else "观察截图并定位安全导航目标："+query)+f"；原图宽{width}像素，高{height}像素。所有bounds/end使用该原图像素坐标，返回coordinate_system=pixels。"},
  {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,"+base64.b64encode(jpeg).decode()}}]}]}
+ if _DRAG_SCHEMA_REPAIR.get():payload['messages'][0]['content']+='\n拖动协议格式复核：只依据这张新截图重新观察。drag的bounds必须是起点所在真实可见区域的非零面积矩形[left,top,right,bottom]且left<right、top<bottom；不是起终点连线，不能用同一个x或y构成零宽/高框。终点只放end。不能确认真实矩形则action=unknown，不编造或扩大区域。'
  if _INPUT_SCHEMA_REPAIR.get():payload['messages'][0]['content']+='\n输入字段格式复核：只读这张新截图。若action=type_text，必须逐项明确给input_visible、input_focused、input_password三个真实布尔和input_role字符串，不得省略false；不能确认时action=unknown，不猜测、不执行。'
  from .keyboard_input import current_observation_context
  context=current_observation_context()

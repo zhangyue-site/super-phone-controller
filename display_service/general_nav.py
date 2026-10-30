@@ -76,6 +76,56 @@ class GeneralNavigator(WechatNavigator):
    if barrier!=j.video_barrier or session!=j.screen_session:raise ValueError('画面会话已经改变')
   if result.get('action')!='type_text' or schema_issue_fields(result):raise ValueError('输入观察字段仍不完整')
   return raw,seq,sig,result
+ def _repair_drag_schema(self,j,raw,seq,sig,task,observation):
+  from .general_vision import drag_schema_reobserve
+  defect=observation.get('_drag_protocol_defect')
+  label=observation.get('target_label')
+  bounds=observation.get('bounds')
+  pending=getattr(j,'keyboard_input',None)
+  if not isinstance(defect,dict) or observation.get('action')!='drag' or observation.get('safe') is not True or observation.get('complete') is not False:return raw,seq,sig,observation
+  if defect.get('reason') not in ('zero_width','zero_height') or not isinstance(bounds,list) or len(bounds)!=4 or any(type(v) is not int or not 0<=v<=1000 for v in bounds) or not (bounds[0]==bounds[2] or bounds[1]==bounds[3]):return raw,seq,sig,observation
+  if not isinstance(label,str) or not label.strip() or DENY.search(label) or (pending and pending.get('stage')!='complete'):return raw,seq,sig,observation
+  with self.m.lock:
+   self.m._live(j)
+   if getattr(j,'drag_schema_reobserved',False):raise ValueError('拖动格式复核次数已用完')
+   barrier=j.video_barrier;session=j.screen_session;j.drag_schema_reobserved=True
+  size=(sig.get('w'),sig.get('h'))
+  if size!=(defect.get('width'),defect.get('height')):raise ValueError('拖动原图尺寸不一致')
+  raw,seq,sig=self._frame(j,after=seq)
+  with self.m.lock:
+   self.m._live(j)
+   if barrier!=j.video_barrier or session!=j.screen_session:raise ValueError('画面会话已经改变')
+  if size!=(sig.get('w'),sig.get('h')):raise ValueError('共享画面尺寸改变')
+  self._log(j,'drag_schema_reobserve',reason=defect.get('reason'),attempt=1)
+  # One read only; independent from input-schema budget, never nested retries.
+  with drag_schema_reobserve():result=self._observe(j,raw,task)
+  with self.m.lock:
+   self.m._live(j)
+   if barrier!=j.video_barrier or session!=j.screen_session:raise ValueError('画面会话已经改变')
+  if result.get('action')!='drag' or result.get('_drag_protocol_defect'):raise ValueError('拖动格式复核仍无效')
+  self._command(result,task) # Reuse all original coordinate/semantic guards.
+  return raw,seq,sig,result
+ def _record_frame_rejection(self,j,command,expected,current,current_sig,current_sequence):
+  from .launcher_guard import structure_metrics
+  target=expected.get('target')
+  details=dict(op=command.get('op'),observed_frame=expected.get('_observation_frame'),current_frame=current_sequence,
+   scene_same=matches(expected,current_sig),target_same=region_matches(target,current) if isinstance(target,dict) else None,
+   structure=structure_metrics(expected,current_sig),target_box=target.get('box') if isinstance(target,dict) else None)
+  self._log(j,'frame_guard_rejected',**details)
+  # Use only the existing, explicitly configured private evidence directory.
+  # No image, bearer or typed text is logged; cap evidence per task.
+  import os
+  from pathlib import Path
+  location=os.environ.get('EPAPER_NAV_EVIDENCE_DIR')
+  if not location or not isinstance(current,bytes) or len(current)>524288:return
+  ident=str(getattr(j,'remote_task_id','diagnostic'))
+  if not re.fullmatch('[0-9a-f]{32}',ident):ident='diagnostic'
+  folder=Path(location)/ident;folder.mkdir(mode=0o700,parents=True,exist_ok=True)
+  if len(list(folder.glob('guard-rejected-*.jpg')))>=4:return
+  path=folder/('guard-rejected-%s-%s.jpg'%(expected.get('_observation_frame',0),current_sequence))
+  with path.open('xb') as output:output.write(current)
+  path.chmod(0o600)
+  metadata=path.with_suffix('.json');metadata.write_text(json.dumps(details));metadata.chmod(0o600)
  def _log(self,j,stage,**metadata):
   if stage=='dispatch':
    j.state='running';j.reply={'hid_home':'正在回到手机桌面','hid_pointer':'正在按画面定位导航目标','type_text':'正在输入搜索词并恢复原输入法'}.get(metadata.get('op'),'正在导航')
@@ -149,7 +199,9 @@ class GeneralNavigator(WechatNavigator):
   if final.get('complete') is not True or final.get('verified') is not True or final.get('task')!=task or final.get('safe') is not True or not isinstance(final.get('evidence'),str) or not final['evidence'].strip():raise ValueError('最终画面未通过独立核验')
   goal=re.fullmatch(r'(?:请|帮我)?(?:打开|进入)(.+?)(?:(?:搜索|查找|找到)(.+))?',task)
   if goal:
-   actual_app=final.get('application');expected_app=goal[1]
+   compound=re.fullmatch(r'(?:打开|进入)(设置|系统设置)[，,](.+)',task)
+   scoped_settings=bool(compound and compound[2].strip() and not re.search(r'搜索|查找|找到',compound[2]))
+   actual_app=final.get('application');expected_app=compound[1] if scoped_settings else goal[1]
    if actual_app!=expected_app and not (actual_app in ('设置','系统设置') and expected_app in ('设置','系统设置')):raise ValueError('最终画面没有核验到目标应用')
    if goal[2] and (final.get('query')!=goal[2] or goal[2] not in final['evidence']):raise ValueError('最终画面没有核验到完整搜索词')
   search=re.fullmatch(r'(?:请|帮我)?(?:搜索|查找|找到)(.+)',task)
@@ -182,6 +234,10 @@ class GeneralNavigator(WechatNavigator):
     complete=True;break
    if index==17:break
    from .keyboard_navigation import decision
+   try:raw,seq,sig,o=self._repair_drag_schema(j,raw,seq,sig,task,o)
+   except (ValueError,RuntimeError) as error:
+    self._log(j,'drag_protocol_failed',reason=str(error)[:120])
+    raise ValueError('无法确认拖动区域，本次已停止') from error
    try:
     raw,seq,sig,o=self._repair_input_schema(j,raw,seq,sig,task,o)
     last=seq
@@ -194,6 +250,7 @@ class GeneralNavigator(WechatNavigator):
     continue
    if command is None:command=self._command(o,task)
    if command.get('op')=='hid_pointer' and next_input and next_input.get('stage')=='select_candidate':o=dict(o,bounds=next_input['bounds'])
+   sig['_observation_frame']=seq
    stored={'signature':sig,'observation':o,'target':region(raw,o['bounds'])}
    if o.get('_trusted_launcher_blank') is True and o.get('screen')=='launcher' and o.get('action')=='drag' and o.get('bounds')==[450,630,550,670] and o.get('end')==[500,250]:sig['_blank_launcher']=True
    if o.get('_trusted_launcher_settings') is True and o.get('action')=='click' and o.get('target_label') in ('设置','系统设置'):
@@ -209,6 +266,8 @@ class GeneralNavigator(WechatNavigator):
     frame_replans-=1;last=self._receipt_frame_floor(j,last)
     self._log(j,'frame_replan',remaining=frame_replans)
     continue
+   # Only a confirmed report starts the next action's bounded read budget.
+   frame_replans=1
    if next_input is not None:j.keyboard_input=next_input
    trace.append(stored)
    last=self._receipt_frame_floor(j,last)

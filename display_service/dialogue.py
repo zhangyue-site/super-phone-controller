@@ -105,7 +105,8 @@ class Mailbox:
  def __init__(self,clock=time.monotonic):self.clock=clock;self.lock=threading.RLock();self.jobs={};self.high={}
  def _live(self,j):
   if j.cancelled or self.clock()-j.created>j.max_age or self.clock()-j.touched>45:
-   j.cancelled=True;j.video=b'';j.event.set();raise ValueError('turn cancelled or expired')
+   if not j.done:j.cancelled=True
+   j.audio=b'';j.video=b'';j.event.set();raise ValueError('turn cancelled or expired')
  def _job(self,device,session,seq):
   j=self.jobs.get(device)
   if not j or (j.session,j.sequence)!=(session,seq):raise ValueError('unknown turn')
@@ -123,6 +124,7 @@ class Mailbox:
  def offer(self,j,command):
   with self.lock:
    self._live(j)
+   if j.done:raise ValueError('turn already complete')
    if command.get("op") in ("hid_key","hid_text"):
     from .keyboard_input import validate_command
     validate_command(command)
