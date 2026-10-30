@@ -199,7 +199,7 @@ class ControlClient {
           phase: path.startsWith('relay:') ? path.substring(6) : path,
           reason: 'http_error',
           httpStatus: response.statusCode);
-      if (response.statusCode == 403) {
+      if (response.statusCode == 403 && path != 'relay:detach') {
         _ticket = null;
         _expires = null;
       }
@@ -276,6 +276,108 @@ class ControlClient {
         await relay.close();
         checkOpen();
       }
+    }
+  }
+
+  bool get canRecoverGateway =>
+      !_closed &&
+      !_paired &&
+      canReadStatus &&
+      _relayBoard != null &&
+      _relay?.isClosed == true &&
+      _relay?.closeFinished == true &&
+      _relay?.recoverableNetworkFailure == true;
+  bool get gatewayRecoveryNeedsPairing =>
+      !_closed && _relay?.recoverableNetworkFailure == true && !canReadStatus;
+
+  Future<void> recoverGateway(
+      {required Future<void> Function() reconnect,
+      required Future<void> Function() check}) async {
+    if (!canRecoverGateway) throw StateError('自动恢复条件不满足');
+    final oldRelay = _relay!;
+    final board = _relayBoard!, retired = oldRelay.connectionNonce;
+    Future<void> current() async {
+      if (_closed || !canReadStatus) throw StateError('授权已过期，请重新连接并配对控制手机');
+      await check();
+      if (_closed || !canReadStatus) throw StateError('连接恢复已取消');
+    }
+
+    var connected = false;
+    CloudRelay? next;
+    try {
+      await current();
+      // Reconcile the old task before any new BLE handshake. Never replay a packet.
+      final stopped = await command('stop');
+      await current();
+      if (stopped['state'] != 'stopped') throw StateError('旧任务停止尚未确认');
+      if (retired != null) {
+        try {
+          await _post('relay:detach', {'nonce': retired}, auth: true);
+        } on ControlHttpFailure catch (error) {
+          if (error.status != 403) rethrow;
+        }
+      }
+      await current();
+      await reconnect();
+      connected = true;
+      await current();
+      final info = await board.readInfo();
+      await current();
+      if (info == null ||
+          info.device != deviceId ||
+          !board.supportsLocalControl) {
+        throw StateError('控制板身份或协议已改变，自动恢复已停止');
+      }
+      final challenge = await _post('challenge', {'device': info.device});
+      await current();
+      final nonce = challenge['challenge'];
+      if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
+        throw const FormatException('授权挑战无效');
+      }
+      final proof = await board.signDownloadChallenge(Uint8List.fromList(
+          List.generate(32,
+              (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16))));
+      await current();
+      if (proof.length != 32) {
+        throw const FormatException('控制板授权证明无效');
+      }
+      final result = await _post(
+          'renew',
+          {
+            'device': info.device,
+            'challenge': nonce,
+            'proof':
+                proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+          },
+          auth: true);
+      await current();
+      if (result['scope'] != 'phone-commands' || result['expiresIn'] != 300) {
+        throw const FormatException('续期授权无效');
+      }
+      _expires = DateTime.now().add(const Duration(seconds: 300));
+      next = CloudRelay(
+        retiredNonce: retired,
+        beforeModeChange: onModeChange,
+        post: (p, b) => _post('relay:$p', b, auth: true),
+        read: board.readLocalControl,
+        write: board.writeLocalControl,
+        disconnect: board.disconnect,
+        onError: (e) {
+          if (!_closed) _relayError = e;
+        },
+      );
+      _relay = next;
+      await next.start(beforePolling: current);
+      if (_closed) throw StateError('连接恢复已取消');
+      _relayError = null;
+    } catch (_) {
+      if (!_closed) _relay = oldRelay;
+      if (next != null) {
+        await next.close(reason: 'owner_shutdown');
+      } else if (connected) {
+        await board.disconnect();
+      }
+      rethrow;
     }
   }
 

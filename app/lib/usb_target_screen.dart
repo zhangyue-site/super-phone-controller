@@ -116,13 +116,23 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         if (_current(generation)) setState(() => _error = '网关续期失败：$e');
       }
       if (!_current(generation)) return;
+      final recovered =
+          active && await TargetSession.maintainGateway(widget.attachment);
+      if (!_current(generation)) return;
       setState(() {
         _active = active;
         _capture = status.capture;
         _feedback = status;
-        _pointerReady = status.pointerReady;
+        _pointerReady = recovered ? false : status.pointerReady;
+        if (recovered) {
+          _error = null;
+          _relay = '手机中转已恢复；旧任务已停止，请重新确认新任务';
+        }
         if (_control != null && !_control!.authorized) {
-          _relay = '连接已结束，请重新连接；旧动作不会重发';
+          _relay = _control!.canRecoverGateway ||
+                  _control!.gatewayRecoveryNeedsPairing
+              ? TargetSession.recoveryStatus
+              : '连接已结束，请重新连接；旧动作不会重发';
         }
         if (_codeExpiry != null && DateTime.now().isAfter(_codeExpiry!)) {
           _code = null;
@@ -159,6 +169,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     }
     final retained = TargetSession.clientFor(widget.attachment);
     if (retained?.authorized == true) {
+      TargetSession.resumeRecovery(retained!);
       _control = retained;
       _relay = '手机中转连接已保留';
       return;
@@ -246,6 +257,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       _relay = '正在核验控制板';
     });
     try {
+      await TargetSession.cancelRecovery();
+      if (!_current(generation)) return;
       final identity = await _usbIdentity();
       if (!_current(generation)) return;
       if (!await ScreenShare.isActive()) {

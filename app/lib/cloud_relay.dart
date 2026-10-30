@@ -1,3 +1,4 @@
+import 'gateway_recovery.dart';
 import 'diagnostics.dart';
 import "dart:async";
 
@@ -10,6 +11,11 @@ class CloudRelay {
   final Future<void> Function() disconnect;
   final void Function(Object) onError;
   final Future<void> Function(bool hid)? beforeModeChange;
+  bool recoverableNetworkFailure = false;
+  bool closeFinished = false;
+  bool _attaching = false;
+  String? get connectionNonce => _nonce;
+  final String? retiredNonce;
   String _phase = 'attach';
   int? _activeOp, _activeSeq, _lastOp, _lastSeq;
   Timer? _timer;
@@ -29,27 +35,37 @@ class CloudRelay {
       required this.write,
       required this.disconnect,
       required this.onError,
-      this.beforeModeChange});
+      this.beforeModeChange,
+      this.retiredNonce});
   bool get isClosed => _closed;
   bool get supportsMaintenance => _maintenanceSupported;
 
-  Future<void> start() async {
+  Future<void> start({Future<void> Function()? beforePolling}) async {
     if (_closed || _timer != null) throw StateError("控制会话不可重复启动");
     final initial = await read();
     final nonce = initial["nonce"];
     if (nonce is! String || !RegExp(r"^[0-9a-f]{32}$").hasMatch(nonce)) {
       throw const FormatException("板子会话无效");
     }
-    await post("attach", {"receipt": initial});
-    _maintenanceSupported = initial.containsKey("relayOnline");
-    _nonce = nonce;
-    SafeDiagnostics.record('relay_attached', phase: 'attach');
-    if (_closed) {
-      try {
-        await post('detach', {'nonce': nonce});
-      } catch (_) {}
-      throw StateError('控制连接已结束');
+    if (nonce == retiredNonce) throw const FormatException("蓝牙连接未更新，拒绝复用旧会话");
+    _nonce =
+        nonce; // Allows safe detach even if the attach HTTP outcome is unknown.
+    _attaching = true;
+    try {
+      await post("attach", {"receipt": initial});
+    } finally {
+      _attaching = false;
+      if (_closed) {
+        try {
+          await post('detach', {'nonce': nonce});
+        } catch (_) {}
+      }
     }
+    _maintenanceSupported = initial.containsKey("relayOnline");
+    SafeDiagnostics.record('relay_attached', phase: 'attach');
+    if (_closed) throw StateError('控制连接已结束');
+    await beforePolling?.call();
+    if (_closed) throw StateError("控制连接已结束");
     _timer = Timer.periodic(const Duration(milliseconds: 500), (_) => _tick());
   }
 
@@ -168,6 +184,9 @@ class CloudRelay {
       if (op == 5) await close(reason: 'opcode_stop');
     } catch (error) {
       if (_closed) return; // Late completions belong to the closed session.
+      recoverableNetworkFailure = _activeSeq == null &&
+          (_phase == 'poll' || _phase == 'maintenance') &&
+          GatewayRecoveryGate.transportError(error);
       await close(reason: 'error', error: error);
       onError(error);
     } finally {
@@ -188,17 +207,28 @@ class CloudRelay {
         lastSeq: _lastSeq);
     _closed = true;
     _timer?.cancel();
+    // Prepare the same-board normal-mode window before releasing our BLE owner.
+    // This is best effort only; native USB/projection revocation still wins.
+    if (reason == 'error' &&
+        _phase != 'mode' &&
+        error != null &&
+        GatewayRecoveryGate.transportError(error)) {
+      try {
+        await beforeModeChange?.call(false).timeout(const Duration(seconds: 2));
+      } catch (_) {}
+    }
     // Disconnect releases HID even if cloud is unavailable.
     try {
       await disconnect();
       SafeDiagnostics.record('relay_disconnect',
           phase: 'shutdown', reason: 'disconnect_done');
     } finally {
-      if (_nonce != null) {
+      if (_nonce != null && !_attaching) {
         try {
           await post("detach", {"nonce": _nonce});
         } catch (_) {}
       }
+      closeFinished = true;
     }
   }
 }

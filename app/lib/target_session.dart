@@ -1,3 +1,5 @@
+import 'gateway_recovery.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'diagnostics.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -9,6 +11,7 @@ import 'usb_launch.dart';
 /// App-owned maintenance; observing a page never owns the projection grant.
 class TargetSession {
   static Timer? _timer;
+  static final _recovery = GatewayRecoveryGate();
   static bool _busy = false;
   static final Set<Object> _views = {};
   static final Map<String, bool> _preparedModes = {};
@@ -62,6 +65,7 @@ class TargetSession {
   static bool get hasGateway => _client?.authorized == true;
   static void retain(
       UsbAttachment usb, ControlClient client, BleOtaService service) {
+    _recovery.reset();
     _usb = usb;
     _client = client;
     _service = service;
@@ -77,8 +81,58 @@ class TargetSession {
     _service = null;
     _usb = null;
     _preparedModes.clear();
+    final cancelled = _recovery.cancel();
     await client?.shutdown();
+    await cancelled;
     await service?.disconnect();
+  }
+
+  static Future<void> cancelRecovery() => _recovery.cancel();
+  static void resumeRecovery(ControlClient client) {
+    if (identical(_client, client) && client.authorized) _recovery.reset();
+  }
+
+  static String get recoveryStatus =>
+      _client?.gatewayRecoveryNeedsPairing == true
+          ? '授权已过期，请重新连接并配对控制手机'
+          : _recovery.status;
+  static Future<bool> maintainGateway(UsbAttachment usb) async {
+    final client = _client, service = _service;
+    if (client == null ||
+        service == null ||
+        _usb?.session != usb.session ||
+        !client.canRecoverGateway) {
+      return false;
+    }
+    final bound = await UsbLaunch.snapshot();
+    final remote = bound?.remoteId;
+    Future<bool> guard() async {
+      if (!identical(_client, client) ||
+          _usb?.session != usb.session ||
+          !client.canReadStatus) {
+        return false;
+      }
+      final current = await UsbLaunch.snapshot();
+      return identical(_client, client) &&
+          current?.session == usb.session &&
+          current?.serial == usb.serial &&
+          remote != null &&
+          current?.remoteId == remote &&
+          current?.deviceId == client.deviceId &&
+          await ScreenShare.isActive();
+    }
+
+    return _recovery.tick(
+      eligible: () => identical(_client, client) && client.canRecoverGateway,
+      guard: guard,
+      run: (check) => client.recoverGateway(
+          check: check,
+          reconnect: () async {
+            await check();
+            await service.connect(BluetoothDevice.fromId(remote!));
+            await check();
+          }),
+    );
   }
 
   static Future<void> Function(bool) modeCallback(UsbAttachment usb) =>
@@ -87,8 +141,8 @@ class TargetSession {
         if (current?.session != usb.session || !await ScreenShare.isActive()) {
           throw StateError('共享或控制板连接已结束');
         }
-        if (_preparedModes[usb.session] == hid) {
-          _preparedModes.remove(usb.session);
+        final prepared = _preparedModes.remove(usb.session);
+        if (prepared == hid) {
           return;
         }
         await UsbLaunch.channel.invokeMethod<void>(
@@ -165,6 +219,7 @@ class TargetSession {
       try {
         await _client?.refresh();
       } catch (_) {/* Never recreate a projection. */}
+      await maintainGateway(usb);
     } catch (_) {
       /* Keep native service ownership during short failures. */
     } finally {
