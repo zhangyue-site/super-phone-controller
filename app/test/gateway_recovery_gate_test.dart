@@ -74,4 +74,25 @@ void main() {
     await gate.tick(eligible: () => true, guard: () async => true, run: run);
     expect(calls, 1);
   });
+  test('BLE link failures share the bounded budget instead of blocking',
+      () async {
+    var now = Duration.zero, calls = 0;
+    final gate = GatewayRecoveryGate(elapsed: () => now);
+    Future<void> run(Future<void> Function() check) async {
+      calls++;
+      throw const BleReconnectFailure('android-code: 133');
+    }
+
+    await gate.tick(eligible: () => true, guard: () async => true, run: run);
+    now = const Duration(seconds: 2);
+    await gate.tick(eligible: () => true, guard: () async => true, run: run);
+    expect(calls, 1);
+    expect(gate.exhausted, false);
+    for (final seconds in [6, 14, 60, 3600]) {
+      now = Duration(seconds: seconds);
+      await gate.tick(eligible: () => true, guard: () async => true, run: run);
+    }
+    expect(calls, 3);
+    expect(gate.exhausted, true);
+  });
 }

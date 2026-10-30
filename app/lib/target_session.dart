@@ -87,6 +87,15 @@ class TargetSession {
     await service?.disconnect();
   }
 
+  static bool get hasRetainedOwner => _client != null || _service != null;
+
+  /// A retained owner for a previous USB session never survives a new one.
+  static Future<void> releaseStale(UsbAttachment usb) async {
+    if (_usb != null && _usb!.session != usb.session) {
+      await release(diagnosticReason: 'usb_unavailable');
+    }
+  }
+
   static Future<void> cancelRecovery() => _recovery.cancel();
   static void resumeRecovery(ControlClient client) {
     if (identical(_client, client) && client.authorized) _recovery.reset();
@@ -129,7 +138,16 @@ class TargetSession {
           check: check,
           reconnect: () async {
             await check();
-            await service.connect(BluetoothDevice.fromId(remote!));
+            try {
+              await service.connect(BluetoothDevice.fromId(remote!));
+            } on FlutterBluePlusException catch (error) {
+              // Android 133 and the plugin timeout both report "connect";
+              // connect() already disconnected the failed attempt.
+              if (error.function == 'connect') {
+                throw BleReconnectFailure(error);
+              }
+              rethrow;
+            }
             await check();
           }),
     );

@@ -218,14 +218,24 @@ class BleOtaService {
       if (epoch != _connectionEpoch) throw StateError('连接已取消');
       return chunk;
     } catch (_) {
-      try {
-        await device.disconnect();
-      } catch (_) {}
+      // A newer connect to the same board owns the shared native link.
+      final superseded =
+          epoch != _connectionEpoch && _device?.remoteId == device.remoteId;
+      if (!superseded) {
+        try {
+          await device.disconnect();
+        } catch (_) {}
+      }
       if (epoch == _connectionEpoch) {
+        _controlRpc?.close();
+        _controlRpc = null;
         _localControl = null;
         _device = null;
         _ctrl = null;
         _stat = null;
+        _info = null;
+        _auth = null;
+        _upgradeAuth = null;
       }
       rethrow;
     }
