@@ -260,6 +260,11 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         }
         await UsbLaunch.bind(
             widget.attachment, device.remoteId.str, info.device);
+        if (!_current(generation)) {
+          await control.shutdown();
+          await service.disconnect();
+          return;
+        }
         TargetSession.retain(widget.attachment, control, service);
         _relay = '手机中转已连接，执行前会检查画面与许可';
         return;
@@ -272,16 +277,18 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     throw StateError('蓝牙设备与 USB 控制板身份不一致，未建立控制连接');
   }
 
-  Future<void> _start({bool allowConsent = true}) {
+  Future<void> _start({bool allowConsent = true, bool restoreLocal = false}) {
     if (_startFuture != null) return _startFuture!;
-    final future = _performStart(allowConsent: allowConsent);
+    final future =
+        _performStart(allowConsent: allowConsent, restoreLocal: restoreLocal);
     _startFuture = future;
     return future.whenComplete(() {
       _startFuture = null;
     });
   }
 
-  Future<void> _performStart({bool allowConsent = true}) async {
+  Future<void> _performStart(
+      {bool allowConsent = true, bool restoreLocal = false}) async {
     if (_busy || _stopping || !widget.isCurrent()) return;
     _manuallyStopped.remove(widget.attachment.serial);
     final generation = ++_generation;
@@ -317,8 +324,15 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         _capture = '正在共享整个屏幕';
         _relay = '正在连接云端中继';
       });
-      if (!_externalGateway) {
+      if (!_externalGateway || restoreLocal) {
         await _connectBoard(identity, generation);
+        if (!_current(generation)) return;
+        if (restoreLocal) {
+          if (_control?.authorized != true) {
+            throw StateError('本机中转尚未连接，请重试；其他网关不会被强制接管');
+          }
+          _externalGateway = false;
+        }
       } else {
         _relay = '本机蓝牙已释放；等待控制手机网关或板端 Wi-Fi';
       }
@@ -473,6 +487,13 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                   : _active
                       ? '重新检查手机中转'
                       : '开始屏幕共享并连接')),
+        if (_externalGateway && _active)
+          OutlinedButton.icon(
+              onPressed: _busy || _stopping || !widget.isCurrent()
+                  ? null
+                  : () => _start(allowConsent: false, restoreLocal: true),
+              icon: const Icon(Icons.bluetooth_connected),
+              label: const Text('恢复本机手机中转')),
         if (connected)
           OutlinedButton.icon(
               onPressed: _busy || _stopping ? null : _pairingCode,
