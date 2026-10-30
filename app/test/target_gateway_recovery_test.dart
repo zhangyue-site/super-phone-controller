@@ -13,10 +13,14 @@ import 'gateway_recovery_flow_test.dart' show RecoveryBoard, until;
 class BoundBoard extends RecoveryBoard {
   final connected = <String>[];
   Completer<void>? pendingConnect;
+  Object? connectFailure;
   @override
   Future<int> connect(BluetoothDevice device) async {
     connected.add(device.remoteId.str);
     await pendingConnect?.future;
+    final failure = connectFailure;
+    connectFailure = null;
+    if (failure != null) throw failure;
     nonce = '34' * 16;
     return 20;
   }
@@ -33,7 +37,9 @@ void main() {
     'projection-stopped',
     'usb-replaced',
     'released',
-    'late-stop'
+    'late-stop',
+    'cancel-after-connect',
+    'android-133'
   ]) {
     test(
         'app-owned recovery $scenario respects physical owner and singleflight',
@@ -94,11 +100,35 @@ void main() {
         session = '112233445566:2';
       }
       if (scenario == 'released') await TargetSession.release();
-      if (scenario == 'late-stop') board.pendingConnect = Completer<void>();
+      if (scenario == 'late-stop' || scenario == 'cancel-after-connect') {
+        board.pendingConnect = Completer<void>();
+      }
+      if (scenario == 'android-133') {
+        board.connectFailure = FlutterBluePlusException(
+            ErrorPlatform.android, 'connect', 133, 'ANDROID_SPECIFIC_ERROR');
+      }
+      final disconnectsBefore = board.disconnects;
       await Future<void>.delayed(const Duration(milliseconds: 2100));
       final a = TargetSession.maintainGateway(usb);
       final b = TargetSession.maintainGateway(usb);
-      if (scenario == 'late-stop') {
+      if (scenario == 'cancel-after-connect') {
+        // Re-entering the page cancels recovery without releasing the owner;
+        // the link opened by this attempt must not be left behind.
+        await until(() => board.connected.isNotEmpty);
+        final cancelled = TargetSession.cancelRecovery();
+        board.pendingConnect!.complete();
+        expect(await a, false);
+        expect(await b, false);
+        await cancelled;
+        expect(board.disconnects, disconnectsBefore + 1);
+        expect(requests, 1);
+      } else if (scenario == 'android-133') {
+        // One link failure stays inside the bounded budget, never a block.
+        expect(await Future.wait([a, b]), [false, false]);
+        expect(board.connected, [usb.remoteId]);
+        expect(requests, 1);
+        expect(TargetSession.recoveryStatus, contains('正在等待安全恢复'));
+      } else if (scenario == 'late-stop') {
         await until(() => board.connected.isNotEmpty);
         final released = TargetSession.release();
         board.pendingConnect!.complete();

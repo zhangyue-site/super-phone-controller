@@ -89,6 +89,10 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         }
         return;
       }
+      // While any page is open the background maintain() never runs, so a
+      // re-enumerated USB session releases the previous owner here.
+      await TargetSession.releaseStale(widget.attachment);
+      if (!_current(generation)) return;
       final status = await ScreenShare.status();
       final active = await ScreenShare.isActive();
       if (!_current(generation)) return;
@@ -209,12 +213,23 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       _relay = '手机中转连接已保留';
       return;
     }
+    // Same cleanup as "释放手机中转": an unauthorized retained owner, possibly
+    // on another BleOtaService instance, and any link left on this service
+    // would keep the single-connection board from advertising.
+    if (TargetSession.hasRetainedOwner) {
+      await TargetSession.release(diagnosticReason: 'owner_shutdown');
+    }
     await _control?.shutdown();
+    await service.disconnect();
     if (!_current(generation)) return;
     final devices = <String, BluetoothDevice>{};
     final bound = widget.attachment.remoteId;
+    final scanFrom = DateTime.now();
     final sub = service.scanResults.listen((results) {
       for (final result in results) {
+        // scanResults re-emits the previous scan to a new listener; only
+        // advertisements seen by this scan prove the board is reachable.
+        if (result.timeStamp.isBefore(scanFrom)) continue;
         final id = result.device.remoteId.str.toUpperCase();
         if (bound == null || id == bound) devices[id] = result.device;
       }
@@ -301,6 +316,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     });
     try {
       await TargetSession.cancelRecovery();
+      if (!_current(generation)) return;
+      await TargetSession.releaseStale(widget.attachment);
       if (!_current(generation)) return;
       final identity = await _usbIdentity();
       if (!_current(generation)) return;

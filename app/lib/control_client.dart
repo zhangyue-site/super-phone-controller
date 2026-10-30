@@ -318,8 +318,10 @@ class ControlClient {
         }
       }
       await current();
-      await reconnect();
+      // reconnect() may open BLE and then fail its trailing check(); from
+      // here on this owner disconnects whatever link it may have opened.
       connected = true;
+      await reconnect();
       await current();
       final info = await board.readInfo();
       await current();
