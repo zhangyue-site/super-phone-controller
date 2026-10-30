@@ -82,10 +82,7 @@ void main() {
         'ProductEvidence',
         '/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc'
       ),
-      (
-        'MaterialIcons',
-        '/tmp/phone-controller-render-test'
-      )
+      ('MaterialIcons', '/tmp/phone-controller-render-test')
     ]) {
       final bytes = File(entry.$2).readAsBytesSync();
       await (FontLoader(entry.$1)
@@ -360,12 +357,13 @@ void main() {
         home: UsbTargetScreen(
             attachment: const UsbAttachment(
                 '11223344FF00', '11223344FF00:1', null, null),
-            isCurrent: () => true)));
+            isCurrent: () => true,
+            renewCapture: (_) async {})));
     await tester.pumpAndSettle();
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
     await TargetSession.maintain();
-    expect(contexts, 1);
+    expect(contexts, 2);
     expect(stops, 0);
   });
 }

@@ -61,11 +61,11 @@ void main() {
     now = now.add(const Duration(seconds: 61));
     await tester.pump(const Duration(seconds: 2));
     await tester.pumpAndSettle();
-    expect(contexts, 2);
+    expect(contexts, 3);
     expect(windows, 2);
     expect(starts, 0);
     expect(stops, 0);
-    expect(renews, 1); // The failing window did not block due renewal.
+    expect(renews, 2); // The failing window did not block due renewal.
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
   });

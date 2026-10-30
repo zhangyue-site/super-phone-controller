@@ -304,10 +304,12 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       if (!_current(generation)) return;
       final identity = await _usbIdentity();
       if (!_current(generation)) return;
+      var freshCapture = false;
       if (!await ScreenShare.isActive()) {
         if (!allowConsent) throw StateError('屏幕共享已结束，请主动开始共享');
         await ScreenShare.startUsb(widget.attachment,
             isCurrent: () => _current(generation));
+        freshCapture = true;
       }
       final until = DateTime.now().add(const Duration(seconds: 5));
       while (_current(generation) &&
@@ -317,9 +319,16 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       }
       if (!_current(generation)) return;
       _active = await ScreenShare.isActive();
-      TargetSession.noteCapture(widget.attachment, _captureNow);
       if (!_current(generation)) return;
       if (!_active) throw StateError('屏幕共享尚未启动，请重试');
+      if (freshCapture) {
+        TargetSession.noteCapture(widget.attachment, _captureNow);
+      } else {
+        // Reopening a page does not renew the native capture credential.
+        await TargetSession.maintainCapture(widget.attachment,
+            clock: widget.captureClock, renew: widget.renewCapture);
+        if (!_current(generation)) return;
+      }
       setState(() {
         _capture = '正在共享整个屏幕';
         _relay = '正在连接云端中继';
