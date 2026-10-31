@@ -98,6 +98,7 @@ class ScreenShareService: Service() {
  @Volatile private var ticket=""
  private var sequence=0
  private var last=0L
+ private var fastFramesUntil=0L
  @Volatile private var until=0L
  @Volatile private var renewalConnection: HttpsURLConnection?=null
  private var barrier=""
@@ -240,7 +241,7 @@ class ScreenShareService: Service() {
      if(now>=until)pauseCloud(ticket)
      if(recovery.needsAuthorization())return@setOnImageAvailableListener
      val requestTicket=ticket
-     if(now-last<800)return@setOnImageAvailableListener
+     if(now-last<(if(now<fastFramesUntil)100L else 800L))return@setOnImageAvailableListener
      last=now
      val plane=image.planes[0];val padding=plane.rowStride-plane.pixelStride*image.width
      bitmap=Bitmap.createBitmap(image.width+padding/plane.pixelStride,image.height,Bitmap.Config.ARGB_8888)
@@ -264,6 +265,7 @@ class ScreenShareService: Service() {
       val next=response.getString("barrier")
       if(!Regex("[0-9a-f]{32}").matches(next))throw IllegalStateException()
       barrier=next;afterResponse=System.nanoTime()
+      fastFramesUntil=if(code==200 && response.optBoolean("accepted",true))SystemClock.elapsedRealtime()+2500L else 0L
       if(running)status=if(code==200)"画面传输：已上传" else "画面传输：共享中"
      } else if(CaptureRecoveryGuard.authorizationFailure(code)) {pauseCloud(requestTicket)}
      else {status="画面上传暂不可用，保留共享并重试"}

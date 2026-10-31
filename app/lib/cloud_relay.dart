@@ -21,6 +21,7 @@ class CloudRelay {
   Timer? _timer;
   String? _nonce;
   DateTime? _heartbeat;
+  DateTime? _lastPoll, _lastControl;
   bool _upgradeRequested = false, _maintenanceSupported = false;
   Map<String, dynamic> diagnostics = {};
   void requestWifiUpgrade() {
@@ -66,11 +67,19 @@ class CloudRelay {
     if (_closed) throw StateError('控制连接已结束');
     await beforePolling?.call();
     if (_closed) throw StateError("控制连接已结束");
-    _timer = Timer.periodic(const Duration(milliseconds: 500), (_) => _tick());
+    _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => _tick());
   }
 
   Future<void> _tick() async {
     if (_busy || _closed) return;
+    final now = DateTime.now();
+    final fast = _lastControl != null &&
+        now.difference(_lastControl!).inMilliseconds < 3000;
+    if (!fast && _lastPoll != null &&
+        now.difference(_lastPoll!).inMilliseconds < 500) {
+      return;
+    }
+    _lastPoll = now;
     _busy = true;
     try {
       final maintenance = !_maintenanceSupported
@@ -176,6 +185,9 @@ class CloudRelay {
           const Duration(seconds: 20));
       checkActive();
       if (result["state"] != "acknowledged") throw StateError("板端动作失败");
+      if (const [1, 2, 3, 4, 13, 14].contains(op)) {
+        _lastControl = DateTime.now();
+      }
       _lastOp = op;
       _lastSeq = seq;
       SafeDiagnostics.record('relay_ack', phase: 'ack', op: op, seq: seq);
