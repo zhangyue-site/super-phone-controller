@@ -29,7 +29,11 @@ jobs:
         run: |
           . "$IDF_PATH/export.sh"
           cd firmware-amoled
-          idf.py -DIDF_TARGET=esp32s3 build
+          idf.py -DIDF_TARGET=esp32s3 reconfigure
+          grep -qx CONFIG_ESP_CONSOLE_UART_DEFAULT=y sdkconfig
+          grep -qx CONFIG_ESP_CONSOLE_SECONDARY_NONE=y sdkconfig
+          if grep -qx CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y sdkconfig; then exit 1; fi
+          idf.py build
           idf.py merge-bin -o phone-controller-amoled-full.bin
       - name: Collect verifiable binaries
         shell: bash

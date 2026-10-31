@@ -9,8 +9,11 @@
 #include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED
+#error "TinyUSB must not share its PHY with the console"
+#endif
 static atomic_bool armed;
-static bool started;
+static atomic_bool started;
 static char serial[13];
 static const uint8_t reports[]={TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(1)),TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(2))};
 static const uint8_t config[]={
