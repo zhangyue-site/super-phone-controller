@@ -123,11 +123,11 @@ void main() {
         expect(board.disconnects, disconnectsBefore + 1);
         expect(requests, 1);
       } else if (scenario == 'android-133') {
-        // One link failure stays inside the bounded budget, never a block.
+        // A transient link failure remains eligible for automatic recovery.
         expect(await Future.wait([a, b]), [false, false]);
         expect(board.connected, [usb.remoteId]);
         expect(requests, 1);
-        expect(TargetSession.recoveryStatus, contains('正在等待安全恢复'));
+        expect(TargetSession.recoveryStatus, contains('正在自动恢复'));
       } else if (scenario == 'late-stop') {
         await until(() => board.connected.isNotEmpty);
         final released = TargetSession.release();

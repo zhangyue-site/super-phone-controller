@@ -38,7 +38,8 @@ void main() {
         false);
     expect(calls, 1);
   });
-  test('three failures exhaust budget; protocol errors do not retry', () async {
+  test('transport failures keep retrying; protocol errors do not retry',
+      () async {
     var now = Duration.zero, calls = 0;
     final gate = GatewayRecoveryGate(elapsed: () => now);
     Future<void> run(Future<void> Function() check) async {
@@ -51,8 +52,8 @@ void main() {
       now = Duration(seconds: seconds);
       await gate.tick(eligible: () => true, guard: () async => true, run: run);
     }
-    expect(calls, 3);
-    expect(gate.exhausted, true);
+    expect(calls, 4);
+    expect(gate.exhausted, false);
     gate.reset();
     calls = 0;
     await gate.tick(
@@ -74,7 +75,7 @@ void main() {
     await gate.tick(eligible: () => true, guard: () async => true, run: run);
     expect(calls, 1);
   });
-  test('BLE link failures share the bounded budget instead of blocking',
+  test('BLE link failures keep retrying while the physical session is valid',
       () async {
     var now = Duration.zero, calls = 0;
     final gate = GatewayRecoveryGate(elapsed: () => now);
@@ -92,7 +93,10 @@ void main() {
       now = Duration(seconds: seconds);
       await gate.tick(eligible: () => true, guard: () async => true, run: run);
     }
-    expect(calls, 3);
-    expect(gate.exhausted, true);
+    expect(calls, 5);
+    expect(gate.exhausted, false);
+    now += const Duration(seconds: 1);
+    await gate.tick(eligible: () => true, guard: () async => true, run: run);
+    expect(calls, 5);
   });
 }

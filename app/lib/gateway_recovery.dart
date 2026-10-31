@@ -10,7 +10,7 @@ class BleReconnectFailure implements Exception {
   String toString() => '蓝牙重新连接失败：$cause';
 }
 
-/// One app-owned retry budget shared by foreground and background observers.
+/// One app-owned reconnect loop shared by foreground and background observers.
 class GatewayRecoveryGate {
   GatewayRecoveryGate({Duration Function()? elapsed}) {
     final watch = Stopwatch()..start();
@@ -21,10 +21,10 @@ class GatewayRecoveryGate {
   Duration? _next;
   int _attempts = 0, _generation = 0;
   bool _blocked = false;
-  bool get exhausted => _attempts >= 3 || _blocked;
+  bool get exhausted => _blocked;
   bool get pending => _flight != null;
   String get status =>
-      exhausted ? '自动恢复已停止，请重新检查手机中转；旧任务不会重发' : '连接暂时中断，正在等待安全恢复；旧任务不会重发';
+      exhausted ? '共享或连接已结束，自动恢复已停止；旧任务不会重发' : '连接暂时中断，正在自动恢复；旧任务不会重发';
   static bool transportError(Object error) =>
       error is http.ClientException || error is TimeoutException;
 
@@ -64,16 +64,18 @@ class GatewayRecoveryGate {
     final future = () async {
       try {
         await check();
-        _attempts++;
-        _next = _elapsed() + Duration(seconds: _attempts == 1 ? 4 : 8);
+        _attempts = (_attempts + 1).clamp(1, 4);
+        _next =
+            _elapsed() + Duration(seconds: const [4, 8, 16, 30][_attempts - 1]);
         await run(check);
         await check();
         _attempts = 0;
         _next = null;
         return true;
       } catch (error) {
-        // Network loss and BLE link establishment share the bounded
-        // 3-attempt budget; every other failure still stops auto recovery.
+        // Transient network/BLE failures retry with a capped delay for as
+        // long as the same physical session and sharing remain valid.
+        // Identity/protocol failure and explicit cancellation still stop.
         if (!transportError(error) && error is! BleReconnectFailure) {
           _blocked = true;
         }
