@@ -38,3 +38,6 @@ This reads the device-rendered LVGL canvas; it does not prove physical panel pix
 Maintenance restart/bootloader requires the exact USB serial in the device field
 and disabled HID. Neither operation erases flash.
 Font subset: Noto Sans CJK SC, SIL OFL; license included.
+
+The Chinese font includes GB2312 common Han characters plus punctuation; rare
+characters outside that set may still need a future dynamic font package.

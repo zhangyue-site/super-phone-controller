@@ -14,15 +14,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     container: espressif/idf:v5.5.2
+    env:
+      IDF_CCACHE_ENABLE: "1"
+      CCACHE_DIR: /github/home/.ccache
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: /github/home/.ccache
+          key: amoled-idf552-${{ runner.os }}-${{ github.sha }}
+          restore-keys: amoled-idf552-${{ runner.os }}-
       - name: Build independent AMOLED target
         shell: bash
         run: |
           . "$IDF_PATH/export.sh"
           cd firmware-amoled
           idf.py -DIDF_TARGET=esp32s3 build
-          idf.py merge-bin -o build/phone-controller-amoled-full.bin
+          idf.py merge-bin -o phone-controller-amoled-full.bin
       - name: Collect verifiable binaries
         shell: bash
         run: |
@@ -33,6 +41,7 @@ jobs:
           cp firmware-amoled/build/flasher_args.json out/
           cp firmware-amoled/build/project_description.json out/
           cp firmware-amoled/dependencies.lock out/
+          cp firmware-amoled/sdkconfig out/
           printf '%s\n' "$GITHUB_SHA" > out/SOURCE
           cd out
           sha256sum *.bin > SHA256SUMS
@@ -42,3 +51,9 @@ jobs:
           path: out/
           retention-days: 14
           if-no-files-found: error
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: /github/home/.ccache
+          key: amoled-idf552-${{ runner.os }}-${{ github.sha }}

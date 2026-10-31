@@ -18,6 +18,7 @@
 #include "cJSON.h"
 #include "usb.h"
 LV_FONT_DECLARE(ui_font);
+_Static_assert(LVGL_VERSION_MAJOR==9 && LVGL_VERSION_MINOR==6 && LVGL_VERSION_PATCH==0,"Unexpected LVGL version");
 #define MAX_PLUGINS 4
 #define MAX_JSON 6144
 static nvs_handle_t storage;
