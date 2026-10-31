@@ -265,7 +265,8 @@ class ScreenShareService: Service() {
       val next=response.getString("barrier")
       if(!Regex("[0-9a-f]{32}").matches(next))throw IllegalStateException()
       barrier=next;afterResponse=System.nanoTime()
-      fastFramesUntil=if(code==200 && response.optBoolean("accepted",true))SystemClock.elapsedRealtime()+2500L else 0L
+      val activeFrame=next.any { it!='0' } && (code==200 || response.optString("reason") in listOf("capture barrier required","superseded frame"))
+      fastFramesUntil=if(activeFrame)SystemClock.elapsedRealtime()+2500L else 0L
       if(running)status=if(code==200)"画面传输：已上传" else "画面传输：共享中"
      } else if(CaptureRecoveryGuard.authorizationFailure(code)) {pauseCloud(requestTicket)}
      else {status="画面上传暂不可用，保留共享并重试"}
