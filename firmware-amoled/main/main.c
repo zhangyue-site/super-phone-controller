@@ -6,6 +6,9 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
+#include "esp_system.h"
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
 #include "esp_heap_caps.h"
@@ -28,7 +31,7 @@ static const char *str(cJSON *o,const char *key){cJSON *v=cJSON_GetObjectItemCas
 static cJSON *current(void){return cJSON_GetArrayItem(plugins,selected);}
 static void render(void);
 static void reply(cJSON *o){char *s=cJSON_PrintUnformatted(o);if(s){usb_write(s);usb_write("\n");free(s);}cJSON_Delete(o);}
-static void status(const char *result){cJSON *o=cJSON_CreateObject();cJSON_AddStringToObject(o,"result",result);cJSON_AddStringToObject(o,"version",esp_app_get_description()->version);cJSON_AddNumberToObject(o,"page",page);cJSON_AddBoolToObject(o,"usb",usb_ready());cJSON_AddBoolToObject(o,"armed",usb_armed());cJSON_AddBoolToObject(o,"runnerConnected",false);cJSON_AddBoolToObject(o,"sharing",false);cJSON_AddNumberToObject(o,"freeHeap",esp_get_free_heap_size());cJSON_AddItemToObject(o,"plugins",cJSON_Duplicate(plugins,true));reply(o);}
+static void status(const char *result){cJSON *o=cJSON_CreateObject();cJSON_AddStringToObject(o,"result",result);cJSON_AddStringToObject(o,"serial",usb_serial());cJSON_AddStringToObject(o,"version",esp_app_get_description()->version);cJSON_AddNumberToObject(o,"page",page);cJSON_AddBoolToObject(o,"usb",usb_ready());cJSON_AddBoolToObject(o,"armed",usb_armed());cJSON_AddBoolToObject(o,"runnerConnected",false);cJSON_AddBoolToObject(o,"sharing",false);cJSON_AddNumberToObject(o,"freeHeap",esp_get_free_heap_size());cJSON_AddItemToObject(o,"plugins",cJSON_Duplicate(plugins,true));reply(o);}
 static bool version(const char *s,unsigned v[3]){int end=0;for(const char *c=s;*c;c++)if((*c<'0'||*c>'9')&&*c!='.')return false;if(sscanf(s,"%u.%u.%u%n",v,v+1,v+2,&end)!=3||s[end])return false;for(int i=0;i<3;i++)if(v[i]>65535)return false;return true;}
 static int compare(unsigned a[3],unsigned b[3]){for(int i=0;i<3;i++){if(a[i]>b[i])return 1;if(a[i]<b[i])return -1;}return 0;}
 static bool valid(cJSON *p){unsigned v[3];const char *id=str(p,"id"),*name=str(p,"name");if(strcmp(str(p,"format"),"phone-controller-plugin")||!cJSON_IsNumber(cJSON_GetObjectItem(p,"apiVersion"))||cJSON_GetObjectItem(p,"apiVersion")->valuedouble!=1||!version(str(p,"version"),v)||!id[0]||strlen(id)>63||!name[0]||strlen(name)>90)return false;for(const char *s=id;*s;s++)if(!((*s>='a'&&*s<='z')||(*s>='0'&&*s<='9')||*s=='.'||*s=='-'||*s=='_'))return false;cJSON *r=cJSON_GetObjectItem(p,"runner");return !strcmp(str(r,"type"),"server-workflow")&&strlen(str(r,"entry"))>0&&strlen(str(r,"entry"))<=96;}
@@ -50,6 +53,9 @@ static void process(char *line){
   int found=-1;for(int i=0;i<cJSON_GetArraySize(plugins);i++)if(!strcmp(str(cJSON_GetArrayItem(plugins,i),"id"),str(o,"id")))found=i;
   if(found<0){status("not-found");goto done;}cJSON *next=cJSON_Duplicate(plugins,true);cJSON_DeleteItemFromArray(next,found);if(!save(next)){cJSON_Delete(next);status("storage-error");goto done;}page=1;refresh=true;status("removed");
  }else if(!strcmp(op,"view")){cJSON *p=cJSON_GetObjectItem(o,"page");if(cJSON_IsNumber(p)&&p->valueint>=0&&p->valueint<=6){page=p->valueint;refresh=true;status("view-changed");}else status("invalid-page");}
+ else if(!strcmp(op,"snapshot")){if(refresh){render();refresh=false;}lv_draw_buf_t *buf=lv_snapshot_take(root,LV_COLOR_FORMAT_RGB565);if(!buf){status("snapshot-failed");goto done;}cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","snapshot");cJSON_AddNumberToObject(meta,"width",buf->header.w);cJSON_AddNumberToObject(meta,"height",buf->header.h);cJSON_AddNumberToObject(meta,"stride",buf->header.stride);cJSON_AddNumberToObject(meta,"bytes",buf->header.stride*buf->header.h);reply(meta);usb_write_bytes(buf->data,buf->header.stride*buf->header.h);lv_draw_buf_destroy(buf);usb_write("\n");}
+ else if(!strcmp(op,"maintenance.restart")&&!strcmp(str(o,"device"),usb_serial())&&!usb_armed()){status("restarting");vTaskDelay(pdMS_TO_TICKS(100));esp_restart();}
+ else if(!strcmp(op,"maintenance.bootloader")&&!strcmp(str(o,"device"),usb_serial())&&!usb_armed()){status("entering-bootloader");vTaskDelay(pdMS_TO_TICKS(100));REG_SET_BIT(RTC_CNTL_OPTION1_REG,RTC_CNTL_FORCE_DOWNLOAD_BOOT);esp_restart();}
  else status("unsupported-operation");
  done:cJSON_Delete(o);
 }
@@ -69,7 +75,7 @@ static void action(lv_event_t *e){int a=(int)(intptr_t)lv_event_get_user_data(e)
  else if(a==41){cJSON *p=current();if(p){cJSON *next=cJSON_Duplicate(plugins,true);cJSON_DeleteItemFromArray(next,selected);if(save(next))page=1;else{cJSON_Delete(next);snprintf(notice,sizeof(notice),"移除失败，原插件保留");}}}
  refresh=true;
 }
-static void button(const char *text,int x,int y,int w,int h,int a,bool primary){lv_obj_t *b=lv_button_create(root);lv_obj_set_pos(b,x,y);lv_obj_set_size(b,w,h);lv_obj_set_style_radius(b,22,0);lv_obj_set_style_bg_color(b,lv_color_hex(primary?0x14c69b:0x1c1c1c),0);lv_obj_set_style_shadow_width(b,0,0);lv_obj_set_style_border_width(b,0,0);lv_obj_set_style_pad_all(b,6,0);lv_obj_add_event_cb(b,action,a==21?LV_EVENT_LONG_PRESSED:LV_EVENT_CLICKED,(void*)(intptr_t)a);if(a==21)lv_obj_set_style_anim_duration(b,2000,0);lv_obj_t *l=label(b,text,0,0,w-12,lv_color_hex(primary?0:0xf5f5f5));lv_obj_set_style_text_align(l,LV_TEXT_ALIGN_CENTER,0);lv_obj_center(l);}
+static void button(const char *text,int x,int y,int w,int h,int a,bool primary){lv_obj_t *b=lv_button_create(root);lv_obj_set_pos(b,x,y);lv_obj_set_size(b,w,h);lv_obj_set_style_radius(b,22,0);lv_obj_set_style_bg_color(b,lv_color_hex(primary?0x14c69b:0x1c1c1c),0);lv_obj_set_style_shadow_width(b,0,0);lv_obj_set_style_border_width(b,0,0);lv_obj_set_style_pad_all(b,6,0);lv_obj_add_event_cb(b,action,a==21?LV_EVENT_LONG_PRESSED:LV_EVENT_CLICKED,(void*)(intptr_t)a);if(a==21)lv_obj_set_style_anim_duration(b,2000,0);lv_obj_t *l=label(b,text,0,0,w-12,lv_color_hex(primary?0:0xf5f5f5));lv_label_set_long_mode(l,LV_LABEL_LONG_DOT);lv_obj_set_height(l,32);lv_obj_set_style_text_align(l,LV_TEXT_ALIGN_CENTER,0);lv_obj_center(l);}
 static void render(void){
  lv_obj_clean(root);lv_obj_set_style_bg_color(root,lv_color_black(),0);lv_obj_set_style_pad_all(root,0,0);lv_obj_remove_flag(root,LV_OBJ_FLAG_SCROLLABLE);
  link_label=label(root,usb_ready()?"USB已连接 · 共享未接入":"USB未连接 · 共享未接入",24,20,432,lv_color_hex(0x17baf1));

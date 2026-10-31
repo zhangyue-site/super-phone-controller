@@ -32,3 +32,9 @@ Four plugins maximum, total persisted JSON below 6144 bytes. Equal versions are
 idempotent, downgrades rejected; upgrades retain existing parameters. Import does
 not arm HID or start a workflow. STOP releases input and preserves USB enumeration.
 Serial DTR/RTS is not a remote execution or re-enumeration trigger.
+
+Diagnostics: snapshot returns a JSON header followed by RGB565 bytes and a newline.
+This reads the device-rendered LVGL canvas; it does not prove physical panel pixels.
+Maintenance restart/bootloader requires the exact USB serial in the device field
+and disabled HID. Neither operation erases flash.
+Font subset: Noto Sans CJK SC, SIL OFL; license included.

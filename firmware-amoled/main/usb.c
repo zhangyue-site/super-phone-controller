@@ -1,6 +1,7 @@
 #include "usb.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
 #include "tinyusb_cdc_acm.h"
@@ -8,7 +9,7 @@
 #include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-static bool armed;
+static atomic_bool armed;
 static char serial[13];
 static const uint8_t reports[]={TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(1)),TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(2))};
 static const uint8_t config[]={
@@ -34,4 +35,6 @@ void usb_gate(bool enable){armed=enable&&usb_ready();if(!armed&&ready()){tud_hid
 bool usb_consumer(unsigned usage){if(!usb_armed()||!ready())return false;uint16_t u=usage;if(!tud_hid_report(2,&u,2))return false;vTaskDelay(pdMS_TO_TICKS(20));u=0;return ready()&&tud_hid_report(2,&u,2);}
 bool usb_mouse(int dx,int dy,bool click){if(!usb_armed()||!ready())return false;if(!tud_hid_mouse_report(1,click?1:0,dx,dy,0,0))return false;if(!click)return true;vTaskDelay(pdMS_TO_TICKS(20));return ready()&&tud_hid_mouse_report(1,0,0,0,0,0);}
 size_t usb_read(char *out,size_t size){size_t n=0;tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0,(uint8_t*)out,size,&n);return n;}
-void usb_write(const char *s){tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0,(const uint8_t*)s,strlen(s));tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0,20);}
+size_t usb_write_bytes(const void *data,size_t total){const uint8_t *s=data;size_t sent=0;for(int retry=0;sent<total&&retry<3000&&tud_mounted();retry++){sent+=tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0,s+sent,total-sent);tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0,0);if(sent<total)vTaskDelay(pdMS_TO_TICKS(2));}return sent;}
+void usb_write(const char *s){usb_write_bytes(s,strlen(s));}
+const char *usb_serial(void){return serial;}

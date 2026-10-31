@@ -21,8 +21,7 @@ jobs:
         run: |
           . "$IDF_PATH/export.sh"
           cd firmware-amoled
-          idf.py set-target esp32s3
-          idf.py build
+          idf.py -DIDF_TARGET=esp32s3 build
           idf.py merge-bin -o build/phone-controller-amoled-full.bin
       - name: Collect verifiable binaries
         shell: bash
