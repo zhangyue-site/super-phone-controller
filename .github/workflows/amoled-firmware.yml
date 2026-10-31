@@ -1,0 +1,45 @@
+name: Build AMOLED firmware
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/amoled-plugin-controller']
+    paths: ['firmware-amoled/**', '.github/workflows/amoled-firmware.yml']
+permissions:
+  contents: read
+concurrency:
+  group: amoled-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    container: espressif/idf:v5.5.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build independent AMOLED target
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cd firmware-amoled
+          idf.py set-target esp32s3
+          idf.py build
+          idf.py merge-bin -o build/phone-controller-amoled-full.bin
+      - name: Collect verifiable binaries
+        shell: bash
+        run: |
+          mkdir out
+          cp firmware-amoled/build/phone_controller_amoled.bin out/app.bin
+          cp firmware-amoled/build/phone-controller-amoled-full.bin out/full.bin
+          cp firmware-amoled/build/flash_args out/
+          cp firmware-amoled/build/flasher_args.json out/
+          cp firmware-amoled/build/project_description.json out/
+          cp firmware-amoled/dependencies.lock out/
+          printf '%s\n' "$GITHUB_SHA" > out/SOURCE
+          cd out
+          sha256sum *.bin > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amoled-firmware-${{ github.run_number }}
+          path: out/
+          retention-days: 14
+          if-no-files-found: error
