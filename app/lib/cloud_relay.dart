@@ -67,6 +67,7 @@ class CloudRelay {
     if (_closed) throw StateError('控制连接已结束');
     await beforePolling?.call();
     if (_closed) throw StateError("控制连接已结束");
+    _lastPoll = DateTime.now(); // Keep the existing idle/startup cadence.
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => _tick());
   }
 
