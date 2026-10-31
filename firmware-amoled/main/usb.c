@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 static atomic_bool armed;
+static bool started;
 static char serial[13];
 static const uint8_t reports[]={TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(1)),TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(2))};
 static const uint8_t config[]={
@@ -22,19 +23,19 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance){return reports;}
 uint16_t tud_hid_get_report_cb(uint8_t instance,uint8_t id,hid_report_type_t type,uint8_t *b,uint16_t len){return 0;}
 void tud_hid_set_report_cb(uint8_t instance,uint8_t id,hid_report_type_t type,uint8_t const *b,uint16_t len){}
 static void event(tinyusb_event_t *e,void *arg){if(e->id==TINYUSB_EVENT_DETACHED)armed=false;}
-void usb_start(void){
- uint8_t mac[6];ESP_ERROR_CHECK(esp_read_mac(mac,ESP_MAC_BASE));
+esp_err_t usb_start(void){
+ uint8_t mac[6];esp_err_t result=esp_read_mac(mac,ESP_MAC_BASE);if(result!=ESP_OK)return result;
  snprintf(serial,sizeof(serial),"%02X%02X%02X%02X%02X%02X",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
  tinyusb_config_t cfg=TINYUSB_DEFAULT_CONFIG();cfg.event_cb=event;cfg.descriptor.device=&device;cfg.descriptor.full_speed_config=config;cfg.descriptor.string=strings;cfg.descriptor.string_count=6;
- ESP_ERROR_CHECK(tinyusb_driver_install(&cfg));tinyusb_config_cdcacm_t cdc={0};ESP_ERROR_CHECK(tinyusb_cdcacm_init(&cdc));
+ result=tinyusb_driver_install(&cfg);if(result!=ESP_OK)return result;tinyusb_config_cdcacm_t cdc={0};result=tinyusb_cdcacm_init(&cdc);started=result==ESP_OK;return result;
 }
-bool usb_ready(void){return tud_mounted();}
+bool usb_ready(void){return started&&tud_mounted();}
 bool usb_armed(void){return armed&&usb_ready();}
-static bool ready(void){for(int i=0;i<12&&!tud_hid_ready();i++)vTaskDelay(pdMS_TO_TICKS(5));return tud_hid_ready();}
+static bool ready(void){if(!started)return false;for(int i=0;i<12&&!tud_hid_ready();i++)vTaskDelay(pdMS_TO_TICKS(5));return tud_hid_ready();}
 void usb_gate(bool enable){armed=enable&&usb_ready();if(!armed&&ready()){tud_hid_mouse_report(1,0,0,0,0,0);if(ready()){uint16_t u=0;tud_hid_report(2,&u,2);}}}
 bool usb_consumer(unsigned usage){if(!usb_armed()||!ready())return false;uint16_t u=usage;if(!tud_hid_report(2,&u,2))return false;vTaskDelay(pdMS_TO_TICKS(20));u=0;return ready()&&tud_hid_report(2,&u,2);}
 bool usb_mouse(int dx,int dy,bool click){if(!usb_armed()||!ready())return false;if(!tud_hid_mouse_report(1,click?1:0,dx,dy,0,0))return false;if(!click)return true;vTaskDelay(pdMS_TO_TICKS(20));return ready()&&tud_hid_mouse_report(1,0,0,0,0,0);}
-size_t usb_read(char *out,size_t size){size_t n=0;tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0,(uint8_t*)out,size,&n);return n;}
+size_t usb_read(char *out,size_t size){size_t n=0;if(!started)return 0;tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0,(uint8_t*)out,size,&n);return n;}
 size_t usb_write_bytes(const void *data,size_t total){const uint8_t *s=data;size_t sent=0;for(int retry=0;sent<total&&retry<3000&&tud_mounted();retry++){sent+=tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0,s+sent,total-sent);tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0,0);if(sent<total)vTaskDelay(pdMS_TO_TICKS(2));}return sent;}
 void usb_write(const char *s){usb_write_bytes(s,strlen(s));}
 const char *usb_serial(void){return serial;}

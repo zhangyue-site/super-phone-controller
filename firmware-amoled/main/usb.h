@@ -1,7 +1,8 @@
 #pragma once
 #include <stdbool.h>
+#include "esp_err.h"
 #include <stddef.h>
-void usb_start(void);
+esp_err_t usb_start(void);
 bool usb_ready(void);
 void usb_gate(bool enable);
 bool usb_armed(void);
