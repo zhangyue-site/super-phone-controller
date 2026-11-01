@@ -20,6 +20,8 @@
 #include "bsp/display.h"
 #include "cJSON.h"
 #include "usb.h"
+#include "identity.h"
+#include "relay.h"
 #include "esp_attr.h"
 #include "esp_private/panic_internal.h"
 #include "boot_recovery_policy.h"
@@ -115,7 +117,7 @@ static void render(void){
  else if(page==3){label(root,"通过USB导入JSON插件\n支持独立更新与移除\n手机导入待接入",80,144,320,lv_color_hex(0xaaaaaa));label(root,"API 1 · 最多4个插件\n导入后不会自动运行",80,288,320,lv_color_hex(0x17baf1));button("返回插件",112,386,256,56,11,true);}
  else if(page==4){if(!amoled_usb_armed()){label(root,"控制当前USB主机\n长按开启输入\n停止后连接保留",80,154,320,lv_color_hex(0xaaaaaa));button("长按2秒开启输入",72,310,336,56,21,true);}else{button("左",60,144,104,64,30,false);button("上",188,144,104,64,32,false);button("右",316,144,104,64,31,false);button("返回",60,220,104,64,35,false);button("点击",188,220,104,64,34,false);button("下",316,220,104,64,33,false);button("音量+",60,296,104,64,37,false);button("主页",188,296,104,64,36,false);button("音量-",316,296,104,64,38,false);}button("停止输入",112,386,120,56,20,false);button("首页",248,386,120,56,10,false);}
  else if(page==5){label(root,"语音服务尚未接入\n当前不会录音或上传",80,176,320,lv_color_hex(0xaaaaaa));button("回到首页",112,386,256,56,10,true);}
- else if(page==6){label(root,"固件 0.1.7-amoled\nWi-Fi / 蓝牙默认关闭",80,144,320,lv_color_hex(0xaaaaaa));button("停止输入",80,250,320,56,20,false);button("长按2秒进入维护",80,318,320,56,22,false);button("回到首页",112,386,256,56,10,true);}
+ else if(page==6){label(root,"固件 0.2.0-amoled\n蓝牙手机中转 · Wi-Fi关闭",80,144,320,lv_color_hex(0xaaaaaa));button("停止输入",80,250,320,56,20,false);button("长按2秒进入维护",80,318,320,56,22,false);button("回到首页",112,386,256,56,10,true);}
  if(notice[0]){notice_ticks=100;lv_obj_t *box=lv_obj_create(root);lv_obj_set_pos(box,72,180);lv_obj_set_size(box,336,120);lv_obj_set_style_bg_color(box,lv_color_hex(0x21332f),0);lv_obj_set_style_border_width(box,0,0);label(box,notice,0,0,288,lv_color_hex(0xf5f5f5));}
  ESP_LOGI("ui","page=%d plugins=%d usb=%d armed=%d",page,cJSON_GetArraySize(plugins),amoled_usb_ready(),amoled_usb_armed());
 }
@@ -132,7 +134,7 @@ void app_main(void){
  boot_recovery.stage=1;boot_recovery.log_size=0;boot_recovery.panic_magic=0;uart_log=esp_log_set_vprintf(retained_log);
  ESP_LOGI("amoled","BOOT version=%s target=ESP32-S3-Touch-AMOLED-2.16",esp_app_get_description()->version);
  boot_recovery.stage=2;
- ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(nvs_open("plugins",NVS_READWRITE,&storage));
+ ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(amoled_identity_init());ESP_ERROR_CHECK(nvs_open("plugins",NVS_READWRITE,&storage));
  size_t n=0;if(nvs_get_str(storage,"plugins",NULL,&n)==ESP_OK&&n<=MAX_JSON){char *s=malloc(n);if(s){if(nvs_get_str(storage,"plugins",s,&n)==ESP_OK)plugins=cJSON_Parse(s);free(s);}}
  if(!cJSON_IsArray(plugins)){cJSON_Delete(plugins);plugins=cJSON_CreateArray();}
  boot_recovery.stage=3;
@@ -147,7 +149,8 @@ void app_main(void){
  ESP_LOGI("amoled","READY display=480x480 touch=enabled usb=CDC+HID persistentPlugins=%d psramFree=%u",cJSON_GetArraySize(plugins),(unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
  static char line[MAX_JSON+128];size_t pos=0;bool overflow=false;int tick=0;bool last_usb=false;
  boot_recovery.stage=7;
- for(;;){char buf[128];size_t count=amoled_usb_read(buf,sizeof(buf));for(size_t i=0;i<count;i++){char c=buf[i];if(c=='\n'){if(!overflow){line[pos]=0;bsp_display_lock(-1);process(line);bsp_display_unlock();}else status("request-too-large");pos=0;overflow=false;}else if(c!='\r'){if(pos+1<sizeof(line))line[pos++]=c;else overflow=true;}}
+ if(amoled_identity_ready()){esp_err_t relay_error=amoled_relay_start();if(relay_error!=ESP_OK)ESP_LOGE("amoled","BLE startup failed: %s",esp_err_to_name(relay_error));}
+ for(;;){char buf[128];size_t count=amoled_usb_read(buf,sizeof(buf));for(size_t i=0;i<count;i++){char c=buf[i];if(c=='\n'){if(!overflow){line[pos]=0;if(!amoled_control_console(line)){bsp_display_lock(-1);process(line);bsp_display_unlock();}memset(line,0,sizeof(line));}else status("request-too-large");pos=0;overflow=false;}else if(c!='\r'){if(pos+1<sizeof(line))line[pos++]=c;else overflow=true;}}
   if(amoled_usb_ready()!=last_usb){last_usb=amoled_usb_ready();refresh=true;}
   if(refresh){bsp_display_lock(-1);render();refresh=false;bsp_display_unlock();}
   if(notice_ticks>0&&--notice_ticks==0){notice[0]=0;refresh=true;}

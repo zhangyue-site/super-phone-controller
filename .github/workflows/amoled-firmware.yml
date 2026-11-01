@@ -31,6 +31,7 @@ jobs:
         run: |
           . "$IDF_PATH/export.sh"
           python3 tools/test_amoled_registry.py --output-dir /tmp/amoled-registry-tests
+          python3 tools/test_amoled_control.py
       - name: Build independent AMOLED target
         shell: bash
         run: |
