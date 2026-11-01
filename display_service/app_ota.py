@@ -3,7 +3,8 @@ import hashlib,hmac,re,secrets,threading,time
 from . import firmware
 HEX=re.compile(r"[0-9a-f]{64}\Z")
 class Authority:
- def __init__(self,clock=time.monotonic):
+ def __init__(self,clock=time.monotonic,*,firmware_scope=True):
+  self.firmware_scope=firmware_scope
   self.clock=clock;self.lock=threading.Lock();self.challenges={};self.tickets={};self.rates={};self.upgrade_nonces={}
  def _prune(self,now):
   for entries in (self.challenges,self.tickets,self.upgrade_nonces):
@@ -30,6 +31,10 @@ class Authority:
    message=b"PCFLASH1\n"+device.encode()+b"\n"+bytes.fromhex(nonce)
    expected=hmac.new(keys[device].encode(),message,hashlib.sha256).hexdigest()
    if not hmac.compare_digest(proof,expected) or len(self.tickets)>=256:raise ValueError("proof")
+   if not self.firmware_scope:
+    ticket=secrets.token_urlsafe(32)
+    self.tickets[ticket]=(now+300,device,"phone-commands")
+    return dict(ticket=ticket,expiresIn=300)
    entry,_=firmware.release(device)
    ticket=secrets.token_urlsafe(32)
    self.tickets[ticket]=(now+300,device,entry["sha256"])
@@ -52,6 +57,7 @@ class Authority:
   message=b"PCOTA-AUTH1\n"+device.encode()+b"\n"+boot.encode()+b"\n"+bytes.fromhex(nonce)
   return {"authorization":hmac.new(keys[device].encode(),message,hashlib.sha256).hexdigest(),"scope":"ble-ota","expiresIn":60}
  def image(self,ticket):
+  if not self.firmware_scope:raise ValueError("not a firmware capability")
   if not isinstance(ticket,str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}",ticket):raise ValueError("ticket")
   with self.lock:
    self._prune(self.clock());item=self.tickets.get(ticket)

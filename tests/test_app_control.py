@@ -11,7 +11,7 @@ class AppControlTests(http_tests.RemoteHttpTests):
  test_bridge_auth_unknown_peer_cross_confirmation_and_stop=None
  test_remote_stop_blocks_voice_asr_already_in_flight=None
  def setUp(self):
-  super().setUp();self.control_auth=Authority()
+  super().setUp();self.control_auth=Authority(firmware_scope=False)
   self.ap=patch.object(app_control,'AUTHORITY',self.control_auth);self.ap.start()
   self.frames=patch.object(app_screen,'SEQUENCES',{});self.frames.start()
   self.remote.binding_allowed=remote_http.binding_allowed
@@ -20,7 +20,7 @@ class AppControlTests(http_tests.RemoteHttpTests):
  def grant(self):
   code,c=self.request('/app-control/challenge',{'device':'epaper-01'});self.assertEqual(code,200)
   proof=hmac.new(b'synthetic-device-only',b'PCFLASH1\nepaper-01\n'+bytes.fromhex(c['challenge']),hashlib.sha256).hexdigest()
-  with patch('display_service.firmware.release',return_value=({'sha256':'f'*64,'version':'test','size':100},b'')):
+  with patch('display_service.firmware.release',side_effect=FileNotFoundError('No firmware is published for this control-only device')):
    code,g=self.request('/app-control/authorize',{'device':'epaper-01','challenge':c['challenge'],'proof':proof})
   self.assertEqual(code,200);self.assertEqual(g['scope'],'phone-commands');return g['ticket']
  def command(self,ticket,operation,**kw):
@@ -105,7 +105,7 @@ class AppControlTests(http_tests.RemoteHttpTests):
   old_expiry=self.control_auth.tickets[parent][0]
   code,c=self.request('/app-control/challenge',{'device':'epaper-01'});self.assertEqual(code,200)
   proof=hmac.new(b'synthetic-device-only',b'PCFLASH1\nepaper-01\n'+bytes.fromhex(c['challenge']),hashlib.sha256).hexdigest()
-  with patch('display_service.firmware.release',return_value=({'sha256':'f'*64,'version':'test','size':100},b'')):
+  with patch('display_service.firmware.release',side_effect=FileNotFoundError('No firmware is published for this control-only device')):
    code,result=self.request('/app-control/renew',{'device':'epaper-01','challenge':c['challenge'],'proof':proof},extra={'Authorization':'Bearer '+parent})
   self.assertEqual(code,200);self.assertGreaterEqual(self.control_auth.tickets[parent][0],old_expiry)
   self.assertEqual(app_control.controller_owner(controller),identity)

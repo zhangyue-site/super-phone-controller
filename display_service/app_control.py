@@ -3,7 +3,7 @@ import hashlib,json,os,re,threading
 from .app_ota import Authority
 from . import remote_http
 from .paired_control import Pairings
-AUTHORITY=Authority()
+AUTHORITY=Authority(firmware_scope=False)
 SESSION_LOCK=threading.RLock()
 def authorize_target(obj,config):
  with SESSION_LOCK:
