@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['codex/amoled-plugin-controller']
-    paths: ['firmware-amoled/**', '.github/workflows/amoled-firmware.yml']
+    paths: ['firmware-amoled/**', '.github/workflows/amoled-firmware.yml', 'tools/test_amoled_registry.py', 'tests/fixtures/amoled-plugin-cases.json']
 permissions:
   contents: read
 concurrency:
