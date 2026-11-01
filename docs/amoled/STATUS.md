@@ -1,34 +1,51 @@
 # AMOLED hardware port status
 
-Firmware 0.1.2-amoled builds successfully from source
-`0747c86c9f3358f285e5b8577d03f8ceae5fe9a0`.
-[Verified cloud build](https://github.com/zhangyue-site/super-phone-controller/actions/runs/41256286122).
+Firmware 0.1.6-amoled was built, verified and flashed to the authorized test
+board. [Cloud build](https://github.com/zhangyue-site/super-phone-controller/actions/runs/41306274520),
+source `41716e2d2e29bfe2c495d49bd127f384f0a42add`.
 
-The first 0.1.0 image was written to the authorized test board and passed the
-chip's write digest check. USB did not enumerate after reboot, so startup and
-functional acceptance have **not passed**. Version 0.1.2 disables both primary
-and secondary USB-Serial-JTAG console output, adds a configuration guard, visible
-USB initialization errors and a local maintenance entry. Its binary and merged
-image have been checked; it awaits physical BOOT recovery and board verification.
-Factory backup and device-specific evidence remain private.
+## Confirmed on hardware
 
-Implemented in code: manufacturer display/touch BSP, generic home screen,
-persistent plugin descriptions with version checks, CDC JSON import/removal,
-manual USB mouse/consumer input with a local gate, and render snapshots.
-Imported plugins do not execute code or start a task automatically.
+- CDC status, 17 protocol cases, plugin import/version checks and storage limits.
+- Four test plugins and their parameters survived a software restart.
+- A 125-second run with 61 samples kept USB online, uptime increasing, input
+  disabled, and early crash count zero. Test plugins were removed afterward.
+- Seven 480×480 page snapshots were obtained, but visual inspection found
+  corrupted glyphs. Display acceptance has **not passed**. A reported black
+  panel coexisted with a responding application; panel output remains unresolved.
+
+The startup crash was a linker collision: application `usb_read` and `usb_write`
+resolved to ESP32-S3 ROM absolute symbols. The real panic pointed to the main
+receive loop. Application functions now use the `amoled_usb_` prefix. CI checks
+all 11 exported USB operations in the linked ELF for application code addresses.
+
+## Display correction awaiting hardware verification
+
+Version 0.1.7-amoled uses uncompressed Chinese glyphs, one software draw unit,
+full font line height in buttons, and controls inset for the round screen.
+[Candidate build](https://github.com/zhangyue-site/super-phone-controller/actions/runs/41306988761),
+source `3ac10527f548e9b16b3a1c72d54fd22934a2c4df`. This candidate is not yet
+claimed to fix the panel or pass visual acceptance.
+
+Three repeated early application crashes request hardware download mode.
+RTC crash count and retained panic/log evidence have been read successfully
+from ROM. Healthy runtime clears the crash count. A normal software restart
+and remote status have passed; the explicit maintenance-to-ROM command still
+needs its own hardware acceptance. Factory backup and device evidence stay private.
+
+## Scope
+
+Implemented: manufacturer display/touch initialization, generic home screen,
+persistent plugin descriptions, CDC JSON import/removal, gated manual USB
+mouse/consumer reports, and render snapshots. Imported descriptions do not
+execute code or start tasks automatically.
 
 Still to integrate: phone-side plugin import, authenticated BLE relay, voice,
-server workflow runner, and phone screen-sharing state. No real bookkeeping or
-end-to-end two-second transaction performance is claimed for this port.
+server workflow runner and phone screen-sharing state. Physical touch, actual
+phone HID behavior, battery operation, OTA and real bookkeeping have not passed
+end-to-end acceptance for this port.
 
-Host registry regression now runs the firmware C functions against real cJSON
-under AddressSanitizer and UndefinedBehaviorSanitizer. It covers 17 protocol
-fixtures plus numeric boundaries, malformed/trailing JSON, parameter retention
-and mocked storage failures. An overflowing version component was found and
-fixed; these host checks passed both on the cloud workspace and in CI.
-They do not validate real flash failure atomicity, physical touch or phone HID.
-
-The candidate exposes uptime and reset reason for continuous-run verification.
-The first flashed image remains the installed version until a stable ROM
-interface can be obtained. Physical startup, screen snapshots, real NVS
-persistence and phone input have not yet passed acceptance.
+Host C regression uses real cJSON with AddressSanitizer and UndefinedBehaviorSanitizer.
+It covers the protocol fixtures, numeric boundaries, malformed/trailing JSON,
+parameter retention and mocked storage failures. Hardware results above remain
+separate from these host tests.
