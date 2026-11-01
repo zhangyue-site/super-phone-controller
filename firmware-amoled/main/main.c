@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <stdatomic.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
@@ -24,7 +26,17 @@ LV_FONT_DECLARE(ui_font);
 _Static_assert(LVGL_VERSION_MAJOR==9 && LVGL_VERSION_MINOR==6 && LVGL_VERSION_PATCH==0,"Unexpected LVGL version");
 #define MAX_PLUGINS 4
 #define MAX_JSON 6144
-RTC_NOINIT_ATTR static volatile struct {uint32_t magic,crashes;} boot_recovery;
+RTC_NOINIT_ATTR static volatile struct {uint32_t magic,crashes,stage,log_size;char log[4096];} boot_recovery;
+static vprintf_like_t uart_log;
+static atomic_flag log_busy=ATOMIC_FLAG_INIT;
+static int retained_log(const char *format,va_list args){
+ if(!atomic_flag_test_and_set(&log_busy)){
+  char text[256];va_list copy;va_copy(copy,args);int n=vsnprintf(text,sizeof(text),format,copy);va_end(copy);
+  if(n>0){size_t count=n<(int)sizeof(text)?n:sizeof(text)-1;for(size_t i=0;i<count;i++){uint32_t k=boot_recovery.log_size;boot_recovery.log[k%sizeof(boot_recovery.log)]=text[i];boot_recovery.log_size=k+1;}}
+  atomic_flag_clear(&log_busy);
+ }
+ return uart_log?uart_log(format,args):0;
+}
 static nvs_handle_t storage;
 static cJSON *plugins;
 static int page,selected;
@@ -92,7 +104,7 @@ static void render(void){
  else if(page==3){label(root,"通过USB导入JSON插件\n支持独立更新与移除\n手机导入入口待接入",24,132,432,lv_color_hex(0xaaaaaa));label(root,"API 1 · 最多4个插件\n导入后不会自动运行",24,260,432,lv_color_hex(0x17baf1));button("返回插件",24,384,432,72,11,true);}
  else if(page==4){if(!usb_armed()){label(root,"仅控制当前USB连接的主机\n长按开启，停止后连接保留",24,138,432,lv_color_hex(0xaaaaaa));button("长按2秒开启输入",24,268,432,72,21,true);}else{button("左",24,112,132,72,30,false);button("上",174,112,132,72,32,false);button("右",324,112,132,72,31,false);button("返回",24,202,132,72,35,false);button("点击",174,202,132,72,34,false);button("下",324,202,132,72,33,false);button("音量+",24,292,132,72,37,false);button("主页",174,292,132,72,36,false);button("音量-",324,292,132,72,38,false);}button("停止输入",24,384,204,72,20,false);button("首页",252,384,204,72,10,false);}
  else if(page==5){label(root,"语音服务尚未接入\n当前不会录音或上传",24,150,432,lv_color_hex(0xaaaaaa));button("回到首页",24,384,432,72,10,true);}
- else if(page==6){label(root,"固件 0.1.3-amoled\nWi-Fi / 蓝牙默认关闭",24,126,432,lv_color_hex(0xaaaaaa));button("停止输入",24,232,432,72,20,false);button("长按2秒进入维护",24,308,432,72,22,false);button("回到首页",24,384,432,72,10,true);}
+ else if(page==6){label(root,"固件 0.1.4-amoled\nWi-Fi / 蓝牙默认关闭",24,126,432,lv_color_hex(0xaaaaaa));button("停止输入",24,232,432,72,20,false);button("长按2秒进入维护",24,308,432,72,22,false);button("回到首页",24,384,432,72,10,true);}
  if(notice[0]){notice_ticks=100;lv_obj_t *box=lv_obj_create(root);lv_obj_set_pos(box,24,180);lv_obj_set_size(box,432,120);lv_obj_set_style_bg_color(box,lv_color_hex(0x21332f),0);lv_obj_set_style_border_width(box,0,0);label(box,notice,0,0,384,lv_color_hex(0xf5f5f5));}
  ESP_LOGI("ui","page=%d plugins=%d usb=%d armed=%d",page,cJSON_GetArraySize(plugins),usb_ready(),usb_armed());
 }
@@ -106,17 +118,24 @@ void app_main(void){
   esp_err_t e=usb_enter_bootloader();ESP_LOGE("amoled","Recovery entry failed: %s",esp_err_to_name(e));
  }
 
+ boot_recovery.stage=1;boot_recovery.log_size=0;uart_log=esp_log_set_vprintf(retained_log);
  ESP_LOGI("amoled","BOOT version=%s target=ESP32-S3-Touch-AMOLED-2.16",esp_app_get_description()->version);
+ boot_recovery.stage=2;
  ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(nvs_open("plugins",NVS_READWRITE,&storage));
  size_t n=0;if(nvs_get_str(storage,"plugins",NULL,&n)==ESP_OK&&n<=MAX_JSON){char *s=malloc(n);if(s){if(nvs_get_str(storage,"plugins",s,&n)==ESP_OK)plugins=cJSON_Parse(s);free(s);}}
  if(!cJSON_IsArray(plugins)){cJSON_Delete(plugins);plugins=cJSON_CreateArray();}
+ boot_recovery.stage=3;
  if(!bsp_display_start()){ESP_LOGE("amoled","display initialization failed");return;}
+ boot_recovery.stage=4;
  bsp_display_lock(-1);root=lv_screen_active();lv_indev_t *in=NULL;while((in=lv_indev_get_next(in)))lv_indev_set_long_press_time(in,2000);render();bsp_display_unlock();
  snprintf(notice,sizeof(notice),"正在启动USB");bsp_display_lock(-1);render();bsp_display_unlock();
+ boot_recovery.stage=5;
  esp_err_t usb_error=usb_start();if(usb_error!=ESP_OK){page=6;snprintf(notice,sizeof(notice),"USB启动失败 0x%x",(unsigned)usb_error);}else{notice[0]=0;esp_err_t health=esp_ota_mark_app_valid_cancel_rollback();if(health!=ESP_OK)ESP_LOGW("amoled","boot health mark: %s",esp_err_to_name(health));}
  bsp_display_lock(-1);render();bsp_display_unlock();
+ boot_recovery.stage=6;
  ESP_LOGI("amoled","READY display=480x480 touch=enabled usb=CDC+HID persistentPlugins=%d psramFree=%u",cJSON_GetArraySize(plugins),(unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
  static char line[MAX_JSON+128];size_t pos=0;bool overflow=false;int tick=0;bool last_usb=false;
+ boot_recovery.stage=7;
  for(;;){char buf[128];size_t count=usb_read(buf,sizeof(buf));for(size_t i=0;i<count;i++){char c=buf[i];if(c=='\n'){if(!overflow){line[pos]=0;bsp_display_lock(-1);process(line);bsp_display_unlock();}else status("request-too-large");pos=0;overflow=false;}else if(c!='\r'){if(pos+1<sizeof(line))line[pos++]=c;else overflow=true;}}
   if(usb_ready()!=last_usb){last_usb=usb_ready();refresh=true;}
   if(refresh){bsp_display_lock(-1);render();refresh=false;bsp_display_unlock();}
