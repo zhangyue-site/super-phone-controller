@@ -93,16 +93,22 @@ class ScreenShareService: Service() {
  private var reader: ImageReader?=null
  private var worker: HandlerThread?=null
  private var handler: Handler?=null
+ private var statusWorker: HandlerThread?=null
+ private var statusHandler: Handler?=null
+ // One upload in flight and one newest pending frame; never accumulate old screens.
+ private val frameWorker=ThreadPoolExecutor(1,1,0L,TimeUnit.MILLISECONDS,
+  ArrayBlockingQueue<Runnable>(1),ThreadPoolExecutor.DiscardOldestPolicy())
+ @Volatile private var statusConnection: HttpsURLConnection?=null
  @Volatile private var running=false
  @Volatile private var connection: HttpsURLConnection?=null
  @Volatile private var ticket=""
- private var sequence=0
+ @Volatile private var sequence=0
  private var last=0L
- private var fastFramesUntil=0L
+ @Volatile private var fastFramesUntil=0L
  @Volatile private var until=0L
  @Volatile private var renewalConnection: HttpsURLConnection?=null
- private var barrier=""
- private var afterResponse=0L
+ @Volatile private var barrier=""
+ @Volatile private var afterResponse=0L
  private var initialWidth=0
  private var initialHeight=0
  private var initialRotation=0
@@ -178,11 +184,11 @@ class ScreenShareService: Service() {
   override fun run() {
    if(!running)return
    if(SystemClock.elapsedRealtime()>=until)pauseCloud(ticket)
-   if(recovery.needsAuthorization()){handler?.postDelayed(this,2000);return}
+   if(recovery.needsAuthorization()){statusHandler?.postDelayed(this,2000);return}
    val requestTicket=ticket
    var c: HttpsURLConnection?=null
    try {
-    c=URL("$BASE/status").openConnection() as HttpsURLConnection;connection=c
+    c=URL("$BASE/status").openConnection() as HttpsURLConnection;statusConnection=c
     c.requestMethod="POST";c.connectTimeout=3000;c.readTimeout=3000;c.doOutput=true
     c.setRequestProperty("Authorization","Bearer $requestTicket");c.setFixedLengthStreamingMode(0);c.outputStream.close()
     if(c.responseCode==200) {
@@ -192,9 +198,43 @@ class ScreenShareService: Service() {
      if(running && ticket==requestTicket)taskStatus=data.toString()
     } else if(CaptureRecoveryGuard.authorizationFailure(c.responseCode)) {pauseCloud(requestTicket)}
     else if(running)status="云端暂不可用，保留共享并重试"
-   } catch(_: Exception) {if(running)taskStatus=""} finally {c?.disconnect();connection=null}
-   if(running)handler?.postDelayed(this,2000)
+   } catch(_: Exception) {if(running)taskStatus=""} finally {c?.disconnect();statusConnection=null}
+   if(running)statusHandler?.postDelayed(this,2000)
   }
+ }
+ private fun uploadFrame(bytes: ByteArray,capturedAt: Long,requestTicket: String) {
+  val requestBarrier: String
+  val requestSequence: Int
+  synchronized(this) {
+   if(!running || ticket!=requestTicket || recovery.needsAuthorization() ||
+      capturedAt<=afterResponse || SystemClock.elapsedRealtime()>=until)return
+   requestBarrier=barrier;requestSequence=++sequence
+  }
+  try {
+     val conn=URL("$BASE/frame").openConnection() as HttpsURLConnection
+     connection=conn;conn.requestMethod="POST";conn.connectTimeout=5000;conn.readTimeout=5000;conn.doOutput=true
+     conn.setRequestProperty("X-Screen-Native-Width",initialWidth.toString());conn.setRequestProperty("X-Screen-Native-Height",initialHeight.toString());conn.setRequestProperty("X-Screen-Barrier",requestBarrier);conn.setRequestProperty("Authorization","Bearer $requestTicket");conn.setRequestProperty("Content-Type","image/jpeg");conn.setRequestProperty("X-Screen-Sequence",requestSequence.toString());conn.setFixedLengthStreamingMode(bytes.size)
+     conn.outputStream.use{it.write(bytes)}
+     val code=conn.responseCode
+     if(!running || ticket!=requestTicket)return
+     if(code==200 || code==202) {
+      val body=conn.inputStream.use { readBounded(it,4097) }
+      if(body.size>4096)throw IllegalStateException()
+      val response=JSONObject(String(body,Charsets.UTF_8))
+      val next=response.getString("barrier")
+      if(!Regex("[0-9a-f]{32}").matches(next))throw IllegalStateException()
+      synchronized(this) {
+       if(!running || ticket!=requestTicket)return
+       barrier=next;afterResponse=System.nanoTime()
+      }
+      val activeFrame=next.any { it!='0' } && (code==200 || response.optString("reason") in listOf("capture barrier required","superseded frame"))
+      fastFramesUntil=if(activeFrame)SystemClock.elapsedRealtime()+2500L else 0L
+      if(running)status=if(code==200)"画面传输：已上传" else "画面传输：共享中"
+     } else if(CaptureRecoveryGuard.authorizationFailure(code)) {pauseCloud(requestTicket)}
+     else {status="画面上传暂不可用，保留共享并重试"}
+     conn.disconnect();connection=null
+  } catch(_: Exception) {if(running && ticket==requestTicket)status="画面上传失败，正在重试"}
+  finally {connection?.disconnect();connection=null}
  }
  override fun onBind(intent: Intent?)=null
  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -214,6 +254,7 @@ class ScreenShareService: Service() {
   try {
   if(Build.VERSION.SDK_INT>=29)startForeground(71,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION) else startForeground(71,notification)
    worker=HandlerThread("screen-capture").also{it.start()};handler=Handler(worker!!.looper)
+   statusWorker=HandlerThread("screen-status").also{it.start()};statusHandler=Handler(statusWorker!!.looper)
    projection=(getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).getMediaProjection(Activity.RESULT_OK,grant)
    projection!!.registerCallback(object: MediaProjection.Callback(){override fun onStop(){SafeDiagnostics.record(mapOf("event" to "capture_stop","phase" to "capture","reason" to "system_stop","generation" to recovery.generation()));if(running)status="系统已停止共享";endCapture();stopSelf()}
     override fun onCapturedContentResize(width: Int,height: Int){if(width!=initialWidth || height!=initialHeight)geometryChanged()}},Handler(Looper.getMainLooper()))
@@ -225,7 +266,7 @@ class ScreenShareService: Service() {
    displayManager=getSystemService(DISPLAY_SERVICE) as DisplayManager
    displayManager!!.registerDisplayListener(displayListener,handler)
    reader=ImageReader.newInstance(width,height,PixelFormat.RGBA_8888,2)
-   until=SystemClock.elapsedRealtime()+270000L;recovery.start();running=true;current=this;taskStatus="";handler!!.post(poll);status="共享中，等待语音任务"
+   until=SystemClock.elapsedRealtime()+270000L;recovery.start();running=true;current=this;taskStatus="";statusHandler!!.post(poll);status="共享中，等待语音任务"
    reader!!.setOnImageAvailableListener({ source ->
     val image=source.acquireLatestImage() ?: return@setOnImageAvailableListener
     var bitmap: Bitmap?=null
@@ -252,27 +293,11 @@ class ScreenShareService: Service() {
      scaled=if(factor<1.0)Bitmap.createScaledBitmap(cropped!!,(image.width*factor).toInt().coerceAtLeast(1),(image.height*factor).toInt().coerceAtLeast(1),true) else cropped
      val bytes=ByteArrayOutputStream().use { out -> scaled!!.compress(Bitmap.CompressFormat.JPEG,70,out);out.toByteArray() }
      if(bytes.size>524288){running=false;status="画面过大，任务已停止；请降低屏幕分辨率后重新共享";stopSelf();return@setOnImageAvailableListener}
-     val conn=URL("$BASE/frame").openConnection() as HttpsURLConnection
-     connection=conn;conn.requestMethod="POST";conn.connectTimeout=5000;conn.readTimeout=5000;conn.doOutput=true
-     conn.setRequestProperty("X-Screen-Native-Width",initialWidth.toString());conn.setRequestProperty("X-Screen-Native-Height",initialHeight.toString());conn.setRequestProperty("X-Screen-Barrier",barrier);conn.setRequestProperty("Authorization","Bearer $requestTicket");conn.setRequestProperty("Content-Type","image/jpeg");conn.setRequestProperty("X-Screen-Sequence",(++sequence).toString());conn.setFixedLengthStreamingMode(bytes.size)
-     conn.outputStream.use{it.write(bytes)}
-     val code=conn.responseCode
-     if(!running || ticket!=requestTicket)return@setOnImageAvailableListener
-     if(code==200 || code==202) {
-      val body=conn.inputStream.use { readBounded(it,4097) }
-      if(body.size>4096)throw IllegalStateException()
-      val response=JSONObject(String(body,Charsets.UTF_8))
-      val next=response.getString("barrier")
-      if(!Regex("[0-9a-f]{32}").matches(next))throw IllegalStateException()
-      barrier=next;afterResponse=System.nanoTime()
-      val activeFrame=next.any { it!='0' } && (code==200 || response.optString("reason") in listOf("capture barrier required","superseded frame"))
-      fastFramesUntil=if(activeFrame)SystemClock.elapsedRealtime()+2500L else 0L
-      if(running)status=if(code==200)"画面传输：已上传" else "画面传输：共享中"
-     } else if(CaptureRecoveryGuard.authorizationFailure(code)) {pauseCloud(requestTicket)}
-     else {status="画面上传暂不可用，保留共享并重试"}
-     conn.disconnect();connection=null
+     val capturedAt=image.timestamp
+     try { frameWorker.execute { uploadFrame(bytes,capturedAt,requestTicket) } }
+     catch(_: RejectedExecutionException) { /* Service is stopping. */ }
     } catch(e: Exception) {if(running)status="画面上传失败，正在重试"}
-    finally {if(scaled!==cropped)scaled?.recycle();if(cropped!==bitmap)cropped?.recycle();bitmap?.recycle();image.close();connection?.disconnect();connection=null}
+    finally {if(scaled!==cropped)scaled?.recycle();if(cropped!==bitmap)cropped?.recycle();bitmap?.recycle();image.close()}
    },handler)
    display=projection!!.createVirtualDisplay("AI phone screen",width,height,metrics.densityDpi,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,reader!!.surface,null,handler)
   } catch(e: Exception) {status="屏幕共享启动失败，请重新授权";stopSelf()}
@@ -291,10 +316,10 @@ class ScreenShareService: Service() {
    active=false;usbOwnerSerial=null;usbOwnerSession=null
    running=false
   }
-  renewalConnection?.disconnect();connection?.disconnect()
+  renewalConnection?.disconnect();connection?.disconnect();statusConnection?.disconnect();frameWorker.shutdownNow()
   display?.release();display=null;reader?.close();reader=null
   val old=projection;projection=null;old?.stop();worker?.quitSafely();worker=null
-  handler?.removeCallbacksAndMessages(null);displayManager?.unregisterDisplayListener(displayListener)
+  handler?.removeCallbacksAndMessages(null);statusHandler?.removeCallbacksAndMessages(null);statusWorker?.quitSafely();statusWorker=null;statusHandler=null;displayManager?.unregisterDisplayListener(displayListener)
   taskStatus=""
   val capability=ticket;ticket="";revoke(capability)
   stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy()

@@ -23,14 +23,14 @@ class OtaState {
 
 class OtaError {
   static String text(int e) => switch (e) {
-        1 => '状态不允许该操作',
-        2 => '参数不合法',
-        3 => '写 flash 失败',
-        4 => '固件超过槽位大小',
-        5 => 'sha256 校验不符，数据在传输中损坏',
-        6 => '镜像头部不合法',
-        _ => '未知错误 $e',
-      };
+    1 => '状态不允许该操作',
+    2 => '参数不合法',
+    3 => '写 flash 失败',
+    4 => '固件超过槽位大小',
+    5 => 'sha256 校验不符，数据在传输中损坏',
+    6 => '镜像头部不合法',
+    _ => '未知错误 $e',
+  };
 }
 
 /// 固件信息，来自扫描到的广播名或本地文件
@@ -100,7 +100,8 @@ class BleOtaService {
     final c = _localControl;
     if (c == null || _busy) throw StateError("本地控制未连接");
     return Map<String, dynamic>.from(
-        jsonDecode(utf8.decode(await c.read())) as Map);
+      jsonDecode(utf8.decode(await c.read())) as Map,
+    );
   }
 
   Future<void> writeLocalControl(List<int> bytes) async {
@@ -134,10 +135,10 @@ class BleOtaService {
 
   /// 扫描广播里带 OTA 服务的设备。
   Future<void> startScan() => FlutterBluePlus.startScan(
-        withServices: [Guid(svcUuid)],
-        timeout: const Duration(seconds: 12),
-        androidUsesFineLocation: false,
-      );
+    withServices: [Guid(svcUuid)],
+    timeout: const Duration(seconds: 12),
+    androidUsesFineLocation: false,
+  );
   Stream<List<ScanResult>> get scanResults => FlutterBluePlus.scanResults;
 
   Future<void> stopScan() => FlutterBluePlus.stopScan();
@@ -171,11 +172,6 @@ class BleOtaService {
       _stat = svc.characteristics
           .where((c) => c.uuid == Guid(statUuid))
           .firstOrNull;
-      if (_ctrl == null || _stat == null) {
-        await device.disconnect();
-        throw Exception('OTA 特征值缺失');
-      }
-
       _device = device;
       _info = svc.characteristics
           .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000004'))
@@ -190,6 +186,10 @@ class BleOtaService {
       _localControl = svc.characteristics
           .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000008'))
           .firstOrNull;
+      if ((_ctrl == null || _stat == null) &&
+          (_localControl == null || _info == null || _auth == null)) {
+        throw StateError('控制板通信特征不完整');
+      }
       _controlRpc?.close();
       final control = svc.characteristics
           .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000007'))
@@ -203,18 +203,19 @@ class BleOtaService {
                   .timeout(const Duration(seconds: 5)),
               read: () => control.read(),
               isCurrent: () =>
-                  epoch == _connectionEpoch && device.isConnected && !_busy);
+                  epoch == _connectionEpoch && device.isConnected && !_busy,
+            );
 
       // 协商失败时 mtu 仍是 23，减去 3 字节 ATT 头和 1 字节命令码 = 19。
       final mtu = device.mtuNow;
-      if (mtu < 40) {
+      if (mtu < (_localControl != null ? 51 : 40)) {
         await device.disconnect();
         throw StateError('蓝牙连接的传输容量太小，请返回并重新连接控制板');
       }
       final chunk = otaChunkSize(mtu);
 
       // Enable status notifications before creating any transfer session.
-      await _stat!.setNotifyValue(true);
+      await _stat?.setNotifyValue(true);
       if (epoch != _connectionEpoch) throw StateError('连接已取消');
       return chunk;
     } catch (_) {
@@ -245,7 +246,8 @@ class BleOtaService {
     final info = _info;
     if (info == null) return null;
     return BoardInfo.parse(
-        await info.read().timeout(const Duration(seconds: 5)));
+      await info.read().timeout(const Duration(seconds: 5)),
+    );
   }
 
   Future<List<int>> signDownloadChallenge(List<int> nonce) async {
@@ -259,8 +261,12 @@ class BleOtaService {
     return auth.read().timeout(const Duration(seconds: 5));
   }
 
-  Future<void> _confirmReboot(BluetoothDevice device, BoardInfo before,
-      FirmwareImage target, TransferSession session) async {
+  Future<void> _confirmReboot(
+    BluetoothDevice device,
+    BoardInfo before,
+    FirmwareImage target,
+    TransferSession session,
+  ) async {
     if (device.isConnected) {
       await device.connectionState
           .firstWhere((s) => s == BluetoothConnectionState.disconnected)
@@ -311,7 +317,11 @@ class BleOtaService {
 
     final ctrl = _ctrl, stat = _stat;
     if (ctrl == null || stat == null) {
-      yield const PushProgress(done: true, success: false, log: '未连接');
+      yield const PushProgress(
+        done: true,
+        success: false,
+        log: '当前控制板未提供蓝牙固件升级，请使用USB维护通道',
+      );
       return;
     }
 
@@ -336,6 +346,9 @@ class BleOtaService {
       if (before == null || device == null) {
         throw StateError('请先更新控制板基础固件以支持重启确认');
       }
+      if (!before.otaSupported) {
+        throw StateError('当前控制板请使用USB维护通道升级');
+      }
       target.assertUpgradeAllowed(before.version);
       if (before.otaAuth != null) {
         if (before.otaAuth != 'hmac-sha256-v1' || _upgradeAuth == null) {
@@ -349,11 +362,12 @@ class BleOtaService {
         final client = AppOtaClient(Uri.parse(ControllerConfig.base));
         try {
           final authorization = await client.authorizeBle(
-              _otaTicket!,
-              before.device,
-              before.boot,
-              challenge,
-              (bytes) => signDownloadChallenge(Uint8List.fromList(bytes)));
+            _otaTicket!,
+            before.device,
+            before.boot,
+            challenge,
+            (bytes) => signDownloadChallenge(Uint8List.fromList(bytes)),
+          );
           checkActive();
           await _upgradeAuth!.write(authorization, withoutResponse: false);
         } finally {
@@ -395,8 +409,9 @@ class BleOtaService {
         final n = (total - sent) > chunk ? chunk : (total - sent);
         frame[0] = 0x02;
         frame.setRange(1, 1 + n, data, sent);
-        final payload =
-            n == chunk ? frame : Uint8List.sublistView(frame, 0, 1 + n);
+        final payload = n == chunk
+            ? frame
+            : Uint8List.sublistView(frame, 0, 1 + n);
         await ctrl.write(payload, withoutResponse: withoutResponse);
         checkActive();
         sent += n;
@@ -452,16 +467,18 @@ class BleOtaService {
       }
     } on TimeoutException {
       yield PushProgress(
-          done: true,
-          success: false,
-          log: verified ? '固件已写入，但重启确认超时，请检查控制板版本' : '等待板子校验超时，请重试');
+        done: true,
+        success: false,
+        log: verified ? '固件已写入，但重启确认超时，请检查控制板版本' : '等待板子校验超时，请重试',
+      );
     } catch (e) {
       yield PushProgress(done: true, success: false, log: '传输失败：$e');
     } finally {
       if (!verified) {
         try {
-          await ctrl.write([0x04],
-              withoutResponse: false).timeout(const Duration(seconds: 2));
+          await ctrl
+              .write([0x04], withoutResponse: false)
+              .timeout(const Duration(seconds: 2));
         } catch (_) {
           // A disconnected device also aborts the pending image.
         }
@@ -478,8 +495,9 @@ class BleOtaService {
     session.cancel();
     ++_connectionEpoch;
     try {
-      await _ctrl?.write([0x04],
-          withoutResponse: false).timeout(const Duration(seconds: 2));
+      await _ctrl
+          ?.write([0x04], withoutResponse: false)
+          .timeout(const Duration(seconds: 2));
     } catch (_) {
       // Disconnection also makes the firmware discard the pending image.
     }

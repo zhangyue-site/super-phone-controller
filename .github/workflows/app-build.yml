@@ -57,11 +57,12 @@ jobs:
       - name: Native capture and USB session regressions
         run: |
           mkdir -p "$RUNNER_TEMP/capture-jvm"
-          javac -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/{CaptureRecoveryGuard,UsbSessionLease,UsbModeWindow,DiagnosticSchema,UsbInterfaceClaim}.java android/app/src/test/java/org/example/phonecontroller/{CaptureRecoveryGuardTest,UsbModeWindowTest,DiagnosticSchemaTest,UsbInterfaceClaimTest}.java
+          javac -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/{CaptureRecoveryGuard,UsbSessionLease,UsbModeWindow,DiagnosticSchema,UsbInterfaceClaim,UsbControllerProfile}.java android/app/src/test/java/org/example/phonecontroller/{CaptureRecoveryGuardTest,UsbModeWindowTest,DiagnosticSchemaTest,UsbInterfaceClaimTest,UsbControllerProfileTest}.java
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.CaptureRecoveryGuardTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.UsbModeWindowTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.DiagnosticSchemaTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.UsbInterfaceClaimTest
+          java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.UsbControllerProfileTest
 
       - name: Build signed APK
         env:

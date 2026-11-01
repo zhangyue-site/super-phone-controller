@@ -3,10 +3,18 @@ import 'dart:convert';
 class BoardInfo {
   final String device, version, elfSha256, boot;
   final int imageState;
-  final String? otaAuth;
+  final String? otaAuth, boardModel;
+  final bool otaSupported;
   const BoardInfo(
-      this.device, this.version, this.elfSha256, this.boot, this.imageState,
-      {this.otaAuth});
+    this.device,
+    this.version,
+    this.elfSha256,
+    this.boot,
+    this.imageState, {
+    this.otaAuth,
+    this.boardModel,
+    this.otaSupported = true,
+  });
   static BoardInfo parse(List<int> bytes) {
     final dynamic obj = jsonDecode(utf8.decode(bytes));
     if (obj is! Map ||
@@ -22,9 +30,16 @@ class BoardInfo {
         obj['imageState'] is! int) {
       throw const FormatException('控制板启动信息无效');
     }
-    return BoardInfo(obj['device'], obj['version'], obj['elfSha256'],
-        obj['boot'], obj['imageState'],
-        otaAuth: obj['otaAuth'] as String?);
+    return BoardInfo(
+      obj['device'],
+      obj['version'],
+      obj['elfSha256'],
+      obj['boot'],
+      obj['imageState'],
+      otaAuth: obj['otaAuth'] as String?,
+      boardModel: obj['boardModel'] as String?,
+      otaSupported: obj['otaSupported'] != false,
+    );
   }
 
   bool confirms(BoardInfo before, String targetVersion, String targetElf) =>

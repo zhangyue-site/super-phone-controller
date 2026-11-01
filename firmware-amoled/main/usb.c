@@ -72,7 +72,8 @@ static bool ascii_key(uint8_t c,uint8_t *modifier,uint8_t *usage){
  const char plain[]=" -=[]\\;'/.,`";const uint8_t codes[]={0x2c,0x2d,0x2e,0x2f,0x30,0x31,0x33,0x34,0x38,0x37,0x36,0x35};
  const char shifted[]="!@#$%^&*()_+{}|:\"?><~";const uint8_t shift_codes[]={0x1e,0x1f,0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x27,0x2d,0x2e,0x2f,0x30,0x31,0x33,0x34,0x38,0x37,0x36,0x35};
  for(size_t i=0;i<sizeof(plain)-1;i++)if(c==plain[i]){*usage=codes[i];return true;}
- for(size_t i=0;i<sizeof(shifted)-1;i++)if(c==shifted[i]){*modifier=2;*usage=shift_codes[i];return true;}return false;
+ for(size_t i=0;i<sizeof(shifted)-1;i++)if(c==shifted[i]){*modifier=2;*usage=shift_codes[i];return true;}
+ return false;
 }
 bool amoled_usb_execute(uint8_t op,const uint16_t a[5],bool (*live)(uint32_t),uint32_t epoch){
  if(!input_mutex||!permitted(false,live,epoch)||xSemaphoreTake(input_mutex,pdMS_TO_TICKS(100))!=pdTRUE)return false;
@@ -89,7 +90,8 @@ bool amoled_usb_execute(uint8_t op,const uint16_t a[5],bool (*live)(uint32_t),ui
   }
   bool released=touch(0,x,y,true,NULL,0);ok=ok&&released&&permitted(false,live,epoch);
  }
- if(!permitted(false,live,epoch))release_all();xSemaphoreGive(input_mutex);return ok;
+ if(!permitted(false,live,epoch)){release_all();}
+ xSemaphoreGive(input_mutex);return ok;
 }
 bool amoled_usb_consumer(unsigned usage){if(!input_mutex||!amoled_usb_armed()||xSemaphoreTake(input_mutex,pdMS_TO_TICKS(50))!=pdTRUE)return false;bool ok=consumer(usage,NULL,0);xSemaphoreGive(input_mutex);return ok;}
 bool amoled_usb_mouse(int dx,int dy,bool click){

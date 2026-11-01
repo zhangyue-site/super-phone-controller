@@ -16,7 +16,7 @@ class UsbAttachActivity : Activity() {
    @Suppress("DEPRECATION") val requested=intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)?:return
    val manager=getSystemService(USB_SERVICE) as UsbManager
    val actual=manager.deviceList[requested.deviceName]?:return
-   if(actual.vendorId!=0x303a || actual.productId !in setOf(0x4001,0x4005,0x4041,0x4045) || actual.productName!="Epaper Phone Controller" || !manager.hasPermission(actual))return
+   if(!UsbControllerProfile.supports(actual.vendorId,actual.productId,actual.productName) || !manager.hasPermission(actual))return
    val serial=actual.serialNumber?.uppercase()?:return
    if(!Regex("[0-9A-F]{12}").matches(serial))return
    val prefs=getSharedPreferences("usb-auto-open",MODE_PRIVATE)

@@ -45,8 +45,7 @@ class UsbProofBridge(context: Context) {
  private fun live(device: UsbDevice,serial: String): Boolean = try {
   val current=manager.deviceList[device.deviceName]
   current!=null && current.deviceId==device.deviceId && manager.hasPermission(device) &&
-   current.vendorId==0x303a && current.productId in setOf(0x4001,0x4005,0x4041,0x4045) &&
-   current.productName=="Epaper Phone Controller" && current.serialNumber?.uppercase()==serial
+   UsbControllerProfile.supports(current.vendorId,current.productId,current.productName) && current.serialNumber?.uppercase()==serial
  } catch(_: Exception){false}
  private fun exchange(device: UsbDevice,serial: String,method: String,nonce: String?,sessionLive: ()->Boolean): Map<String,Any> {
   check(sessionLive() && live(device,serial))

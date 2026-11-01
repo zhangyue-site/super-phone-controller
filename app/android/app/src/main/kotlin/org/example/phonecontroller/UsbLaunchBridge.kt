@@ -42,6 +42,7 @@ object UsbLaunchBridge {
   checkExpiry()
   val current=deviceFor(value)
   if(current==null){SafeDiagnostics.record(mapOf("event" to "usb_expect","phase" to "usb","reason" to "device_invalid","generation" to detachGeneration));return false}
+  if(UsbControllerProfile.fixed(current.vendorId,current.productId,current.productName))return true
   if(mode.pending()){SafeDiagnostics.record(mapOf("event" to "usb_expect","phase" to "usb","reason" to "already_pending","generation" to detachGeneration,"pid" to current.productId));return false}
   val expected=if(hid)0x4045 else 0x4041
   if(current.productId==expected){SafeDiagnostics.record(mapOf("event" to "usb_expect","phase" to "usb","reason" to "already_at_mode","generation" to detachGeneration,"pid" to current.productId,"expected_pid" to expected));return true}
@@ -58,10 +59,9 @@ object UsbLaunchBridge {
  private var owner: Any?=null
  private var changed: ((Map<String,Any?>?)->Unit)?=null
  private var lost: ((String)->Unit)?=null
- private val products=setOf(0x4001,0x4005,0x4041,0x4045)
  private fun manager()=app.getSystemService(Context.USB_SERVICE) as UsbManager
  private fun identity(d: UsbDevice): String? {
-  if(d.vendorId!=0x303a || d.productId !in products || d.productName!="Epaper Phone Controller") return null
+  if(!UsbControllerProfile.supports(d.vendorId,d.productId,d.productName)) return null
   if(!manager().hasPermission(d))return null
   return try { d.serialNumber?.uppercase()?.takeIf { Regex("[0-9A-F]{12}").matches(it) } } catch(_: Exception){null}
  }
@@ -110,7 +110,7 @@ object UsbLaunchBridge {
    ui.removeCallbacks(expiry);mode.clear();deviceName=actual.deviceName;productId=actual.productId
    changed?.invoke(snapshot());return
   }
-  if(actual.vendorId!=0x303a || actual.productId !in products || actual.productName!="Epaper Phone Controller")return
+  if(!UsbControllerProfile.supports(actual.vendorId,actual.productId,actual.productName))return
   val value=identity(actual)
   if(value==null) {error="USB设备尚未授权或无法读取序列号，请重新插入并选择本App";changed?.invoke(mapOf("error" to error));return}
   if(serial!=null && serial!=value && live(serial!!)!=null)return

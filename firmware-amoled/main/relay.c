@@ -13,6 +13,7 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
+#include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #define UUID(n) BLE_UUID128_INIT(n,0,0,0,0,0,0,0,0x61,0x74,0x6f,0x2d,0x61,0x74,0x6f,0x6f)
@@ -115,7 +116,8 @@ static void on_sync(void){if(!ble_hs_util_ensure_addr(0)&&!ble_hs_id_infer_auto(
 static void on_reset(int reason){taskENTER_CRITICAL(&mux);active=false;connection=BLE_HS_CONN_HANDLE_NONE;taskEXIT_CRITICAL(&mux);amoled_relay_cancel();}
 static void host_task(void *arg){nimble_port_run();nimble_port_freertos_deinit();}
 esp_err_t amoled_relay_start(void){
- if(started)return ESP_OK;if(!amoled_identity_ready())return ESP_ERR_INVALID_STATE;
+ if(started)return ESP_OK;
+ if(!amoled_identity_ready())return ESP_ERR_INVALID_STATE;
  queue=xQueueCreate(1,sizeof(Work));if(!queue)return ESP_ERR_NO_MEM;
  esp_err_t e=nimble_port_init();if(e!=ESP_OK){vQueueDelete(queue);queue=NULL;return e;}
  ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;ble_svc_gap_init();ble_svc_gatt_init();
