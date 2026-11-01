@@ -6,6 +6,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_system.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
@@ -32,7 +33,7 @@ static const char *str(cJSON *o,const char *key){cJSON *v=cJSON_GetObjectItemCas
 static cJSON *current(void){return cJSON_GetArrayItem(plugins,selected);}
 static void render(void);
 static void reply(cJSON *o){char *s=cJSON_PrintUnformatted(o);if(s){usb_write(s);usb_write("\n");free(s);}cJSON_Delete(o);}
-static void status(const char *result){cJSON *o=cJSON_CreateObject();cJSON_AddStringToObject(o,"result",result);cJSON_AddStringToObject(o,"serial",usb_serial());cJSON_AddStringToObject(o,"version",esp_app_get_description()->version);cJSON_AddNumberToObject(o,"page",page);cJSON_AddBoolToObject(o,"usb",usb_ready());cJSON_AddBoolToObject(o,"armed",usb_armed());cJSON_AddBoolToObject(o,"runnerConnected",false);cJSON_AddBoolToObject(o,"sharing",false);cJSON_AddNumberToObject(o,"freeHeap",esp_get_free_heap_size());cJSON_AddItemToObject(o,"plugins",cJSON_Duplicate(plugins,true));reply(o);}
+static void status(const char *result){cJSON *o=cJSON_CreateObject();cJSON_AddStringToObject(o,"result",result);cJSON_AddStringToObject(o,"serial",usb_serial());cJSON_AddStringToObject(o,"version",esp_app_get_description()->version);cJSON_AddNumberToObject(o,"page",page);cJSON_AddNumberToObject(o,"uptimeMs",esp_timer_get_time()/1000.0);cJSON_AddNumberToObject(o,"resetReason",esp_reset_reason());cJSON_AddBoolToObject(o,"usb",usb_ready());cJSON_AddBoolToObject(o,"armed",usb_armed());cJSON_AddBoolToObject(o,"runnerConnected",false);cJSON_AddBoolToObject(o,"sharing",false);cJSON_AddNumberToObject(o,"freeHeap",esp_get_free_heap_size());cJSON_AddItemToObject(o,"plugins",cJSON_Duplicate(plugins,true));reply(o);}
 static bool version(const char *s,unsigned v[3]){int end=0;for(const char *c=s;*c;c++)if((*c<'0'||*c>'9')&&*c!='.')return false;if(sscanf(s,"%5u.%5u.%5u%n",v,v+1,v+2,&end)!=3||s[end])return false;for(int i=0;i<3;i++)if(v[i]>65535)return false;return true;}
 static int compare(unsigned a[3],unsigned b[3]){for(int i=0;i<3;i++){if(a[i]>b[i])return 1;if(a[i]<b[i])return -1;}return 0;}
 static bool valid(cJSON *p){unsigned v[3];const char *id=str(p,"id"),*name=str(p,"name");if(strcmp(str(p,"format"),"phone-controller-plugin")||!cJSON_IsNumber(cJSON_GetObjectItem(p,"apiVersion"))||cJSON_GetObjectItem(p,"apiVersion")->valuedouble!=1||!version(str(p,"version"),v)||!id[0]||strlen(id)>63||!name[0]||strlen(name)>90)return false;for(const char *s=id;*s;s++)if(!((*s>='a'&&*s<='z')||(*s>='0'&&*s<='9')||*s=='.'||*s=='-'||*s=='_'))return false;cJSON *r=cJSON_GetObjectItem(p,"runner");return !strcmp(str(r,"type"),"server-workflow")&&strlen(str(r,"entry"))>0&&strlen(str(r,"entry"))<=96;}
