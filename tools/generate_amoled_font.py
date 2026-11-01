@@ -15,8 +15,8 @@ with tempfile.TemporaryDirectory() as td:
     font=Path(td)/'noto-sc.ttf'
     TTCollection(args.font).fonts[2].save(font)
     target=root/'firmware-amoled/main/ui_font.c'
-    subprocess.run(['npx','--yes','lv_font_conv@1.5.3','--font',str(font),'--size','24','--bpp','4','--format','lvgl','--symbols',''.join(sorted(chars)),'--range','0x20-0x7e','--output',str(target)],check=True)
+    subprocess.run(['npx','--yes','lv_font_conv@1.5.3','--font',str(font),'--size','24','--bpp','4','--no-compress','--format','lvgl','--symbols',''.join(sorted(chars)),'--range','0x20-0x7e','--output',str(target)],check=True)
     s=target.read_text();a=s.index(' * Opts:');b=s.index(' ******************************************************************************/',a)
-    s=s[:a]+' * Noto Sans CJK SC: GB2312 Chinese + UI/Latin punctuation, lv_font_conv 1.5.3.\n * SIL OFL, see LICENSE-NOTO. Regenerate using tools/generate_amoled_font.py.\n'+s[b:]
+    s=s[:a]+' * Noto Sans CJK SC: Uncompressed GB2312 Chinese + UI/Latin punctuation, lv_font_conv 1.5.3.\n * SIL OFL, see LICENSE-NOTO. Regenerate using tools/generate_amoled_font.py.\n'+s[b:]
     target.write_text(s)
     print('font source bytes',target.stat().st_size,'requested glyphs',len(chars))
