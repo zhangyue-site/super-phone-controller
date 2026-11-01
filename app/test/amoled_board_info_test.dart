@@ -5,7 +5,7 @@ import 'package:pcflash/board_info.dart';
 void main() {
   Map<String, dynamic> info() => {
     'protocol': 1,
-    'device': 'amoled-1cdbd448ed24',
+    'device': 'amoled-001122334455',
     'version': '0.2.0-amoled',
     'elfSha256': List.filled(64, 'a').join(),
     'boot': List.filled(32, 'b').join(),

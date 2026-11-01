@@ -1,63 +1,78 @@
 # AMOLED hardware port status
 
-## Installed firmware
+## Current build and software
 
-Version **0.1.7-amoled** was built, verified and flashed to the authorized test
-board. [Verified cloud build](https://github.com/zhangyue-site/super-phone-controller/actions/runs/41306988761),
-source `3ac10527f548e9b16b3a1c72d54fd22934a2c4df`.
-Full image SHA256: `6db223e4906147c4c410fdd2e4585c44def455909ae766019ebb1b8e41409855`.
+Firmware **0.2.1-amoled** is installed on the authorized ESP32-S3-Touch-AMOLED-2.16.
+[Cloud firmware build](https://github.com/zhangyue-site/super-phone-controller/actions/runs/41316004069),
+source `919b6e902cec6fec48127c7966f8811a156c3791`.
+Application SHA256: `1266873d7a18a3f1ff0d4ad61fdb90663b5ee7d3f74c48ace06dc286eb9496b4`.
+Only the application slot at 0x20000 was written; NVS and OTA metadata were
+read before/after writing and matched.
 
-## Confirmed on hardware
+Android helper **1.2.11 (33)** supports this board and the existing Epaper boards.
+[Signed helper build](https://github.com/zhangyue-site/super-phone-controller/actions/runs/41316004859).
+The production package and signing certificate are unchanged.
+[Download page](https://d.zhangyue.site/apps/phone-controller-flash/).
+Installation and actual phone control remain separate acceptance steps.
 
-- CDC status, 17 protocol cases, import/version/duplicate checks and storage limits.
-- Four test plugins and their parameters survived a software restart.
-- A 125-second run with 61 samples kept USB online, uptime increasing, input
-  disabled and early crash count zero. Heap changed by only 64 bytes during
-  that observation. This does not establish long-term leak freedom.
-- Seven 480×480 device-rendered buffers were visually inspected: previously
-  damaged text is clear. Controls are inset for the round screen and button
-  text uses the full font line height. Synthetic test plugins were removed.
-- Software maintenance acknowledged entry, then accepted a real ROM connection
-  without an external reset. A software-controlled reset returned to the app.
+## Implemented
 
-The rendered buffers are **not photographs of the physical panel**. The user
-reported a black panel while 0.1.6 remained responsive over USB. After flashing
-0.1.7, the user directly confirmed that the physical screen had recovered.
-Physical touch, battery operation and phone HID still need their own tests;
-these must not be inferred from USB or screenshots alone.
+- Independent NVS-provisioned identity with PCUSB and PCFLASH1 challenge proofs.
+- PCBLE1 authenticated local control, sequence replay protection, signed receipts,
+  heartbeat lease, cancellation, and release on disconnect.
+- Fixed CDC + keyboard/mouse/consumer + separate Android touch interface.
+  ARM/DISARM gates input without USB re-enumeration.
+- Absolute touch click/drag and bounded keyboard/ASCII commands; successful
+  input receipts wait for USB transfer completion.
+- Separate image acquisition, bounded newest-frame encoding/upload, and status
+  polling lanes in Android. Obsolete frames still respect the action barrier.
+- Control authorization no longer depends on a firmware download release.
+  Firmware download and upgrade capabilities keep their separate scope.
+- Live USB/BLE/relay display status; screen-sharing status is checked on the phone.
+  This board currently uses USB maintenance for firmware updates.
 
-## Fixed failures and regression prevention
+## Verified on the physical board and 106
 
-The startup panic was a linker collision: application `usb_read` and `usb_write`
-resolved to ESP32-S3 ROM absolute symbols. The retained panic pointed to the main
-receive loop. Application functions now use the `amoled_usb_` prefix. CI checks
-all 11 exported USB operations in the actual linked ELF for application code
-addresses, separately from successful compilation.
+- USB/BLE identity and challenge proofs, signed receipts, heartbeat, malformed
+  signatures and replay rejection, ARM/DISARM without USB loss, real consumer
+  transfer completion, unarmed pointer rejection, STOP, and nonce rotation.
+- Ten production server-signed heartbeat round trips through a temporary Mac
+  physical BLE transport: median 360 ms, maximum 364 ms. This excludes Android
+  and phone UI response and is not a bookkeeping benchmark.
+- Final firmware: 126.81-second observation, 60 samples, USB online, uptime
+  increasing, early crash count zero, no free-heap drift in the sample window.
+  Internal free heap stayed above 113 KB; minimum-ever internal free heap was
+  94 KB. This does not establish long-term leak freedom.
+- Heartbeat expiry and BLE disconnect release input while retaining USB.
+- Synthetic plugin and parameters survive software restart; cleanup removed
+  only the synthetic plugin. Provisioned identity survives upgrade and reboot.
+- Seven 480×480 device-rendered buffers inspected, including the new state and
+  settings text. These buffers are not photographs of the physical panel.
+- 33 server authorization/OTA/relay regressions; Android analysis and CI
+  regressions, native USB compatibility checks, and sanitizer host checks.
 
-0.1.6 snapshots showed corrupted glyphs. The 0.1.7 image uses uncompressed
-Chinese bitmaps and one software draw unit, avoiding the compressed decoder's
-shared RLE state. All seven new page buffers are clear; old failed evidence
-is retained privately.
+## Remaining acceptance
 
-Three repeated early application crashes request hardware download mode.
-RTC crash count and retained panic/log evidence have been read successfully
-from ROM. Healthy runtime clears the crash count. Factory backup and
-identity-bearing diagnostics remain private. This recovery path covers
-application crashes, not every possible power or pre-application boot fault.
+The board was tested while attached to the Mac. Actual Xiaomi phone tap/drag,
+Android replacement installation, continuous MediaProjection capture, reconnect
+and end-to-end latency require the board to be connected to the phone and the
+system grant accepted. No two-second transaction claim is made.
 
-## Scope and unverified items
+Phone-side plugin import, board-initiated server workflow execution and voice
+remain unimplemented. Stored plugin descriptions do not execute automatically.
+Battery operation, physical touch and OTA require their own tests.
+No bookkeeping save was performed during this work.
 
-Implemented: manufacturer display/touch initialization, generic home screen,
-persistent plugin descriptions, CDC JSON import/removal, gated manual USB
-mouse/consumer reports, and render snapshots. Imported descriptions do not
-execute code or start tasks automatically.
+## Recovery and prior fixes
 
-Still to integrate: phone-side plugin import, authenticated BLE relay, voice,
-server workflow runner and phone screen-sharing state. Physical touch, actual
-phone HID, battery operation, OTA and real bookkeeping have not passed
-end-to-end acceptance for this port. No two-second transaction claim is made.
+USB application exports retain the `amoled_usb_` prefix; CI checks the actual
+linked symbols to prevent the previous collision with ESP32-S3 ROM USB names.
+The uncompressed Chinese font and single software drawing unit are retained.
+LVGL drawing stays in cached PSRAM text to leave internal instruction RAM for
+BLE and exception vectors.
 
-Host C regression uses real cJSON with AddressSanitizer and UndefinedBehaviorSanitizer.
-It covers the protocol fixtures, numeric boundaries, malformed/trailing JSON,
-parameter retention and mocked storage failures. Hardware results above remain
-separate from these host tests.
+Repeated early crashes request ROM recovery. Software maintenance and reboot
+work without physical buttons in the tested setup. Factory backups and
+identity-bearing diagnostics remain private. The earlier 0.1.7 physical-panel
+recovery was confirmed by the user; current rendered-buffer checks do not
+replace physical-panel observation.
