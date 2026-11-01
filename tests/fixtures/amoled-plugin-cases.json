@@ -1,0 +1,702 @@
+[
+  {
+    "name": "initial",
+    "request": {
+      "op": "status"
+    },
+    "expect": "ok"
+  },
+  {
+    "name": "bad-format",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "wrong",
+        "apiVersion": 1,
+        "id": "demo.auto-bookkeeping",
+        "name": "自动记账",
+        "version": "1.0.0",
+        "description": "读取支付宝消费账单，交给阿柴记账。",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "alipay-achai-consumption"
+        },
+        "parameters": {
+          "until": "2026-09-10",
+          "expenseOnly": true
+        },
+        "ui": {
+          "running": {
+            "title": "正在记账",
+            "valueLabel": "当前核对金额",
+            "value": "¥28.60",
+            "status": "金额一致",
+            "steps": [
+              "打开",
+              "核对",
+              "保存",
+              "返回"
+            ],
+            "note": "已记 12 / 跳过 3"
+          },
+          "duplicate": {
+            "title": "已记过，自动跳过",
+            "value": "¥18.00",
+            "note": "正在返回账单列表"
+          },
+          "correction": {
+            "title": "正在修正金额",
+            "leftLabel": "列表金额",
+            "leftValue": "¥28.60",
+            "rightLabel": "识别金额",
+            "rightValue": "¥28.80",
+            "steps": [
+              "取消",
+              "修正",
+              "再核对"
+            ],
+            "note": "核对一致后才保存"
+          },
+          "pending": {
+            "title": "保存结果待核验",
+            "value": "¥28.60",
+            "note": "已提交，正在核对",
+            "emphasis": "不会再次保存"
+          },
+          "complete": {
+            "title": "本次处理完成",
+            "note": "已记28笔 / 跳过6笔 / 待核0笔"
+          }
+        }
+      }
+    },
+    "expect": "invalid-plugin"
+  },
+  {
+    "name": "bad-api",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 2,
+        "id": "demo.auto-bookkeeping",
+        "name": "自动记账",
+        "version": "1.0.0",
+        "description": "读取支付宝消费账单，交给阿柴记账。",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "alipay-achai-consumption"
+        },
+        "parameters": {
+          "until": "2026-09-10",
+          "expenseOnly": true
+        },
+        "ui": {
+          "running": {
+            "title": "正在记账",
+            "valueLabel": "当前核对金额",
+            "value": "¥28.60",
+            "status": "金额一致",
+            "steps": [
+              "打开",
+              "核对",
+              "保存",
+              "返回"
+            ],
+            "note": "已记 12 / 跳过 3"
+          },
+          "duplicate": {
+            "title": "已记过，自动跳过",
+            "value": "¥18.00",
+            "note": "正在返回账单列表"
+          },
+          "correction": {
+            "title": "正在修正金额",
+            "leftLabel": "列表金额",
+            "leftValue": "¥28.60",
+            "rightLabel": "识别金额",
+            "rightValue": "¥28.80",
+            "steps": [
+              "取消",
+              "修正",
+              "再核对"
+            ],
+            "note": "核对一致后才保存"
+          },
+          "pending": {
+            "title": "保存结果待核验",
+            "value": "¥28.60",
+            "note": "已提交，正在核对",
+            "emphasis": "不会再次保存"
+          },
+          "complete": {
+            "title": "本次处理完成",
+            "note": "已记28笔 / 跳过6笔 / 待核0笔"
+          }
+        }
+      }
+    },
+    "expect": "invalid-plugin"
+  },
+  {
+    "name": "bad-id",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "BAD ID",
+        "name": "自动记账",
+        "version": "1.0.0",
+        "description": "读取支付宝消费账单，交给阿柴记账。",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "alipay-achai-consumption"
+        },
+        "parameters": {
+          "until": "2026-09-10",
+          "expenseOnly": true
+        },
+        "ui": {
+          "running": {
+            "title": "正在记账",
+            "valueLabel": "当前核对金额",
+            "value": "¥28.60",
+            "status": "金额一致",
+            "steps": [
+              "打开",
+              "核对",
+              "保存",
+              "返回"
+            ],
+            "note": "已记 12 / 跳过 3"
+          },
+          "duplicate": {
+            "title": "已记过，自动跳过",
+            "value": "¥18.00",
+            "note": "正在返回账单列表"
+          },
+          "correction": {
+            "title": "正在修正金额",
+            "leftLabel": "列表金额",
+            "leftValue": "¥28.60",
+            "rightLabel": "识别金额",
+            "rightValue": "¥28.80",
+            "steps": [
+              "取消",
+              "修正",
+              "再核对"
+            ],
+            "note": "核对一致后才保存"
+          },
+          "pending": {
+            "title": "保存结果待核验",
+            "value": "¥28.60",
+            "note": "已提交，正在核对",
+            "emphasis": "不会再次保存"
+          },
+          "complete": {
+            "title": "本次处理完成",
+            "note": "已记28笔 / 跳过6笔 / 待核0笔"
+          }
+        }
+      }
+    },
+    "expect": "invalid-plugin"
+  },
+  {
+    "name": "bad-version",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "demo.auto-bookkeeping",
+        "name": "自动记账",
+        "version": "-1.0.0",
+        "description": "读取支付宝消费账单，交给阿柴记账。",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "alipay-achai-consumption"
+        },
+        "parameters": {
+          "until": "2026-09-10",
+          "expenseOnly": true
+        },
+        "ui": {
+          "running": {
+            "title": "正在记账",
+            "valueLabel": "当前核对金额",
+            "value": "¥28.60",
+            "status": "金额一致",
+            "steps": [
+              "打开",
+              "核对",
+              "保存",
+              "返回"
+            ],
+            "note": "已记 12 / 跳过 3"
+          },
+          "duplicate": {
+            "title": "已记过，自动跳过",
+            "value": "¥18.00",
+            "note": "正在返回账单列表"
+          },
+          "correction": {
+            "title": "正在修正金额",
+            "leftLabel": "列表金额",
+            "leftValue": "¥28.60",
+            "rightLabel": "识别金额",
+            "rightValue": "¥28.80",
+            "steps": [
+              "取消",
+              "修正",
+              "再核对"
+            ],
+            "note": "核对一致后才保存"
+          },
+          "pending": {
+            "title": "保存结果待核验",
+            "value": "¥28.60",
+            "note": "已提交，正在核对",
+            "emphasis": "不会再次保存"
+          },
+          "complete": {
+            "title": "本次处理完成",
+            "note": "已记28笔 / 跳过6笔 / 待核0笔"
+          }
+        }
+      }
+    },
+    "expect": "invalid-plugin"
+  },
+  {
+    "name": "bad-runner",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "demo.auto-bookkeeping",
+        "name": "自动记账",
+        "version": "1.0.0",
+        "description": "读取支付宝消费账单，交给阿柴记账。",
+        "runner": {
+          "type": "shell",
+          "entry": "alipay-achai-consumption"
+        },
+        "parameters": {
+          "until": "2026-09-10",
+          "expenseOnly": true
+        },
+        "ui": {
+          "running": {
+            "title": "正在记账",
+            "valueLabel": "当前核对金额",
+            "value": "¥28.60",
+            "status": "金额一致",
+            "steps": [
+              "打开",
+              "核对",
+              "保存",
+              "返回"
+            ],
+            "note": "已记 12 / 跳过 3"
+          },
+          "duplicate": {
+            "title": "已记过，自动跳过",
+            "value": "¥18.00",
+            "note": "正在返回账单列表"
+          },
+          "correction": {
+            "title": "正在修正金额",
+            "leftLabel": "列表金额",
+            "leftValue": "¥28.60",
+            "rightLabel": "识别金额",
+            "rightValue": "¥28.80",
+            "steps": [
+              "取消",
+              "修正",
+              "再核对"
+            ],
+            "note": "核对一致后才保存"
+          },
+          "pending": {
+            "title": "保存结果待核验",
+            "value": "¥28.60",
+            "note": "已提交，正在核对",
+            "emphasis": "不会再次保存"
+          },
+          "complete": {
+            "title": "本次处理完成",
+            "note": "已记28笔 / 跳过6笔 / 待核0笔"
+          }
+        }
+      }
+    },
+    "expect": "invalid-plugin"
+  },
+  {
+    "name": "import-bookkeeping",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "demo.auto-bookkeeping",
+        "name": "自动记账",
+        "version": "1.0.0",
+        "description": "读取支付宝消费账单，交给阿柴记账。",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "alipay-achai-consumption"
+        },
+        "parameters": {
+          "until": "2026-09-10",
+          "expenseOnly": true
+        },
+        "ui": {
+          "running": {
+            "title": "正在记账",
+            "valueLabel": "当前核对金额",
+            "value": "¥28.60",
+            "status": "金额一致",
+            "steps": [
+              "打开",
+              "核对",
+              "保存",
+              "返回"
+            ],
+            "note": "已记 12 / 跳过 3"
+          },
+          "duplicate": {
+            "title": "已记过，自动跳过",
+            "value": "¥18.00",
+            "note": "正在返回账单列表"
+          },
+          "correction": {
+            "title": "正在修正金额",
+            "leftLabel": "列表金额",
+            "leftValue": "¥28.60",
+            "rightLabel": "识别金额",
+            "rightValue": "¥28.80",
+            "steps": [
+              "取消",
+              "修正",
+              "再核对"
+            ],
+            "note": "核对一致后才保存"
+          },
+          "pending": {
+            "title": "保存结果待核验",
+            "value": "¥28.60",
+            "note": "已提交，正在核对",
+            "emphasis": "不会再次保存"
+          },
+          "complete": {
+            "title": "本次处理完成",
+            "note": "已记28笔 / 跳过6笔 / 待核0笔"
+          }
+        }
+      }
+    },
+    "expect": "imported"
+  },
+  {
+    "name": "same-version",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "demo.auto-bookkeeping",
+        "name": "自动记账",
+        "version": "1.0.0",
+        "description": "读取支付宝消费账单，交给阿柴记账。",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "alipay-achai-consumption"
+        },
+        "parameters": {
+          "until": "2026-09-10",
+          "expenseOnly": true
+        },
+        "ui": {
+          "running": {
+            "title": "正在记账",
+            "valueLabel": "当前核对金额",
+            "value": "¥28.60",
+            "status": "金额一致",
+            "steps": [
+              "打开",
+              "核对",
+              "保存",
+              "返回"
+            ],
+            "note": "已记 12 / 跳过 3"
+          },
+          "duplicate": {
+            "title": "已记过，自动跳过",
+            "value": "¥18.00",
+            "note": "正在返回账单列表"
+          },
+          "correction": {
+            "title": "正在修正金额",
+            "leftLabel": "列表金额",
+            "leftValue": "¥28.60",
+            "rightLabel": "识别金额",
+            "rightValue": "¥28.80",
+            "steps": [
+              "取消",
+              "修正",
+              "再核对"
+            ],
+            "note": "核对一致后才保存"
+          },
+          "pending": {
+            "title": "保存结果待核验",
+            "value": "¥28.60",
+            "note": "已提交，正在核对",
+            "emphasis": "不会再次保存"
+          },
+          "complete": {
+            "title": "本次处理完成",
+            "note": "已记28笔 / 跳过6笔 / 待核0笔"
+          }
+        }
+      }
+    },
+    "expect": "already-imported"
+  },
+  {
+    "name": "upgrade-retain-parameters",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "demo.auto-bookkeeping",
+        "name": "自动记账",
+        "version": "1.1.0",
+        "description": "读取支付宝消费账单，交给阿柴记账。",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "alipay-achai-consumption"
+        },
+        "parameters": {
+          "until": "2000-01-01",
+          "expenseOnly": false
+        },
+        "ui": {
+          "running": {
+            "title": "正在记账",
+            "valueLabel": "当前核对金额",
+            "value": "¥28.60",
+            "status": "金额一致",
+            "steps": [
+              "打开",
+              "核对",
+              "保存",
+              "返回"
+            ],
+            "note": "已记 12 / 跳过 3"
+          },
+          "duplicate": {
+            "title": "已记过，自动跳过",
+            "value": "¥18.00",
+            "note": "正在返回账单列表"
+          },
+          "correction": {
+            "title": "正在修正金额",
+            "leftLabel": "列表金额",
+            "leftValue": "¥28.60",
+            "rightLabel": "识别金额",
+            "rightValue": "¥28.80",
+            "steps": [
+              "取消",
+              "修正",
+              "再核对"
+            ],
+            "note": "核对一致后才保存"
+          },
+          "pending": {
+            "title": "保存结果待核验",
+            "value": "¥28.60",
+            "note": "已提交，正在核对",
+            "emphasis": "不会再次保存"
+          },
+          "complete": {
+            "title": "本次处理完成",
+            "note": "已记28笔 / 跳过6笔 / 待核0笔"
+          }
+        }
+      }
+    },
+    "expect": "imported"
+  },
+  {
+    "name": "reject-downgrade",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "demo.auto-bookkeeping",
+        "name": "自动记账",
+        "version": "1.0.0",
+        "description": "读取支付宝消费账单，交给阿柴记账。",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "alipay-achai-consumption"
+        },
+        "parameters": {
+          "until": "2026-09-10",
+          "expenseOnly": true
+        },
+        "ui": {
+          "running": {
+            "title": "正在记账",
+            "valueLabel": "当前核对金额",
+            "value": "¥28.60",
+            "status": "金额一致",
+            "steps": [
+              "打开",
+              "核对",
+              "保存",
+              "返回"
+            ],
+            "note": "已记 12 / 跳过 3"
+          },
+          "duplicate": {
+            "title": "已记过，自动跳过",
+            "value": "¥18.00",
+            "note": "正在返回账单列表"
+          },
+          "correction": {
+            "title": "正在修正金额",
+            "leftLabel": "列表金额",
+            "leftValue": "¥28.60",
+            "rightLabel": "识别金额",
+            "rightValue": "¥28.80",
+            "steps": [
+              "取消",
+              "修正",
+              "再核对"
+            ],
+            "note": "核对一致后才保存"
+          },
+          "pending": {
+            "title": "保存结果待核验",
+            "value": "¥28.60",
+            "note": "已提交，正在核对",
+            "emphasis": "不会再次保存"
+          },
+          "complete": {
+            "title": "本次处理完成",
+            "note": "已记28笔 / 跳过6笔 / 待核0笔"
+          }
+        }
+      }
+    },
+    "expect": "older-version"
+  },
+  {
+    "name": "generic-1",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "test.generic-1",
+        "name": "照片整理1",
+        "version": "1.0.0",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "test-unused"
+        },
+        "parameters": {}
+      }
+    },
+    "expect": "imported"
+  },
+  {
+    "name": "generic-2",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "test.generic-2",
+        "name": "照片整理2",
+        "version": "1.0.0",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "test-unused"
+        },
+        "parameters": {}
+      }
+    },
+    "expect": "imported"
+  },
+  {
+    "name": "generic-3",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "test.generic-3",
+        "name": "照片整理3",
+        "version": "1.0.0",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "test-unused"
+        },
+        "parameters": {}
+      }
+    },
+    "expect": "imported"
+  },
+  {
+    "name": "generic-4",
+    "request": {
+      "op": "import",
+      "plugin": {
+        "format": "phone-controller-plugin",
+        "apiVersion": 1,
+        "id": "test.generic-4",
+        "name": "照片整理4",
+        "version": "1.0.0",
+        "runner": {
+          "type": "server-workflow",
+          "entry": "test-unused"
+        },
+        "parameters": {}
+      }
+    },
+    "expect": "plugin-limit"
+  },
+  {
+    "name": "no-remote-hid-arm",
+    "request": {
+      "op": "arm"
+    },
+    "expect": "unsupported-operation"
+  },
+  {
+    "name": "wrong-maintenance-target",
+    "request": {
+      "op": "maintenance.restart",
+      "device": "wrong-device"
+    },
+    "expect": "unsupported-operation"
+  },
+  {
+    "name": "missing-remove",
+    "request": {
+      "op": "remove",
+      "id": "test.not-found"
+    },
+    "expect": "not-found"
+  }
+]

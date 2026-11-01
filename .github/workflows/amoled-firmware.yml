@@ -24,6 +24,13 @@ jobs:
           path: /github/home/.ccache
           key: amoled-idf552-${{ runner.os }}-${{ github.sha }}
           restore-keys: amoled-idf552-${{ runner.os }}-
+      - name: Host registry validation with sanitizers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          . "$IDF_PATH/export.sh"
+          python3 tools/test_amoled_registry.py --output-dir /tmp/amoled-registry-tests
       - name: Build independent AMOLED target
         shell: bash
         run: |
