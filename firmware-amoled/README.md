@@ -41,3 +41,11 @@ Font subset: Noto Sans CJK SC, SIL OFL; license included.
 
 The Chinese font includes GB2312 common Han characters plus punctuation; rare
 characters outside that set may still need a future dynamic font package.
+
+Recovery: the maintenance command and local maintenance button disconnect the
+OTG stack, release its internal PHY and give that PHY back to USB-Serial-JTAG
+before entering ROM download mode. Three consecutive application panic/watchdog
+resets before 30 seconds of healthy operation request the same recovery path.
+Normal restarts do not count. The RTC policy is host-tested; hardware recovery
+must still be verified on the board. Failures before application entry and
+physical power/cable problems are outside that software recovery mechanism.

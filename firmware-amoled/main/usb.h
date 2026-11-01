@@ -12,3 +12,4 @@ size_t usb_read(char *out,size_t size);
 void usb_write(const char *text);
 const char *usb_serial(void);
 size_t usb_write_bytes(const void *data,size_t size);
+esp_err_t usb_enter_bootloader(void);

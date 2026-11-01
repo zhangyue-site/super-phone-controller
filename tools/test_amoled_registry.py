@@ -52,7 +52,7 @@ static bool refresh;
 static void *root;
 static cJSON *plugins;
 static char last[100];
-static int fail_set,fail_commit,restarts;
+static int fail_set,fail_commit,restarts,bootloader_calls;
 static char *saved;
 static void status(const char *r){snprintf(last,sizeof(last),"%s",r);}
 static void reply(cJSON *o){cJSON_Delete(o);}
@@ -65,11 +65,12 @@ static void usb_write(const char *s){}
 static void usb_write_bytes(const void *p,size_t n){}
 static void vTaskDelay(int n){}
 static void esp_restart(void){restarts++;}
+static int usb_enter_bootloader(void){bootloader_calls++;return 0;}
 typedef struct {struct {int w,h,stride;} header;void *data;} lv_draw_buf_t;
 static lv_draw_buf_t *lv_snapshot_take(void *p,int fmt){return NULL;}
 static void lv_draw_buf_destroy(lv_draw_buf_t *p){}
 '''
-code=shim+'\n'+'\n'.join(re.findall(r'^#define MAX_(?:PLUGINS|JSON) .*$',source,re.M))+'\n'
+code='#include "boot_recovery_policy.h"\n'+shim+'\n'+'\n'.join(re.findall(r'^#define MAX_(?:PLUGINS|JSON) .*$',source,re.M))+'\n'
 code+='\n'.join(extract(name) for name in ['str','version','compare','valid','save','process'])
 cases=json.loads((root/'tests/fixtures/amoled-plugin-cases.json').read_text())
 code+='\nint main(void){plugins=cJSON_CreateArray();\n'
@@ -78,7 +79,12 @@ for i,c in enumerate(cases):
  code+=' {char input[]='+req+';last[0]=0;process(input);if(strcmp(last,'+json.dumps(c['expect'])+')){fprintf(stderr,"case '+c['name']+': %s\\n",last);return '+str(i+1)+';}}\n'
  if c['name']=='upgrade-retain-parameters':code+=' assert(!strcmp(str(cJSON_GetObjectItem(cJSON_GetArrayItem(plugins,0),"parameters"),"until"),"2026-09-10"));\n'
 code+='''
-assert(cJSON_GetArraySize(plugins)==4);assert(restarts==0);
+assert(cJSON_GetArraySize(plugins)==4);assert(restarts==0);assert(bootloader_calls==0);
+assert(amoled_boot_crashes(false,99,true)==1);assert(amoled_boot_crashes(true,1,true)==2);
+assert(amoled_boot_crashes(true,2,true)==3);assert(amoled_recovery_required(3));
+assert(!amoled_recovery_required(2));assert(amoled_boot_crashes(true,2,false)==0);
+assert(amoled_boot_crashes(true,UINT32_MAX,true)==1);
+assert(!amoled_boot_healthy(29999));assert(amoled_boot_healthy(30000));
 const char *name=str(cJSON_GetArrayItem(plugins,0),"name");assert(name[0]);
 unsigned v[3];assert(!version("65536.0.0",v));assert(!version("-1.0.0",v));assert(!version("1.2.3x",v));
 assert(!version("4294967296.0.0",v));
@@ -92,10 +98,10 @@ fail_commit=0;process(remove_request);assert(!strcmp(last,"removed"));assert(cJS
 cJSON_Delete(plugins);free(saved);puts("registry host checks passed");return 0;}
 '''
 (out/'registry.c').write_text(code)
-r=subprocess.run(['gcc','-g','-O1','-fsanitize=address,undefined','-fno-omit-frame-pointer','-Wno-unused-function','-I'+str(out),str(out/'registry.c'),str(out/'cJSON.c'),'-lm','-o',str(out/'registry-test')],capture_output=True,text=True)
+r=subprocess.run(['gcc','-g','-O1','-fsanitize=address,undefined','-fno-omit-frame-pointer','-Wno-unused-function','-I'+str(out),'-I'+str(root/'firmware-amoled/main'),str(out/'registry.c'),str(out/'cJSON.c'),'-lm','-o',str(out/'registry-test')],capture_output=True,text=True)
 (out/'compile.log').write_text(r.stdout+r.stderr)
 if r.returncode:print((r.stdout+r.stderr)[-5000:]);raise SystemExit(r.returncode)
 r=subprocess.run([str(out/'registry-test')],capture_output=True,text=True);(out/'result.log').write_text(r.stdout+r.stderr)
 print(r.stdout+r.stderr);print('exit',r.returncode)
-(out/'proof.json').write_text(json.dumps({'main_source_sha256':hashlib.sha256(source.encode()).hexdigest(),'cjson':'v1.7.19','sanitizers':['address','undefined'],'returncode':r.returncode,'hardware_verified':False},indent=2))
+(out/'proof.json').write_text(json.dumps({'main_source_sha256':hashlib.sha256(source.encode()).hexdigest(),'boot_policy_sha256':hashlib.sha256((root/'firmware-amoled/main/boot_recovery_policy.h').read_bytes()).hexdigest(),'cjson':'v1.7.19','sanitizers':['address','undefined'],'returncode':r.returncode,'hardware_verified':False},indent=2))
 raise SystemExit(r.returncode)

@@ -7,6 +7,10 @@
 #include "tinyusb_cdc_acm.h"
 #include "class/hid/hid_device.h"
 #include "esp_mac.h"
+#include "esp_private/usb_phy.h"
+#include "esp_system.h"
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED
@@ -14,6 +18,7 @@
 #endif
 static atomic_bool armed;
 static atomic_bool started;
+static atomic_bool installed;
 static char serial[13];
 static const uint8_t reports[]={TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(1)),TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(2))};
 static const uint8_t config[]={
@@ -30,7 +35,7 @@ esp_err_t usb_start(void){
  uint8_t mac[6];esp_err_t result=esp_read_mac(mac,ESP_MAC_BASE);if(result!=ESP_OK)return result;
  snprintf(serial,sizeof(serial),"%02X%02X%02X%02X%02X%02X",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
  tinyusb_config_t cfg=TINYUSB_DEFAULT_CONFIG();cfg.event_cb=event;cfg.descriptor.device=&device;cfg.descriptor.full_speed_config=config;cfg.descriptor.string=strings;cfg.descriptor.string_count=6;
- result=tinyusb_driver_install(&cfg);if(result!=ESP_OK)return result;tinyusb_config_cdcacm_t cdc={0};result=tinyusb_cdcacm_init(&cdc);started=result==ESP_OK;return result;
+ result=tinyusb_driver_install(&cfg);if(result!=ESP_OK)return result;installed=true;tinyusb_config_cdcacm_t cdc={0};result=tinyusb_cdcacm_init(&cdc);started=result==ESP_OK;return result;
 }
 bool usb_ready(void){return started&&tud_mounted();}
 bool usb_armed(void){return armed&&usb_ready();}
@@ -42,3 +47,19 @@ size_t usb_read(char *out,size_t size){size_t n=0;if(!started)return 0;tinyusb_c
 size_t usb_write_bytes(const void *data,size_t total){const uint8_t *s=data;size_t sent=0;for(int retry=0;sent<total&&retry<3000&&tud_mounted();retry++){sent+=tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0,s+sent,total-sent);tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0,0);if(sent<total)vTaskDelay(pdMS_TO_TICKS(2));}return sent;}
 void usb_write(const char *s){usb_write_bytes(s,strlen(s));}
 const char *usb_serial(void){return serial;}
+
+esp_err_t usb_enter_bootloader(void){
+ usb_gate(false);
+ if(installed){
+  tud_disconnect();vTaskDelay(pdMS_TO_TICKS(300));
+  esp_err_t e=tinyusb_driver_uninstall();if(e!=ESP_OK)return e;
+  installed=false;
+  if(started){tinyusb_cdcacm_deinit(TINYUSB_CDC_ACM_0);started=false;}
+ }
+ // The OTG stack and hardware download controller share one internal PHY.
+ // Give it back before forcing ROM mode; otherwise the serial port can vanish.
+ usb_phy_config_t config={0};config.controller=USB_PHY_CTRL_SERIAL_JTAG;config.target=USB_PHY_TARGET_INT;
+ usb_phy_handle_t download_phy;esp_err_t e=usb_new_phy(&config,&download_phy);if(e!=ESP_OK)return e;
+ REG_SET_BIT(RTC_CNTL_OPTION1_REG,RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+ esp_restart();return ESP_FAIL;
+}

@@ -18,10 +18,13 @@
 #include "bsp/display.h"
 #include "cJSON.h"
 #include "usb.h"
+#include "esp_attr.h"
+#include "boot_recovery_policy.h"
 LV_FONT_DECLARE(ui_font);
 _Static_assert(LVGL_VERSION_MAJOR==9 && LVGL_VERSION_MINOR==6 && LVGL_VERSION_PATCH==0,"Unexpected LVGL version");
 #define MAX_PLUGINS 4
 #define MAX_JSON 6144
+RTC_NOINIT_ATTR static volatile struct {uint32_t magic,crashes;} boot_recovery;
 static nvs_handle_t storage;
 static cJSON *plugins;
 static int page,selected;
@@ -33,7 +36,7 @@ static const char *str(cJSON *o,const char *key){cJSON *v=cJSON_GetObjectItemCas
 static cJSON *current(void){return cJSON_GetArrayItem(plugins,selected);}
 static void render(void);
 static void reply(cJSON *o){char *s=cJSON_PrintUnformatted(o);if(s){usb_write(s);usb_write("\n");free(s);}cJSON_Delete(o);}
-static void status(const char *result){cJSON *o=cJSON_CreateObject();cJSON_AddStringToObject(o,"result",result);cJSON_AddStringToObject(o,"serial",usb_serial());cJSON_AddStringToObject(o,"version",esp_app_get_description()->version);cJSON_AddNumberToObject(o,"page",page);cJSON_AddNumberToObject(o,"uptimeMs",esp_timer_get_time()/1000.0);cJSON_AddNumberToObject(o,"resetReason",esp_reset_reason());cJSON_AddBoolToObject(o,"usb",usb_ready());cJSON_AddBoolToObject(o,"armed",usb_armed());cJSON_AddBoolToObject(o,"runnerConnected",false);cJSON_AddBoolToObject(o,"sharing",false);cJSON_AddNumberToObject(o,"freeHeap",esp_get_free_heap_size());cJSON_AddItemToObject(o,"plugins",cJSON_Duplicate(plugins,true));reply(o);}
+static void status(const char *result){cJSON *o=cJSON_CreateObject();cJSON_AddStringToObject(o,"result",result);cJSON_AddStringToObject(o,"serial",usb_serial());cJSON_AddStringToObject(o,"version",esp_app_get_description()->version);cJSON_AddNumberToObject(o,"page",page);cJSON_AddNumberToObject(o,"uptimeMs",esp_timer_get_time()/1000.0);cJSON_AddNumberToObject(o,"resetReason",esp_reset_reason());cJSON_AddNumberToObject(o,"earlyCrashes",boot_recovery.crashes);cJSON_AddBoolToObject(o,"usb",usb_ready());cJSON_AddBoolToObject(o,"armed",usb_armed());cJSON_AddBoolToObject(o,"runnerConnected",false);cJSON_AddBoolToObject(o,"sharing",false);cJSON_AddNumberToObject(o,"freeHeap",esp_get_free_heap_size());cJSON_AddItemToObject(o,"plugins",cJSON_Duplicate(plugins,true));reply(o);}
 static bool version(const char *s,unsigned v[3]){int end=0;for(const char *c=s;*c;c++)if((*c<'0'||*c>'9')&&*c!='.')return false;if(sscanf(s,"%5u.%5u.%5u%n",v,v+1,v+2,&end)!=3||s[end])return false;for(int i=0;i<3;i++)if(v[i]>65535)return false;return true;}
 static int compare(unsigned a[3],unsigned b[3]){for(int i=0;i<3;i++){if(a[i]>b[i])return 1;if(a[i]<b[i])return -1;}return 0;}
 static bool valid(cJSON *p){unsigned v[3];const char *id=str(p,"id"),*name=str(p,"name");if(strcmp(str(p,"format"),"phone-controller-plugin")||!cJSON_IsNumber(cJSON_GetObjectItem(p,"apiVersion"))||cJSON_GetObjectItem(p,"apiVersion")->valuedouble!=1||!version(str(p,"version"),v)||!id[0]||strlen(id)>63||!name[0]||strlen(name)>90)return false;for(const char *s=id;*s;s++)if(!((*s>='a'&&*s<='z')||(*s>='0'&&*s<='9')||*s=='.'||*s=='-'||*s=='_'))return false;cJSON *r=cJSON_GetObjectItem(p,"runner");return !strcmp(str(r,"type"),"server-workflow")&&strlen(str(r,"entry"))>0&&strlen(str(r,"entry"))<=96;}
@@ -57,7 +60,7 @@ static void process(char *line){
  }else if(!strcmp(op,"view")){cJSON *p=cJSON_GetObjectItem(o,"page");if(cJSON_IsNumber(p)&&p->valueint>=0&&p->valueint<=6){page=p->valueint;refresh=true;status("view-changed");}else status("invalid-page");}
  else if(!strcmp(op,"snapshot")){if(refresh){render();refresh=false;}lv_draw_buf_t *buf=lv_snapshot_take(root,LV_COLOR_FORMAT_RGB565);if(!buf){status("snapshot-failed");goto done;}cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","snapshot");cJSON_AddNumberToObject(meta,"width",buf->header.w);cJSON_AddNumberToObject(meta,"height",buf->header.h);cJSON_AddNumberToObject(meta,"stride",buf->header.stride);cJSON_AddNumberToObject(meta,"bytes",buf->header.stride*buf->header.h);reply(meta);usb_write_bytes(buf->data,buf->header.stride*buf->header.h);lv_draw_buf_destroy(buf);usb_write("\n");}
  else if(!strcmp(op,"maintenance.restart")&&!strcmp(str(o,"device"),usb_serial())&&!usb_armed()){status("restarting");vTaskDelay(pdMS_TO_TICKS(100));esp_restart();}
- else if(!strcmp(op,"maintenance.bootloader")&&!strcmp(str(o,"device"),usb_serial())&&!usb_armed()){status("entering-bootloader");vTaskDelay(pdMS_TO_TICKS(100));REG_SET_BIT(RTC_CNTL_OPTION1_REG,RTC_CNTL_FORCE_DOWNLOAD_BOOT);esp_restart();}
+ else if(!strcmp(op,"maintenance.bootloader")&&!strcmp(str(o,"device"),usb_serial())&&!usb_armed()){status("entering-bootloader");vTaskDelay(pdMS_TO_TICKS(100));if(usb_enter_bootloader()!=ESP_OK)status("bootloader-failed");}
  else status("unsupported-operation");
  done:cJSON_Delete(o);
 }
@@ -71,7 +74,7 @@ static void action(lv_event_t *e){int a=(int)(intptr_t)lv_event_get_user_data(e)
  else if(a==14){page=5;}
  else if(a==15){page=6;}
  else if(a==20){usb_gate(false);snprintf(notice,sizeof(notice),"输入已停止，USB连接保留");}
- else if(a==22){usb_gate(false);REG_SET_BIT(RTC_CNTL_OPTION1_REG,RTC_CNTL_FORCE_DOWNLOAD_BOOT);esp_restart();}
+ else if(a==22){esp_err_t e=usb_enter_bootloader();snprintf(notice,sizeof(notice),"维护入口错误 0x%x",(unsigned)e);}
  else if(a==21){if(lv_event_get_code(e)==LV_EVENT_LONG_PRESSED){usb_gate(true);snprintf(notice,sizeof(notice),usb_armed()?"手动输入已开启":"请先连接USB主机");}else return;}
  else if(a>=30&&a<=38){bool ok=false;if(a<=33)ok=usb_mouse(a==30?-24:a==31?24:0,a==32?-24:a==33?24:0,false);else if(a==34)ok=usb_mouse(0,0,true);else ok=usb_consumer(a==35?0x224:a==36?0x223:a==37?0xe9:0xea);snprintf(notice,sizeof(notice),ok?"已提交USB输入，待观察手机":"输入未开启或USB未就绪");}
  else if(a==40){snprintf(notice,sizeof(notice),"106执行器尚未接入，未启动任务");}
@@ -89,11 +92,20 @@ static void render(void){
  else if(page==3){label(root,"通过USB导入JSON插件\n支持独立更新与移除\n手机导入入口待接入",24,132,432,lv_color_hex(0xaaaaaa));label(root,"API 1 · 最多4个插件\n导入后不会自动运行",24,260,432,lv_color_hex(0x17baf1));button("返回插件",24,384,432,72,11,true);}
  else if(page==4){if(!usb_armed()){label(root,"仅控制当前USB连接的主机\n长按开启，停止后连接保留",24,138,432,lv_color_hex(0xaaaaaa));button("长按2秒开启输入",24,268,432,72,21,true);}else{button("左",24,112,132,72,30,false);button("上",174,112,132,72,32,false);button("右",324,112,132,72,31,false);button("返回",24,202,132,72,35,false);button("点击",174,202,132,72,34,false);button("下",324,202,132,72,33,false);button("音量+",24,292,132,72,37,false);button("主页",174,292,132,72,36,false);button("音量-",324,292,132,72,38,false);}button("停止输入",24,384,204,72,20,false);button("首页",252,384,204,72,10,false);}
  else if(page==5){label(root,"语音服务尚未接入\n当前不会录音或上传",24,150,432,lv_color_hex(0xaaaaaa));button("回到首页",24,384,432,72,10,true);}
- else if(page==6){label(root,"固件 0.1.2-amoled\nWi-Fi / 蓝牙默认关闭",24,126,432,lv_color_hex(0xaaaaaa));button("停止输入",24,232,432,72,20,false);button("长按2秒进入维护",24,308,432,72,22,false);button("回到首页",24,384,432,72,10,true);}
+ else if(page==6){label(root,"固件 0.1.3-amoled\nWi-Fi / 蓝牙默认关闭",24,126,432,lv_color_hex(0xaaaaaa));button("停止输入",24,232,432,72,20,false);button("长按2秒进入维护",24,308,432,72,22,false);button("回到首页",24,384,432,72,10,true);}
  if(notice[0]){notice_ticks=100;lv_obj_t *box=lv_obj_create(root);lv_obj_set_pos(box,24,180);lv_obj_set_size(box,432,120);lv_obj_set_style_bg_color(box,lv_color_hex(0x21332f),0);lv_obj_set_style_border_width(box,0,0);label(box,notice,0,0,384,lv_color_hex(0xf5f5f5));}
  ESP_LOGI("ui","page=%d plugins=%d usb=%d armed=%d",page,cJSON_GetArraySize(plugins),usb_ready(),usb_armed());
 }
 void app_main(void){
+ esp_reset_reason_t reset=esp_reset_reason();
+ bool crash=reset==ESP_RST_PANIC||reset==ESP_RST_TASK_WDT||reset==ESP_RST_INT_WDT||reset==ESP_RST_WDT;
+ boot_recovery.crashes=amoled_boot_crashes(boot_recovery.magic==AMOLED_RECOVERY_MAGIC,boot_recovery.crashes,crash);
+ boot_recovery.magic=AMOLED_RECOVERY_MAGIC;
+ if(amoled_recovery_required(boot_recovery.crashes)){
+  ESP_LOGW("amoled","Repeated early crashes; entering hardware download mode");
+  esp_err_t e=usb_enter_bootloader();ESP_LOGE("amoled","Recovery entry failed: %s",esp_err_to_name(e));
+ }
+
  ESP_LOGI("amoled","BOOT version=%s target=ESP32-S3-Touch-AMOLED-2.16",esp_app_get_description()->version);
  ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(nvs_open("plugins",NVS_READWRITE,&storage));
  size_t n=0;if(nvs_get_str(storage,"plugins",NULL,&n)==ESP_OK&&n<=MAX_JSON){char *s=malloc(n);if(s){if(nvs_get_str(storage,"plugins",s,&n)==ESP_OK)plugins=cJSON_Parse(s);free(s);}}
@@ -109,6 +121,7 @@ void app_main(void){
   if(usb_ready()!=last_usb){last_usb=usb_ready();refresh=true;}
   if(refresh){bsp_display_lock(-1);render();refresh=false;bsp_display_unlock();}
   if(notice_ticks>0&&--notice_ticks==0){notice[0]=0;refresh=true;}
+  if(boot_recovery.crashes&&amoled_boot_healthy((uint64_t)esp_timer_get_time()/1000))boot_recovery.crashes=0;
   if(++tick%500==0)ESP_LOGI("amoled","HEALTH heap=%u plugins=%d",(unsigned)esp_get_free_heap_size(),cJSON_GetArraySize(plugins));
   vTaskDelay(pdMS_TO_TICKS(20));
  }
