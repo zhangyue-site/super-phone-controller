@@ -88,7 +88,7 @@ static int access_cb(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ct
   taskENTER_CRITICAL(&mux);seq=sequence;op=operation;state=result;running=busy;memcpy(secret,key,32);memcpy(nonce_copy,nonce,33);taskEXIT_CRITICAL(&mux);
   unsigned hid=amoled_usb_armed(),ready=amoled_usb_ready();int n=snprintf(message,sizeof(message),"PCBLE1-ACK\n%s\n%u\n%u\n%u\n%u\n%u\n%u",nonce_copy,seq,op,state,hid,(unsigned)running,ready);
   bool ok=amoled_hmac(secret,32,message,n,proof);memset(secret,0,32);if(!ok)return BLE_ATT_ERR_UNLIKELY;amoled_hex(proof,32,encoded);
-  n=snprintf(json,sizeof(json),"{\"protocol\":\"local-hid-v1\",\"nonce\":\"%s\",\"seq\":%u,\"op\":%u,\"result\":%u,\"hid\":%u,\"busy\":%u,\"ready\":%u,\"proof\":\"%s\",\"hidKeyboardProtocol\":1,\"relayOnline\":%u}",nonce_copy,seq,op,state,hid,(unsigned)running,ready,encoded,amoled_relay_online());
+  n=snprintf(json,sizeof(json),"{\"protocol\":\"local-hid-v1\",\"nonce\":\"%s\",\"seq\":%u,\"op\":%u,\"result\":%u,\"hid\":%u,\"busy\":%u,\"ready\":%u,\"proof\":\"%s\",\"hidKeyboardProtocol\":1,\"wifiOtaSupported\":false,\"relayOnline\":%u}",nonce_copy,seq,op,state,hid,(unsigned)running,ready,encoded,amoled_relay_online());
   return n>0&&n<(int)sizeof(json)&&os_mbuf_append(ctxt->om,json,n)==0?0:BLE_ATT_ERR_INSUFFICIENT_RES;
  }return BLE_ATT_ERR_UNLIKELY;
 }

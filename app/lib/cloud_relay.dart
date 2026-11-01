@@ -23,9 +23,11 @@ class CloudRelay {
   DateTime? _heartbeat;
   DateTime? _lastPoll, _lastControl;
   bool _upgradeRequested = false, _maintenanceSupported = false;
+  bool _wifiUpgradeSupported = false;
   Map<String, dynamic> diagnostics = {};
   void requestWifiUpgrade() {
     if (_closed) throw StateError('网关已结束');
+    if (!supportsMaintenance) throw StateError('当前控制板请使用USB维护通道升级');
     _upgradeRequested = true;
   }
 
@@ -39,7 +41,7 @@ class CloudRelay {
       this.beforeModeChange,
       this.retiredNonce});
   bool get isClosed => _closed;
-  bool get supportsMaintenance => _maintenanceSupported;
+  bool get supportsMaintenance => _maintenanceSupported && _wifiUpgradeSupported;
 
   Future<void> start({Future<void> Function()? beforePolling}) async {
     if (_closed || _timer != null) throw StateError("控制会话不可重复启动");
@@ -63,6 +65,7 @@ class CloudRelay {
       }
     }
     _maintenanceSupported = initial.containsKey("relayOnline");
+    _wifiUpgradeSupported = initial["wifiOtaSupported"] != false;
     SafeDiagnostics.record('relay_attached', phase: 'attach');
     if (_closed) throw StateError('控制连接已结束');
     await beforePolling?.call();
