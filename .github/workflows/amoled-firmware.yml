@@ -48,6 +48,8 @@ jobs:
           mkdir out
           cp firmware-amoled/build/phone_controller_amoled.bin out/app.bin
           cp firmware-amoled/build/phone-controller-amoled-full.bin out/full.bin
+          cp firmware-amoled/build/phone_controller_amoled.elf out/
+          cp firmware-amoled/build/phone_controller_amoled.map out/
           cp firmware-amoled/build/flash_args out/
           cp firmware-amoled/build/flasher_args.json out/
           cp firmware-amoled/build/project_description.json out/
