@@ -98,7 +98,7 @@ static void action(lv_event_t *e){int a=(int)(intptr_t)lv_event_get_user_data(e)
  else if(a==13){page=4;}
  else if(a==14){page=5;}
  else if(a==15){page=6;}
- else if(a==20){amoled_usb_gate(false);snprintf(notice,sizeof(notice),"输入已停止，USB连接保留");}
+ else if(a==20){amoled_relay_cancel();snprintf(notice,sizeof(notice),"输入已停止，USB连接保留");}
  else if(a==22){esp_err_t e=amoled_usb_enter_bootloader();snprintf(notice,sizeof(notice),"维护入口错误 0x%x",(unsigned)e);}
  else if(a==21){if(lv_event_get_code(e)==LV_EVENT_LONG_PRESSED){amoled_usb_gate(true);snprintf(notice,sizeof(notice),amoled_usb_armed()?"手动输入已开启":"请先连接USB主机");}else return;}
  else if(a>=30&&a<=38){bool ok=false;if(a<=33)ok=amoled_usb_mouse(a==30?-24:a==31?24:0,a==32?-24:a==33?24:0,false);else if(a==34)ok=amoled_usb_mouse(0,0,true);else ok=amoled_usb_consumer(a==35?0x224:a==36?0x223:a==37?0xe9:0xea);snprintf(notice,sizeof(notice),ok?"已提交USB输入，待观察手机":"输入未开启或USB未就绪");}

@@ -21,6 +21,7 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.RejectedExecutionHandler
 
 class ScreenShareService: Service() {
  companion object {
@@ -97,7 +98,10 @@ class ScreenShareService: Service() {
  private var statusHandler: Handler?=null
  // One upload in flight and one newest pending frame; never accumulate old screens.
  private val frameWorker=ThreadPoolExecutor(1,1,0L,TimeUnit.MILLISECONDS,
-  ArrayBlockingQueue<Runnable>(1),ThreadPoolExecutor.DiscardOldestPolicy())
+  ArrayBlockingQueue<Runnable>(1),RejectedExecutionHandler { task, executor ->
+   (executor.queue.poll() as? FrameTask)?.discard()
+   if(!executor.isShutdown)executor.execute(task) else (task as? FrameTask)?.discard()
+  })
  @Volatile private var statusConnection: HttpsURLConnection?=null
  @Volatile private var running=false
  @Volatile private var connection: HttpsURLConnection?=null
@@ -202,6 +206,25 @@ class ScreenShareService: Service() {
    if(running)statusHandler?.postDelayed(this,2000)
   }
  }
+ private inner class FrameTask(private val bitmap: Bitmap,private val capturedAt: Long,
+  private val requestTicket: String): Runnable {
+  fun discard() { bitmap.recycle() }
+  override fun run() {
+   var cropped: Bitmap?=null
+   var scaled: Bitmap?=null
+   try {
+    if(!running || ticket!=requestTicket || capturedAt<=afterResponse || recovery.needsAuthorization())return
+    cropped=Bitmap.createBitmap(bitmap,0,0,initialWidth,initialHeight)
+    // Encode the entire screen on the upload worker, preserving normalized coordinates.
+    val factor=minOf(1.0,720.0/initialWidth,1280.0/initialHeight)
+    scaled=if(factor<1.0)Bitmap.createScaledBitmap(cropped!!,(initialWidth*factor).toInt().coerceAtLeast(1),(initialHeight*factor).toInt().coerceAtLeast(1),true) else cropped
+    val bytes=ByteArrayOutputStream().use { out -> scaled!!.compress(Bitmap.CompressFormat.JPEG,70,out);out.toByteArray() }
+    if(bytes.size>524288){endCapture();status="画面过大，请降低屏幕分辨率后重新共享";stopSelf();return}
+    uploadFrame(bytes,capturedAt,requestTicket)
+   } catch(_: Exception) {if(running && ticket==requestTicket)status="画面编码失败，正在重试"}
+   finally {if(scaled!==cropped)scaled?.recycle();if(cropped!==bitmap)cropped?.recycle();bitmap.recycle()}
+  }
+ }
  private fun uploadFrame(bytes: ByteArray,capturedAt: Long,requestTicket: String) {
   val requestBarrier: String
   val requestSequence: Int
@@ -270,8 +293,6 @@ class ScreenShareService: Service() {
    reader!!.setOnImageAvailableListener({ source ->
     val image=source.acquireLatestImage() ?: return@setOnImageAvailableListener
     var bitmap: Bitmap?=null
-    var cropped: Bitmap?=null
-    var scaled: Bitmap?=null
     try {
      val now=SystemClock.elapsedRealtime()
      if(!running || image.timestamp<=afterResponse)return@setOnImageAvailableListener
@@ -287,17 +308,11 @@ class ScreenShareService: Service() {
      val plane=image.planes[0];val padding=plane.rowStride-plane.pixelStride*image.width
      bitmap=Bitmap.createBitmap(image.width+padding/plane.pixelStride,image.height,Bitmap.Config.ARGB_8888)
      bitmap!!.copyPixelsFromBuffer(plane.buffer)
-     cropped=Bitmap.createBitmap(bitmap!!,0,0,image.width,image.height)
-     // Resize the entire display, never a target-app crop. Coordinates remain normalized.
-     val factor=minOf(1.0,720.0/image.width,1280.0/image.height)
-     scaled=if(factor<1.0)Bitmap.createScaledBitmap(cropped!!,(image.width*factor).toInt().coerceAtLeast(1),(image.height*factor).toInt().coerceAtLeast(1),true) else cropped
-     val bytes=ByteArrayOutputStream().use { out -> scaled!!.compress(Bitmap.CompressFormat.JPEG,70,out);out.toByteArray() }
-     if(bytes.size>524288){running=false;status="画面过大，任务已停止；请降低屏幕分辨率后重新共享";stopSelf();return@setOnImageAvailableListener}
-     val capturedAt=image.timestamp
-     try { frameWorker.execute { uploadFrame(bytes,capturedAt,requestTicket) } }
-     catch(_: RejectedExecutionException) { /* Service is stopping. */ }
+     frameWorker.execute(FrameTask(bitmap!!,image.timestamp,requestTicket))
+     bitmap=null // Ownership moved to the bounded uploader; rejected frames are recycled.
+
     } catch(e: Exception) {if(running)status="画面上传失败，正在重试"}
-    finally {if(scaled!==cropped)scaled?.recycle();if(cropped!==bitmap)cropped?.recycle();bitmap?.recycle();image.close()}
+    finally {bitmap?.recycle();image.close()}
    },handler)
    display=projection!!.createVirtualDisplay("AI phone screen",width,height,metrics.densityDpi,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,reader!!.surface,null,handler)
   } catch(e: Exception) {status="屏幕共享启动失败，请重新授权";stopSelf()}
@@ -316,7 +331,7 @@ class ScreenShareService: Service() {
    active=false;usbOwnerSerial=null;usbOwnerSession=null
    running=false
   }
-  renewalConnection?.disconnect();connection?.disconnect();statusConnection?.disconnect();frameWorker.shutdownNow()
+  renewalConnection?.disconnect();connection?.disconnect();statusConnection?.disconnect();frameWorker.shutdownNow().forEach { (it as? FrameTask)?.discard() }
   display?.release();display=null;reader?.close();reader=null
   val old=projection;projection=null;old?.stop();worker?.quitSafely();worker=null
   handler?.removeCallbacksAndMessages(null);statusHandler?.removeCallbacksAndMessages(null);statusWorker?.quitSafely();statusWorker=null;statusHandler=null;displayManager?.unregisterDisplayListener(displayListener)
