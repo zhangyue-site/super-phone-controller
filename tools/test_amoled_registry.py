@@ -59,13 +59,13 @@ static void reply(cJSON *o){cJSON_Delete(o);}
 static int nvs_set_str(int h,const char *k,const char *v){if(fail_set)return -1;free(saved);saved=strdup(v);return 0;}
 static int nvs_commit(int h){return fail_commit?-1:0;}
 static void render(void){}
-static bool usb_armed(void){return false;}
-static const char *usb_serial(void){return "host-test-device";}
-static void usb_write(const char *s){}
-static void usb_write_bytes(const void *p,size_t n){}
+static bool amoled_usb_armed(void){return false;}
+static const char *amoled_usb_serial(void){return "host-test-device";}
+static void amoled_usb_write(const char *s){}
+static void amoled_usb_write_bytes(const void *p,size_t n){}
 static void vTaskDelay(int n){}
 static void esp_restart(void){restarts++;}
-static int usb_enter_bootloader(void){bootloader_calls++;return 0;}
+static int amoled_usb_enter_bootloader(void){bootloader_calls++;return 0;}
 typedef struct {struct {int w,h,stride;} header;void *data;} lv_draw_buf_t;
 static lv_draw_buf_t *lv_snapshot_take(void *p,int fmt){return NULL;}
 static void lv_draw_buf_destroy(lv_draw_buf_t *p){}

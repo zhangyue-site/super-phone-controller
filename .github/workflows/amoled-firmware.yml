@@ -41,6 +41,8 @@ jobs:
           grep -qx CONFIG_ESP_CONSOLE_SECONDARY_NONE=y sdkconfig
           if grep -qx CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y sdkconfig; then exit 1; fi
           idf.py build
+          xtensa-esp32s3-elf-nm -g --defined-only build/phone_controller_amoled.elf > build/linked-symbols.txt
+          python3 ../tools/check_amoled_symbols.py build/linked-symbols.txt
           idf.py merge-bin -o phone-controller-amoled-full.bin
       - name: Collect verifiable binaries
         shell: bash
@@ -50,6 +52,7 @@ jobs:
           cp firmware-amoled/build/phone-controller-amoled-full.bin out/full.bin
           cp firmware-amoled/build/phone_controller_amoled.elf out/
           cp firmware-amoled/build/phone_controller_amoled.map out/
+          cp firmware-amoled/build/linked-symbols.txt out/
           cp firmware-amoled/build/flash_args out/
           cp firmware-amoled/build/flasher_args.json out/
           cp firmware-amoled/build/project_description.json out/
