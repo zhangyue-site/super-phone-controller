@@ -54,3 +54,6 @@ private-*/
 **/*.keystore
 **/*.jks
 docs/handoff*/
+firmware/main/config.h
+firmware/*.bak-ota
+firmware/main/*.bak-ota

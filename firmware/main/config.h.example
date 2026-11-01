@@ -1,0 +1,24 @@
+#pragma once
+
+/* Optional build-time defaults. Copy to config.h (git-ignored) or leave the
+ * placeholder values and provision WiFi + OTA server at runtime over USB:
+ *
+ *   WIFI\t<ssid>\t<pass>     save to NVS and connect
+ *   OTA                       start HTTPS OTA (needs WiFi)
+ *   OTA-CONFIRM               confirm current slot after a test boot
+ *
+ * config.h overrides these; without it the firmware compiles and runs USB-only.
+ */
+
+#define WIFI_DEFAULT_SSID ""
+#define WIFI_DEFAULT_PASS ""
+
+/* Base URL of the OTA file server, no trailing slash. Serves:
+ *   GET {OTA_URL}/manifest         -> "PCOTA1\n<size>\n<sha256-hex>\n<version>\n"
+ *   GET {OTA_URL}/<version>.bin    -> raw app image, honors Range for resume
+ *   POST {OTA_URL}/report          -> JSON progress/failure report (optional)
+ */
+#define OTA_URL "https://ota.example.invalid/phone-hand"
+
+/* Optional bearer token sent with manifest/report requests. */
+#define OTA_TOKEN ""

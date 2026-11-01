@@ -1,0 +1,108 @@
+name: Build phone-hand board firmware
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '固件版本号（留空则用日期+run号）'
+        required: false
+        type: string
+concurrency:
+  group: esp-firmware-hand-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  IDF_IMAGE: espressif/idf:v5.4.2
+  FIRMWARE_DIR: firmware
+  PROJECT_NAME: phone-hand
+
+jobs:
+  build-hand:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute firmware version
+        id: ver
+        run: |
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME}"; fi
+          fi
+          if [ -z "$V" ]; then V="hand-$(date +%Y.%m.%d)-ci${{ github.run_number }}"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Firmware version: $V"
+
+      - name: Build in official image
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          docker run --rm \
+            -v "$PWD/$FIRMWARE_DIR:/project" \
+            -e VERSION \
+            -w /project \
+            "$IDF_IMAGE" \
+            bash -c '
+              set -e
+              . $IDF_PATH/export.sh
+              # config.h 是本机/秘密配置，不进仓；CI 用 example 的占位值生成。
+              # 占位 WiFi/OTA_URL 不会触发任何真实连接，运行时可用 USB 串口命令下发。
+              cp -n main/config.h.example main/config.h
+              idf.py -DIDF_TARGET=esp32s3 -DPROJECT_VER="$VERSION" -B build build
+            '
+
+      - name: Verify version is embedded
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          ACTUAL=$(python3 - "$FIRMWARE_DIR/build/$PROJECT_NAME.bin" "$VERSION" <<'PY'
+          import sys
+          blob = open(sys.argv[1], "rb").read(65536)
+          want = sys.argv[2].encode()
+          idx = blob.find(want)
+          if idx < 0:
+              print("NOT_FOUND")
+          else:
+              end = blob.find(b"\x00", idx)
+              print(blob[idx:end].decode("utf-8", "replace"))
+          PY
+          )
+          echo "embedded version: $ACTUAL (expected: $VERSION)"
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "::error::firmware version mismatch: got '$ACTUAL', expected '$VERSION'"
+            exit 1
+          fi
+
+      - name: Verify OTA slot capacity
+        run: |
+          # ota_0 / ota_1 各 0x3F0000 = 4128768 字节
+          SZ=$(stat -c%s "$FIRMWARE_DIR/build/$PROJECT_NAME.bin")
+          echo "app.bin = $SZ bytes, OTA slot limit = 4128768"
+          test "$SZ" -lt 4128768 || { echo "::error::firmware exceeds OTA slot size"; exit 1; }
+
+      - name: Collect artifacts
+        run: |
+          set -e
+          D="$FIRMWARE_DIR/build"
+          mkdir -p out
+          cp "$D/$PROJECT_NAME.bin"     out/phone-hand.bin
+          cp "$D/bootloader/bootloader.bin" out/bootloader.bin
+          cp "$D/partition_table/partition-table.bin" out/partition-table.bin
+          cp "$D/ota_data_initial.bin"  out/ota_data_initial.bin
+          # 0x0 起一步烧录的 merged bin
+          pip install esptool >/dev/null
+          python -m esptool --chip esp32s3 merge-bin -o out/phone-hand-merged.bin \
+            --flash_mode qio --flash_size 8MB \
+            0x0 "$D/bootloader/bootloader.bin" \
+            0x8000 "$D/partition_table/partition-table.bin" \
+            0xd000 "$D/ota_data_initial.bin" \
+            0x20000 "$D/$PROJECT_NAME.bin"
+          cd out && sha256sum *.bin | tee SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phone-hand-${{ github.run_number }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14

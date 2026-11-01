@@ -3,6 +3,8 @@
 #include "link.h"
 
 #include "driver/gpio.h"
+#include "ota.h"
+#include "wifi.h"
 #include "driver/i2s_pdm.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -50,6 +52,8 @@ void app_main(void)
     ESP_ERROR_CHECK(gpio_config(&button));
     led_start();
     mic_open();
+    wifi_init();
+    phone_hand_ota_confirm_start();
     link_start();
     ESP_LOGI(TAG, "AtomS3U ready. Hold the button to record. USB only.");
 
