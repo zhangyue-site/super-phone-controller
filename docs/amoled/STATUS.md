@@ -22,8 +22,9 @@ Full image SHA256: `6db223e4906147c4c410fdd2e4585c44def455909ae766019ebb1b8e4140
 
 The rendered buffers are **not photographs of the physical panel**. The user
 reported a black panel while 0.1.6 remained responsive over USB. After flashing
-0.1.7, physical panel emission and touch still require direct observation;
-they must not be inferred from USB or screenshots alone.
+0.1.7, the user directly confirmed that the physical screen had recovered.
+Physical touch, battery operation and phone HID still need their own tests;
+these must not be inferred from USB or screenshots alone.
 
 ## Fixed failures and regression prevention
 
