@@ -4,6 +4,10 @@ platform :ios, '15.0'
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
+# Firmware import uses the document picker only; do not link photo/music access.
+Pod::PICKER_MEDIA = false
+Pod::PICKER_AUDIO = false
+
 project 'Runner', {
   'Debug' => :debug,
   'Profile' => :release,

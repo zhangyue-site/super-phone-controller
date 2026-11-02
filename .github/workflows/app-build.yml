@@ -162,6 +162,10 @@ jobs:
             args+=(--build-number="$BUILD_NUMBER")
           fi
           flutter build ios "${args[@]}"
+          if grep -q 'DKImagePickerController' ios/Podfile.lock; then
+            echo 'Unexpected photo-library dependency in firmware document picker' >&2
+            exit 1
+          fi
           test -d build/ios/iphoneos/Runner.app/PlugIns/ScreenBroadcast.appex
           xcrun nm -gjU build/ios/iphoneos/Runner.app/Runner | grep -Fx _OrtGetApiBase
       - name: Package private unsigned IPA
