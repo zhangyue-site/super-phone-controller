@@ -41,6 +41,11 @@ jobs:
           python3 tools/test_amoled_direct_owner.py
           python3 tools/test_amoled_direct_disconnect.py
           python3 tools/test_amoled_font.py
+          python3 tools/test_amoled_audio.py
+          python3 tools/test_amoled_audio_owner.py
+          python3 tools/test_amoled_audio_recorder.py
+          python3 tools/test_amoled_audio_transport.py --cjson-dir /tmp/amoled-registry-tests
+          python3 tools/check_amoled_audio_syntax.py --cjson-dir /tmp/amoled-registry-tests
           python3 tools/test_amoled_direct_runtime.py --cjson-dir /tmp/amoled-registry-tests
           python3 tools/test_amoled_direct_transport.py --cjson-dir /tmp/amoled-registry-tests
           python3 tools/check_amoled_direct_syntax.py --cjson-dir /tmp/amoled-registry-tests
