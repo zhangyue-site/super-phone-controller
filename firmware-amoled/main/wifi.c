@@ -1,4 +1,5 @@
 #include "wifi.h"
+#include "direct.h"
 #include "wifi_policy.h"
 #include "usb.h"
 #include "identity.h"
@@ -38,11 +39,12 @@ bool amoled_wifi_configured(void){return atomic_load(&configured);}
 bool amoled_wifi_connected(void){return atomic_load(&connected);}
 unsigned amoled_wifi_ota_stage(void){return atomic_load(&stage);}
 void amoled_wifi_cancel(void){
+ amoled_direct_cancel();
  atomic_fetch_add(&generation,1);atomic_store(&requested,false);
  if(atomic_load(&transfer))amoled_ota_cancel();
 }
 static bool allowed(void){
- return atomic_load(&ready)&&!atomic_load(&requested)&&!atomic_load(&transfer)&&
+ return atomic_load(&ready)&&!amoled_relay_direct_owned()&&!atomic_load(&requested)&&!atomic_load(&transfer)&&
   pc_wifi_maintenance_allowed(amoled_usb_ready(),amoled_usb_armed(),amoled_ota_busy(),amoled_relay_connected());
 }
 static bool configure(void *context){
@@ -217,6 +219,7 @@ static esp_err_t runtime_initialize(void){
  esp_sntp_config_t sntp=ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
  if((err=esp_netif_sntp_init(&sntp))!=ESP_OK)return err;
  if(xTaskCreate(worker,"amoled_wifi",8192,NULL,3,NULL)!=pdPASS)return ESP_ERR_NO_MEM;
+ if((err=amoled_direct_start())!=ESP_OK)return err;
  runtime_started=true;return ESP_OK;
 }
 
@@ -226,4 +229,10 @@ static esp_err_t runtime_start(void){
  if(runtime_started)return ESP_OK;
  if(runtime_attempted)return runtime_error;
  runtime_attempted=true;runtime_error=runtime_initialize();return runtime_error;
+}
+
+bool amoled_wifi_endpoint(char *out,size_t size){
+ if(!out||size<sizeof(config.endpoint)||!mutex||!amoled_wifi_configured())return false;
+ if(xSemaphoreTake(mutex,pdMS_TO_TICKS(100))!=pdTRUE)return false;
+ memcpy(out,config.endpoint,sizeof(config.endpoint));xSemaphoreGive(mutex);return true;
 }
