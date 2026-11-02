@@ -23,7 +23,7 @@ static uint16_t connection=BLE_HS_CONN_HANDLE_NONE;
 uint16_t amoled_ota_status_handle;
 static uint8_t challenge[32],grant_digest[32];
 static uint32_t grant_size;static char grant_version[32];
-static bool challenge_live;
+static bool challenge_live;static uint64_t challenge_issued;
 static atomic_bool pending,ready;
 static esp_ota_handle_t handle;
 static const esp_partition_t *partition;
@@ -100,14 +100,14 @@ int amoled_ota_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *c
   if(ctxt->op==BLE_GATT_ACCESS_OP_READ_CHR){
    atomic_store(&engine.grant_until,0);uint8_t next[32];esp_fill_random(next,32);
    taskENTER_CRITICAL(&lock);bool current_epoch=connection==conn&&pc_ota_epoch(&engine)==auth_epoch;
-   if(current_epoch){memcpy(challenge,next,32);challenge_live=true;}taskEXIT_CRITICAL(&lock);
+   if(current_epoch){memcpy(challenge,next,32);challenge_issued=now_ms();challenge_live=true;}taskEXIT_CRITICAL(&lock);
    if(!current_epoch)return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
    return os_mbuf_append(ctxt->om,next,32)?BLE_ATT_ERR_INSUFFICIENT_RES:0;
   }
   if(ctxt->op!=BLE_GATT_ACCESS_OP_WRITE_CHR||OS_MBUF_PKTLEN(ctxt->om)!=100)return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
   uint8_t raw[100],nonce[32],expected[32]={0},message[320];uint16_t length;
   if(ble_hs_mbuf_to_flat(ctxt->om,raw,100,&length))return BLE_ATT_ERR_UNLIKELY;
-  taskENTER_CRITICAL(&lock);bool valid=challenge_live;challenge_live=false;memcpy(nonce,challenge,32);memset(challenge,0,32);taskEXIT_CRITICAL(&lock);
+  taskENTER_CRITICAL(&lock);uint64_t issued=challenge_issued;bool valid=challenge_live&&pc_ota_challenge_valid(issued,now_ms());challenge_live=false;memcpy(nonce,challenge,32);memset(challenge,0,32);taskEXIT_CRITICAL(&lock);
   atomic_store(&engine.grant_until,0);if(!valid||!memchr(raw,0,32))return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
   size_t vn=strnlen((char*)raw,32);for(size_t i=vn;i<32;i++)if(raw[i])return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
   if(!newer((char*)raw,esp_app_get_description()->version))return BLE_ATT_ERR_VALUE_NOT_ALLOWED;
@@ -117,8 +117,8 @@ int amoled_ota_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *c
   bool ok=amoled_identity_hmac(message,n+68,expected);unsigned diff=0;for(unsigned i=0;i<32;i++)diff|=raw[68+i]^expected[i];memset(expected,0,32);memset(message,0,sizeof(message));
   uint32_t size=(uint32_t)raw[64]|((uint32_t)raw[65]<<8)|((uint32_t)raw[66]<<16)|((uint32_t)raw[67]<<24);
   if(!ok||diff||size<4096||size>0x600000)return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
-  taskENTER_CRITICAL(&lock);valid=connection==conn&&pc_ota_epoch(&engine)==auth_epoch;
-  if(valid){memcpy(grant_version,raw,32);memcpy(grant_digest,raw+32,32);grant_size=size;pc_ota_grant(&engine,now_ms());}
+  taskENTER_CRITICAL(&lock);valid=connection==conn&&pc_ota_epoch(&engine)==auth_epoch&&pc_ota_challenge_valid(issued,now_ms());
+  if(valid){memcpy(grant_version,raw,32);memcpy(grant_digest,raw+32,32);grant_size=size;pc_ota_grant(&engine,issued);}
   taskEXIT_CRITICAL(&lock);return valid?0:BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
  }
  if(kind!=2||ctxt->op!=BLE_GATT_ACCESS_OP_WRITE_CHR)return BLE_ATT_ERR_UNLIKELY;

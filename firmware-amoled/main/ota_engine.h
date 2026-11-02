@@ -27,3 +27,5 @@ bool pc_ota_cancel(pc_ota *);
 void pc_ota_grant(pc_ota *,uint64_t);
 void pc_ota_tick(pc_ota *,uint64_t);
 void pc_ota_process(pc_ota *,unsigned,const uint8_t *,size_t,uint64_t);
+
+bool pc_ota_challenge_valid(uint64_t issued,uint64_t now);

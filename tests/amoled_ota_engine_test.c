@@ -16,6 +16,7 @@ static void send(pc_ota *o,const uint8_t *p,size_t n,uint64_t now){pc_ota_proces
 static void start(pc_ota *o){pc_ota_grant(o,100);send(o,b,sizeof(b),101);assert(pc_ota_state(o)==1);}
 static void fill(pc_ota *o){for(int i=0;i<8;i++)send(o,data,512,102+i);send(o,data,9,111);}
 int main(void){pc_ota o;
+ assert(pc_ota_challenge_valid(100,101));assert(!pc_ota_challenge_valid(100,60100));assert(!pc_ota_challenge_valid(100,99));
  setup(&o);send(&o,b,37,100);assert(begins==0&&commits==0);
  setup(&o);pc_ota_grant(&o,1);send(&o,b,37,60002);assert(begins==0);
  setup(&o);start(&o);fill(&o);uint8_t end=3;send(&o,&end,1,112);assert(pc_ota_state(&o)==3&&commits==1&&restarts==1);

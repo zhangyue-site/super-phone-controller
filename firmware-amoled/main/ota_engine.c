@@ -42,3 +42,5 @@ void pc_ota_process(pc_ota *o,unsigned epoch,const uint8_t *p,size_t n,uint64_t 
  /* Keep reserved/commit latched until reset: STOP cannot undo selected boot slot. */
  o->hooks.restart(o->ctx);
 }
+
+bool pc_ota_challenge_valid(uint64_t issued,uint64_t now){return now>=issued&&now-issued<60000;}
