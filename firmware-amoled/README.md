@@ -65,3 +65,71 @@ to the AMOLED target. Current unsigned/full factory images are not BLE payloads.
 Use `python3 tools/test_amoled_ota.py`, `python3 tools/test_amoled_interlock.py`
 and `python3 tools/test_amoled_registry.py` for host checks; CI compiles the
 independent target. These do not replace real phone upgrade/recovery tests.
+
+## Wi-Fi maintenance slice (source candidate, not hardware accepted)
+
+Wi-Fi station configuration and USB-requested Wi-Fi OTA are implemented in this
+candidate. Direct Wi-Fi task/HID control and phone-triggered Wi-Fi updates are
+not implemented: BLE `wifiOtaSupported` stays false and USB status explicitly
+reports `wifiControlSupported: false`. A connected Wi-Fi station does not prove
+a working cloud session. No image has been built, deployed or flashed by the
+host tests below.
+
+The local USB CDC parser accepts these maintenance operations only with the
+exact USB serial in `device`, USB connected, HID disarmed, no OTA pending, and
+no BLE controller connected:
+
+- `maintenance.wifi.configure`: exact fields `op, device, ssid, password, endpoint`.
+  The endpoint is an HTTPS origin or fixed path prefix, without userinfo,
+  query, fragment, percent escapes, backslash or trailing slash. WPA2 credentials
+  are stored in one bounded private NVS blob; they are never included in status
+  or replies. Wi-Fi driver storage is RAM, avoiding a second credential copy.
+- `maintenance.wifi.clear`: exact fields `op, device`; removes that blob.
+- `maintenance.wifi.ota`: exact fields `op, device`; explicitly requests one
+  download. It never arms HID. Failure, STOP, detach or loss of network cancels
+  the epoch and never retries the image or resumes its chunks.
+
+NVS namespace privacy is not encryption at rest: this candidate does not burn
+eFuses, change partition layout or silently enable flash/NVS encryption. Physical
+flash confidentiality still requires a separately reviewed provisioning policy.
+
+The adapter uses the trusted ESP-IDF certificate bundle, normal certificate time
+validation (updates fail closed until time is synchronized), no redirects, exact
+HTTP 200 and content lengths, bounded manifest/image reads and a 120-second
+transfer budget. The board token remains inside identity.c and is applied only
+as an HTTP authentication header. Manifest and image use the same configured
+HTTPS endpoint; the image is immutable SHA-bound. Wi-Fi chunks enter the existing
+single OTA queue/engine, reusing hash, target/version checks, USB/flash mutex,
+rollback and USB recovery. There is no new direct flash-writing path.
+
+Host checks (AddressSanitizer and UndefinedBehaviorSanitizer):
+`tools/test_amoled_wifi.py`, `tools/test_amoled_wifi_transport.py`,
+`tools/test_amoled_wifi_ingress.py`, and existing OTA/control/interlock checks.
+The transport tests execute production adapter functions against a fake TLS
+client, including split reads, bad certificate result, redirect, invalid length,
+chunked response, STOP during read, network loss, BLE ownership, timeout and queue
+failure. They do not replace the GitHub Actions firmware compile, real TLS/Wi-Fi
+test, simultaneous USB/BLE/STOP testing, physical update, rollback or recovery.
+
+API references used:
+[ESP-IDF HTTP client](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32/api-reference/protocols/esp_http_client.html),
+[ESP-IDF NVS](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32s3/api-reference/storage/nvs_flash.html),
+[official Waveshare BSP board](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-2.16).
+
+Candidate version: `0.4.0-amoled`, allowing a version-increasing update from the
+installed `0.3.0-amoled`. With no saved configuration, startup allocates only a
+small configuration mutex; Wi-Fi, network interface, SNTP and the 8 KiB worker
+stack are deferred until configuration is explicitly saved. Configured-board
+RAM usage still needs the Actions image plus real heap measurements. Existing
+30-second boot acceptance continues to require display startup, USB, BLE/OTA
+readiness and at least 32 KiB internal free heap; Wi-Fi is optional and cannot
+fake a healthy image if that threshold fails.
+
+The 120-second deadline also reaches the shared OTA writer: END is rejected when
+over budget and the clock is checked again after image verification immediately
+before the commit CAS. Tests cover a last DATA queue wait crossing the deadline
+and verification itself crossing the deadline, with no boot-slot commit. After a
+partial network-stack initialization failure this boot does not attempt duplicate
+netif/event-handler initialization; saved configuration remains available for an
+explicit maintenance restart. No successful network initialization is inferred
+from saving that configuration.

@@ -7,6 +7,7 @@
 #include "nvs.h"
 #include "mbedtls/md.h"
 #include "cJSON.h"
+#include "esp_http_client.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -60,4 +61,11 @@ bool amoled_control_console(const char *line){
   cJSON_AddStringToObject(o,"result",e==ESP_OK?"provisioned":"provisioning_rejected");
  }else cJSON_AddStringToObject(o,"error","unsupported");
  char *s=cJSON_PrintUnformatted(o);cJSON_Delete(o);if(s){char response[640];int n=snprintf(response,sizeof(response),"PCUSB %s %s\r\n",request,s);free(s);if(n>0&&n<(int)sizeof(response))amoled_usb_write(response);}return true;
+}
+
+esp_err_t amoled_identity_http_auth(void *client){
+ if(!client||!amoled_identity_ready())return ESP_ERR_INVALID_STATE;
+ char header[80];snprintf(header,sizeof(header),"Bearer %s",secret);
+ esp_err_t e=esp_http_client_set_header((esp_http_client_handle_t)client,"Authorization",header);
+ memset(header,0,sizeof(header));return e;
 }

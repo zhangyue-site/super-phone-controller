@@ -14,3 +14,6 @@ bool amoled_hmac(const uint8_t *key,size_t key_length,const void *data,size_t le
 void amoled_hex(const uint8_t *data,size_t length,char *out);
 bool amoled_unhex(const char *text,size_t length,uint8_t *out);
 bool amoled_control_console(const char *line);
+
+/* Sets HTTP authentication internally; callers never receive the identity token. */
+esp_err_t amoled_identity_http_auth(void *client);
