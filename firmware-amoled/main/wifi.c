@@ -1,5 +1,6 @@
 #include "wifi.h"
 #include "direct.h"
+#include "audio.h"
 #include "wifi_policy.h"
 #include "usb.h"
 #include "identity.h"
@@ -39,12 +40,13 @@ bool amoled_wifi_configured(void){return atomic_load(&configured);}
 bool amoled_wifi_connected(void){return atomic_load(&connected);}
 unsigned amoled_wifi_ota_stage(void){return atomic_load(&stage);}
 void amoled_wifi_cancel(void){
+ amoled_audio_cancel();
  amoled_direct_cancel();
  atomic_fetch_add(&generation,1);atomic_store(&requested,false);
  if(atomic_load(&transfer))amoled_ota_cancel();
 }
 static bool allowed(void){
- return atomic_load(&ready)&&!amoled_relay_direct_owned()&&!atomic_load(&requested)&&!atomic_load(&transfer)&&
+ return atomic_load(&ready)&&!amoled_relay_audio_owned()&&!amoled_relay_direct_owned()&&!atomic_load(&requested)&&!atomic_load(&transfer)&&
   pc_wifi_maintenance_allowed(amoled_usb_ready(),amoled_usb_armed(),amoled_ota_busy(),amoled_relay_connected());
 }
 static bool configure(void *context){
