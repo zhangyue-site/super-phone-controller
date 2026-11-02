@@ -54,6 +54,34 @@ class IOSCaptureContract(unittest.TestCase):
         self.assertIn('CaptureContract.storageAvailable', native)
         self.assertNotIn('CaptureContract.root', native)
 
+    def test_scene_startup_registers_engine_channels_and_binds_scene_controller(self):
+        manifest = self.plist('Runner/Info.plist')['UIApplicationSceneManifest']
+        self.assertFalse(manifest['UIApplicationSupportsMultipleScenes'])
+        configurations = manifest['UISceneConfigurations']['UIWindowSceneSessionRoleApplication']
+        self.assertEqual(len(configurations), 1)
+        self.assertEqual(configurations[0]['UISceneDelegateClassName'], '$(PRODUCT_MODULE_NAME).SceneDelegate')
+        self.assertEqual(configurations[0]['UISceneStoryboardFile'], 'Main')
+        app = (IOS / 'Runner/AppDelegate.swift').read_text()
+        self.assertIn('FlutterImplicitEngineDelegate', app)
+        self.assertIn('GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)', app)
+        self.assertIn('NativeBridge(messenger: engineBridge.applicationRegistrar.messenger())', app)
+        self.assertNotIn('window?.rootViewController', app)
+        scene = (IOS / 'Runner/SceneDelegate.swift').read_text()
+        self.assertIn('class SceneDelegate: FlutterSceneDelegate', scene)
+        self.assertIn('super.scene(scene, willConnectTo: session, options: connectionOptions)', scene)
+        self.assertIn('connectController(controller)', scene)
+        self.assertIn('disconnectController(controller)', scene)
+        self.assertNotIn('sceneDidEnterBackground', scene)
+        native = (IOS / 'Runner/NativeBridge.swift').read_text()
+        self.assertIn('init(messenger: FlutterBinaryMessenger)', native)
+        self.assertIn('binaryMessenger: messenger', native)
+        self.assertIn('func disconnectController(', native)
+        self.assertIn('modernCapture?.cancel()', native)
+        self.assertIn('scene_unavailable', native)
+        self.assertIn('presenter.present(view, animated: true)', native)
+        project = (IOS / 'Runner.xcodeproj/project.pbxproj').read_text()
+        self.assertIn('SceneDelegate.swift', project)
+
     def test_usb_snapshot_matches_nullable_dart_contract(self):
         native = (IOS / 'Runner/NativeBridge.swift').read_text()
         self.assertRegex(native, r'if call.method == "snapshot" \{ reply\(nil\); return \}')
