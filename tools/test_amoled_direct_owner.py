@@ -20,7 +20,7 @@ code=r"""
 #define taskEXIT_CRITICAL(p) ((void)(p))
 #define BLE_HS_CONN_HANDLE_NONE 65535
 static int mux,connection=65535;
-static bool active,busy,direct_owner;
+static bool active,busy,direct_owner,audio_owner;
 static atomic_bool started=true,enabled,online;
 static atomic_uint generation=1;
 static atomic_llong action_until;
