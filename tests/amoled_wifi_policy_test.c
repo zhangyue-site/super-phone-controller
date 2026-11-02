@@ -3,7 +3,7 @@
 #include <string.h>
 int main(void){
  assert(pc_wifi_config_valid("test-network","test-password","https://controller.test"));
- const char *bad[]={"http://controller.test","https://user:pass@controller.test","https://controller.test/a?x=1","https://controller.test/#a","https://controller.test/","https://controller.test\\x","https://controller.test/%2f","https://controller.test\n","https://[::1]","https://controller.test:99999"};
+ const char *bad[]={"http://controller.test","https://user:pass@localhost","https://controller.test/a?x=1","https://controller.test/#a","https://controller.test/","https://controller.test\\x","https://controller.test/%2f","https://controller.test\n","https://[::1]","https://controller.test:99999"};
  for(unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++)assert(!pc_wifi_config_valid("test","test-password",bad[i]));
  assert(!pc_wifi_config_valid("","test-password","https://controller.test"));
  assert(!pc_wifi_config_valid("test","short","https://controller.test"));
