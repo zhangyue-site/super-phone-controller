@@ -18,8 +18,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>CaptureAppGroup</key>
-	<string>$(CAPTURE_APP_GROUP)</string>
+	<key>CaptureKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)$(APP_BUNDLE_ID).capture</string>
 	<key>ControllerBaseURL</key>
 	<string>$(CONTROLLER_BASE_URL)</string>
 	<key>NSExtension</key>

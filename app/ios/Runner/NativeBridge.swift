@@ -6,6 +6,7 @@ final class NativeBridge {
   private weak var controller: FlutterViewController?
   private var channels: [FlutterMethodChannel] = []
   private var consent: CaptureConsentController?
+  private var modernCapture: ScreenCaptureSession?
   init(controller: FlutterViewController) {
     self.controller = controller
     for name in ["app", "screen", "usb"] {
@@ -48,18 +49,33 @@ final class NativeBridge {
       let body: [String: Any] = ["active": active, "capture": active ? (status["capture"] as? String ?? "共享中") : "未共享", "task": active ? (status["task"] as? String ?? "") : ""]
       reply(String(data: try! JSONSerialization.data(withJSONObject: body), encoding: .utf8))
     case "start":
+      guard consent == nil, modernCapture == nil else { fail(reply,"busy","共享正在准备或运行"); return }
       guard args["usbSession"] == nil else { fail(reply,"usb_unsupported","iOS USB CDC 会话不可用，请通过蓝牙授权共享"); return }
       if let value = args["baseUrl"] as? String {
         guard let url = URL(string:value), url.scheme == "https", url.host != nil, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { fail(reply,"invalid_endpoint","共享服务地址必须为 HTTPS"); return }
         guard CaptureContract.validGrant() == nil else { fail(reply,"busy","共享正在运行"); return }
         do { try CaptureContract.write("endpoint.json",["baseUrl":value]) } catch { fail(reply,"storage_failed","无法保存共享服务地址"); return }
       }
-      guard CaptureContract.base != nil, CaptureContract.root != nil else { fail(reply,"not_configured","共享服务或 App Group 尚未配置"); return }
+      guard CaptureContract.base != nil, CaptureContract.storageAvailable else { fail(reply,"not_configured","共享服务或专用共享钥匙串尚未配置"); return }
       guard consent == nil, CaptureContract.validGrant() == nil, let ticket = args["ticket"] as? String, ticket.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else { fail(reply,"busy","共享正在准备或凭证无效"); return }
-      if #available(iOS 27.0, *) { fail(reply,"capture_os_unsupported","此系统版本已停止支持 ReplayKit 广播扩展，需升级共享适配器"); return }
+      #if !canImport(ScreenCaptureKit)
+      if #available(iOS 27.0, *) { fail(reply,"capture_sdk_unavailable","请安装使用 iOS 27 SDK 构建的应用版本以共享屏幕"); return }
+      #endif
       let now = Date().timeIntervalSince1970, uptime = ProcessInfo.processInfo.systemUptime
       do { try CaptureContract.write("grant.json", ["ticket": ticket,"id": UUID().uuidString,"until": now + 270,"uptimeUntil": uptime + 270,"issuedUptime": uptime]) }
       catch { fail(reply,"storage_failed","无法准备受限共享授权"); return }
+      #if canImport(ScreenCaptureKit)
+      if #available(iOS 27.0, *) {
+        let session = SCKCaptureSession(); modernCapture = session
+        session.onEnded = { [weak self, weak session] in
+          if self?.modernCapture === session { self?.modernCapture = nil }
+        }
+        session.start { [weak self] message in
+          if let message = message { self?.fail(reply,"cancelled",message) } else { reply(nil) }
+        }
+        return
+      }
+      #endif
       let view = CaptureConsentController()
       view.extensionID = Bundle.main.object(forInfoDictionaryKey: "BroadcastExtensionID") as? String
       view.finished = { [weak self] started in
@@ -70,7 +86,7 @@ final class NativeBridge {
     case "stop":
       let ticket = CaptureContract.read("grant.json")?["ticket"] as? String
       CaptureContract.clearGrant(); if let ticket = ticket { CaptureContract.revoke(ticket) }
-      consent?.cancel(); reply(nil)
+      consent?.cancel(); modernCapture?.cancel(); reply(nil)
     case "renewCapture":
       guard let grant = CaptureContract.validGrant(), let ticket = grant["ticket"] as? String,
         let control = args["controlTicket"] as? String, control.range(of:"^[A-Za-z0-9_-]{43}$", options:.regularExpression) != nil,

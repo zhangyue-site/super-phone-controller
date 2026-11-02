@@ -117,7 +117,7 @@ jobs:
     # Public repository + standard GitHub macOS runner: free build minutes.
     # Dispatch remains explicit to avoid unnecessary builds.
     if: ${{ inputs.platform == 'ios' || inputs.platform == 'both' }}
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 45
     defaults:
       run:

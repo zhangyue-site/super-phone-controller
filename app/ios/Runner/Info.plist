@@ -26,8 +26,8 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
-	<key>CaptureAppGroup</key>
-	<string>$(CAPTURE_APP_GROUP)</string>
+	<key>CaptureKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)$(APP_BUNDLE_ID).capture</string>
 	<key>ControllerBaseURL</key>
 	<string>$(CONTROLLER_BASE_URL)</string>
 	<key>DownloadURL</key>
@@ -38,8 +38,14 @@
 	<string>连接 PhoneCtl 墨水屏控制器并推送固件更新。不用于定位，也不收集任何数据。</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>连接 PhoneCtl 墨水屏控制器并推送固件更新。</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>共享您主动选择的完整屏幕，以识别界面并核验控制板 HID 操作；可随时停止。</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>screen-capture</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

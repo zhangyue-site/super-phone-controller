@@ -25,3 +25,10 @@ class LocalGeometryPromptTests(unittest.TestCase):
  def test_malformed_and_text_cannot_enter_geometry_prompt(self):
   for hint in [{"boxes":[{"x":float("nan"),"y":0,"width":1,"height":1,"score":1}]},{"boxes":[{"x":0,"y":0,"width":1,"height":1,"score":"send money"}]}]:
    with v.button_geometry_context(hint):self.assertNotIn("local_button_geometry",self.observe())
+
+ def test_ios_platform_metadata_is_bounded_and_context_local(self):
+  with v.phone_platform_context('ios'):
+   self.assertIn('当前手机系统：iOS',self.observe())
+  self.assertNotIn('当前手机系统：iOS',self.observe())
+  with self.assertRaises(ValueError):
+   with v.phone_platform_context('execute shell'):pass

@@ -21,6 +21,13 @@
 6F701C58A4F51A0974F9B768 = {isa = PBXBuildFile; fileRef = 3F9566239F15C76B69D46C20; };
 8162604A571B8B71A18E1F46 = {isa = PBXBuildFile; fileRef = 45871A9C8C1F89DA22820CAD; };
 FAE608D04BA82A38D1FB0D81 = {isa = PBXBuildFile; fileRef = 51814E988543B5EE52F82307; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+CE78B79BDAC225281CE02445 = {isa = PBXBuildFile; fileRef = EBE4ECA53B5B9521033F6612; };
+73A5F5DFD2BD0567A238AE45 = {isa = PBXBuildFile; fileRef = EBE4ECA53B5B9521033F6612; };
+0DE7E2D193D1AE0FBE16487D = {isa = PBXBuildFile; fileRef = 80470285ED2D5BC69F74BB8D; };
+7A2BE379DF0730865042A6B8 = {isa = PBXBuildFile; fileRef = 11D8EF42E5557D7FD1CA56AC; };
+F8EB66166F9B89FC5DB7069F = {isa = PBXBuildFile; fileRef = B9680D3F936C4B671D94C40F; settings = {ATTRIBUTES = (Weak, ); }; };
+BC6D57FA030FAC483B3DB045 = {isa = PBXBuildFile; fileRef = BD6E569C6E403A1078D910C6; };
+6421235B79D8046729871F90 = {isa = PBXBuildFile; fileRef = BD6E569C6E403A1078D910C6; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +76,11 @@ A300AB8D497C98F557F69A6E = {isa = PBXFileReference; lastKnownFileType = sourceco
 3F9566239F15C76B69D46C20 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shared/BoundedRequest.swift"; sourceTree = SOURCE_ROOT; };
 45871A9C8C1F89DA22820CAD = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScreenBroadcast/SampleHandler.swift"; sourceTree = SOURCE_ROOT; };
 51814E988543B5EE52F82307 = {isa = PBXFileReference; lastKnownFileType = wrapper.app-extension; path = "ScreenBroadcast.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+EBE4ECA53B5B9521033F6612 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shared/CapturePipeline.swift"; sourceTree = SOURCE_ROOT; };
+80470285ED2D5BC69F74BB8D = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Runner/ScreenCaptureSession.swift"; sourceTree = SOURCE_ROOT; };
+11D8EF42E5557D7FD1CA56AC = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Runner/SCKCaptureSession.swift"; sourceTree = SOURCE_ROOT; };
+B9680D3F936C4B671D94C40F = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ScreenCaptureKit.framework; path = System/Library/Frameworks/ScreenCaptureKit.framework; sourceTree = SDKROOT; };
+BD6E569C6E403A1078D910C6 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shared/CapturePreparationFence.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,6 +88,7 @@ A300AB8D497C98F557F69A6E = {isa = PBXFileReference; lastKnownFileType = sourceco
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+F8EB66166F9B89FC5DB7069F,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -109,6 +122,11 @@ E2AA269EB967A8853A258BFA = {isa = PBXFrameworksBuildPhase; buildActionMask = 214
 28DA46EC817E9449B9985E38,
 3F9566239F15C76B69D46C20,
 45871A9C8C1F89DA22820CAD,
+EBE4ECA53B5B9521033F6612,
+80470285ED2D5BC69F74BB8D,
+11D8EF42E5557D7FD1CA56AC,
+B9680D3F936C4B671D94C40F,
+BD6E569C6E403A1078D910C6,
 9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
 				97C146EF1CF9000F007C117D /* Products */,
@@ -294,12 +312,16 @@ DD615B768CF8ACFE2ED53E52,
 				68FDD957C9006D9F1A6C9954,
 849FB503F46319BE7DDDE48B,
 1B9DEB7E2BD5DF8EA0792677,
+CE78B79BDAC225281CE02445,
+0DE7E2D193D1AE0FBE16487D,
+7A2BE379DF0730865042A6B8,
+BC6D57FA030FAC483B3DB045,
 74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-878A52FC5FF6A57D50B7B870 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (10F92689A4593278838BDCC4,6F701C58A4F51A0974F9B768,8162604A571B8B71A18E1F46,); runOnlyForDeploymentPostprocessing = 0; };
+878A52FC5FF6A57D50B7B870 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (6421235B79D8046729871F90,73A5F5DFD2BD0567A238AE45,10F92689A4593278838BDCC4,6F701C58A4F51A0974F9B768,8162604A571B8B71A18E1F46,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -336,7 +358,6 @@ F26350DAFE3F19AABFD69AC4 = {isa = PBXTargetDependency; target = 34A04005BCAF206E
 			buildSettings = {
 				APP_BUNDLE_ID = org.example.phonecontroller;
 BROADCAST_BUNDLE_ID = "$(APP_BUNDLE_ID).ScreenBroadcast";
-CAPTURE_APP_GROUP = "group.$(APP_BUNDLE_ID).capture";
 CONTROLLER_BASE_URL = "";
 DOWNLOAD_URL = "";
 FLUTTER_BUILD_NAME = 1.0.0;
@@ -464,7 +485,6 @@ CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 			buildSettings = {
 				APP_BUNDLE_ID = org.example.phonecontroller;
 BROADCAST_BUNDLE_ID = "$(APP_BUNDLE_ID).ScreenBroadcast";
-CAPTURE_APP_GROUP = "group.$(APP_BUNDLE_ID).capture";
 CONTROLLER_BASE_URL = "";
 DOWNLOAD_URL = "";
 FLUTTER_BUILD_NAME = 1.0.0;
@@ -528,7 +548,6 @@ ALWAYS_SEARCH_USER_PATHS = NO;
 			buildSettings = {
 				APP_BUNDLE_ID = org.example.phonecontroller;
 BROADCAST_BUNDLE_ID = "$(APP_BUNDLE_ID).ScreenBroadcast";
-CAPTURE_APP_GROUP = "group.$(APP_BUNDLE_ID).capture";
 CONTROLLER_BASE_URL = "";
 DOWNLOAD_URL = "";
 FLUTTER_BUILD_NAME = 1.0.0;
