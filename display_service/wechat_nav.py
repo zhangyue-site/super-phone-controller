@@ -36,12 +36,19 @@ class WechatNavigator:
    time.sleep(.025)
   raise ValueError("未收到新的手机画面，请在App中共享整个屏幕")
  def _observe(self,j,raw,query,verify=False):
-  start=time.monotonic();barrier=j.video_barrier;session=j.screen_session
+  start=time.monotonic()
+  with self.m.lock:
+   self.m._live(j);barrier=j.video_barrier;session=j.screen_session
+   platform=getattr(j,'video_platform','') or 'android'
   from .keyboard_input import observation_context
   input_plan=getattr(j,'keyboard_input',None)
-  if input_plan:
-   with observation_context(input_plan):result=self.vision(raw,query,verify)
-  else:result=self.vision(raw,query,verify)
+  from .general_vision import button_geometry_context,phone_platform_context
+  from .local_vision import planner_hints
+  hint=None if verify else planner_hints(j,raw)
+  with button_geometry_context(hint),phone_platform_context(platform):
+   if input_plan:
+    with observation_context(input_plan):result=self.vision(raw,query,verify)
+   else:result=self.vision(raw,query,verify)
   evidence=os.environ.get('EPAPER_NAV_EVIDENCE_DIR')
   if evidence and getattr(j,'device',None)=='epaper-01' and isinstance(raw,bytes) and len(raw)<=524288:
    try:

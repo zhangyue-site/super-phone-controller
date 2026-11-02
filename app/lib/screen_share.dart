@@ -71,8 +71,11 @@ class ScreenShare {
       }
       issued = ticket;
       check();
-      await channel.invokeMethod<void>('start',
-          {'ticket': ticket, if (usbSession != null) 'usbSession': usbSession});
+      await channel.invokeMethod<void>('start', {
+        'ticket': ticket,
+        'baseUrl': ControllerConfig.base,
+        if (usbSession != null) 'usbSession': usbSession
+      });
       handedOff = true;
     } finally {
       if (issued != null && !handedOff) {
