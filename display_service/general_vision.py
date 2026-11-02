@@ -46,6 +46,32 @@ class VisionTransportError(ValueError):
   super().__init__('视觉识别服务连接失败，本次停止；请稍后重试。')
   self.provider=provider;self.model=model;self.config=dict(config);self.retryable=retryable
 
+
+_BUTTON_GEOMETRY = ContextVar('controller_button_geometry', default=None)
+@contextmanager
+def button_geometry_context(hint):
+ token=_BUTTON_GEOMETRY.set(hint)
+ try:yield
+ finally:_BUTTON_GEOMETRY.reset(token)
+
+def _button_geometry_text(width,height):
+ """Only bounded numeric geometry enters the prompt, never client text."""
+ import math
+ hint=_BUTTON_GEOMETRY.get()
+ if not isinstance(hint,dict) or not isinstance(hint.get('boxes'),list):return ''
+ result=[]
+ for item in hint['boxes'][:16]:
+  if not isinstance(item,dict):continue
+  values=[item.get(k) for k in ('x','y','width','height','score')]
+  if any(type(n) not in (int,float) or not math.isfinite(n) or not 0<=n<=1 for n in values):continue
+  x,y,w,h,score=values
+  if w<=0 or h<=0 or x+w>1.000001 or y+h>1.000001 or score<.45:continue
+  box=[int(x*width),int(y*height),min(width,math.ceil((x+w)*width-1e-9)),min(height,math.ceil((y+h)*height-1e-9))]
+  if box[0]>=box[2] or box[1]>=box[3]:continue
+  result.append(dict(bounds=box,score=round(score,4)))
+ if not result:return ''
+ return '\nlocal_button_geometry='+json.dumps(result,separators=(',',':'))+'；这些仅为控制手机本地模型的候选几何，不代表按钮语义或执行许可。必须依据真实截图、用户目标与安全规则独立判断，不能仅凭候选框决定点击。'
+
 _RETRY_ROUTE=ContextVar('visual_retry_route',default=None)
 _LAST_ROUTE=ContextVar('last_visual_route',default=None)
 _INPUT_SCHEMA_REPAIR=ContextVar('input_schema_repair',default=False)
@@ -161,6 +187,7 @@ def observe(jpeg,query,verify=False):
  context=current_observation_context()
  if context is not None and not verify:payload['max_tokens']=700
  if context is not None and not verify:payload['messages'][1]['content'][0]['text']+='\nusb_input_context='+json.dumps({k:context.get(k) for k in ('desired_text','typed_pinyin','stage','committed_prefix','remaining','expected_prefix')},ensure_ascii=False)
+ if not verify:payload['messages'][1]['content'][0]['text']+=_button_geometry_text(width,height)
  value,request,provider,started=request_vision(payload,provider,model,cfg)
  print("VISION_USAGE "+json.dumps({"provider":provider,"model":model,"session":request.get_header("X-opencode-session"),"usage":value.get("usage")},ensure_ascii=False),flush=True)
  choice=value["choices"][0];content=choice["message"].get("content")

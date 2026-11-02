@@ -2,32 +2,147 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'ble_ota_service.dart';
 import 'control_client.dart';
+import 'controller_local_vision.dart';
+import 'controller_model_status.dart';
 import 'product_widgets.dart';
 import 'product_settings.dart';
 
 class ControlScreen extends StatefulWidget {
   final BleOtaService? service;
   final ControlClient? client;
-  const ControlScreen({super.key, this.service, this.client});
+  final ControllerLocalVision Function(ControlClient)? visionFactory;
+  const ControlScreen(
+      {super.key, this.service, this.client, this.visionFactory});
   @override
   State<ControlScreen> createState() => _ControlScreenState();
 }
 
-class _ControlScreenState extends State<ControlScreen> {
+class _ControlScreenState extends State<ControlScreen>
+    with WidgetsBindingObserver {
   late final ControlClient _client;
   final _text = TextEditingController();
   Map<String, dynamic> _task = {};
   String? _error;
   List<Map<String, dynamic>> _skills = [];
   bool _busy = false, _polling = false, _stopping = false;
-  Timer? _timer;
+  Timer? _timer, _visionTimer;
+  ControllerLocalVision? _vision;
+  bool _foreground = true, _visionActive = false, _visionStopped = false;
+  bool get _taskTerminal =>
+      _task["terminal"] == true ||
+      const {
+        "done",
+        "error",
+        "stopped",
+        "failed",
+        "cancelled",
+        "expired",
+        "replaced",
+        "saved"
+      }.contains(_task["state"]);
+  int _visionGeneration = 0;
+  bool get _visible => mounted && (ModalRoute.of(context)?.isCurrent ?? false);
+  bool _currentObservation(
+          String taskId, int generation, int visionGeneration) =>
+      mounted &&
+      _foreground &&
+      _visible &&
+      !_stopping &&
+      !_visionStopped &&
+      !_taskTerminal &&
+      _client.isPaired &&
+      _client.authorized &&
+      generation == _generation &&
+      visionGeneration == _visionGeneration &&
+      _task['task_id'] == taskId &&
+      _task['state'] == 'running';
+
+  void _visionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _pauseVision() {
+    _visionGeneration++;
+    _visionActive = false;
+    _vision?.suspend();
+  }
+
+  void _prepareVision() {
+    if (!mounted ||
+        !_client.isPaired ||
+        !_client.authorized ||
+        _visionStopped ||
+        !_foreground ||
+        !_visible ||
+        _stopping) {
+      return;
+    }
+    _vision ??= (widget.visionFactory?.call(_client) ??
+        ControllerLocalVision(_client))
+      ..addListener(_visionChanged);
+    _visionActive = true;
+    unawaited(_vision!.prepare());
+  }
+
+  void _observeVision() {
+    if (!mounted) return;
+    if (!_client.isPaired ||
+        !_client.authorized ||
+        _visionStopped ||
+        !_foreground ||
+        !_visible ||
+        _stopping) {
+      if (_visionActive) _pauseVision();
+      return;
+    }
+    if (_taskTerminal) {
+      if (_visionActive) _pauseVision();
+      return;
+    }
+    if (_task['state'] != 'running') return;
+    if (!_visionActive) _prepareVision();
+    final taskId = _task['task_id'];
+    final generation = _generation;
+    final visionGeneration = _visionGeneration;
+    if (taskId is String &&
+        _currentObservation(taskId, generation, visionGeneration)) {
+      unawaited(_vision?.observe(taskId,
+              isCurrent: () =>
+                  _currentObservation(taskId, generation, visionGeneration)) ??
+          Future<void>.value());
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_visible && _visionActive) {
+      _pauseVision();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    if (!_foreground) {
+      if (_visionActive) _pauseVision();
+    } else if (!_taskTerminal && !_visionStopped) {
+      _prepareVision();
+    }
+  }
+
   int _generation = 0;
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _foreground = WidgetsBinding.instance.lifecycleState == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     _client = widget.client ?? ControlClient();
     unawaited(_connect());
     _timer = Timer.periodic(const Duration(seconds: 2), (_) => _poll());
+    _visionTimer = Timer.periodic(
+        const Duration(milliseconds: 300), (_) => _observeVision());
   }
 
   Future<void> _connect() async {
@@ -37,6 +152,7 @@ class _ControlScreenState extends State<ControlScreen> {
     });
     try {
       await _authorize();
+      _prepareVision();
     } catch (e) {
       if (mounted) setState(() => _error = '云端控制连接失败：$e');
     } finally {
@@ -92,6 +208,10 @@ class _ControlScreenState extends State<ControlScreen> {
 
   Future<void> _run(String operation) async {
     if (_busy || _stopping) return;
+    if (operation == 'prepare') {
+      _visionStopped = false;
+      _prepareVision();
+    }
     final generation = ++_generation;
     setState(() {
       _busy = true;
@@ -123,6 +243,8 @@ class _ControlScreenState extends State<ControlScreen> {
 
   Future<void> _stop() async {
     if (_stopping) return;
+    _visionStopped = true;
+    _pauseVision();
     final generation = ++_generation;
     setState(() {
       _stopping = true;
@@ -232,6 +354,11 @@ class _ControlScreenState extends State<ControlScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _visionTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _vision?.removeListener(_visionChanged);
+    _vision?.suspend();
+    unawaited(_vision?.close() ?? Future<void>.value());
     _client.close();
     _text.dispose();
     super.dispose();
@@ -259,9 +386,12 @@ class _ControlScreenState extends State<ControlScreen> {
       appBar: AppBar(title: const Text('任务'), actions: [
         IconButton(
             tooltip: '设备与设置',
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                builder: (_) => ProductSettingsScreen(
-                    client: _client, diagnostic: _error))),
+            onPressed: () {
+              _pauseVision();
+              Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => ProductSettingsScreen(
+                      client: _client, diagnostic: _error)));
+            },
             icon: const Icon(Icons.settings_outlined))
       ]),
       body: ListView(padding: const EdgeInsets.all(16), children: [
@@ -287,6 +417,8 @@ class _ControlScreenState extends State<ControlScreen> {
                       const Text(
                           '本机仅发送任务，无需共享本机屏幕。生成计划后由你确认，执行时再检查被控画面与控制板许可。'),
                     ]))),
+        if (_client.isPaired && _vision != null)
+          ControllerModelStatus(vision: _vision!, onRetry: _prepareVision),
         if (_client.supportsSkillReplay)
           OutlinedButton(
               onPressed: _busy || _stopping ? null : _loadSkills,

@@ -39,9 +39,13 @@ class WechatNavigator:
   start=time.monotonic();barrier=j.video_barrier;session=j.screen_session
   from .keyboard_input import observation_context
   input_plan=getattr(j,'keyboard_input',None)
-  if input_plan:
-   with observation_context(input_plan):result=self.vision(raw,query,verify)
-  else:result=self.vision(raw,query,verify)
+  from .general_vision import button_geometry_context
+  from .local_vision import planner_hints
+  hint=None if verify else planner_hints(j,raw)
+  with button_geometry_context(hint):
+   if input_plan:
+    with observation_context(input_plan):result=self.vision(raw,query,verify)
+   else:result=self.vision(raw,query,verify)
   evidence=os.environ.get('EPAPER_NAV_EVIDENCE_DIR')
   if evidence and getattr(j,'device',None)=='epaper-01' and isinstance(raw,bytes) and len(raw)<=524288:
    try:

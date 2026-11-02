@@ -1,4 +1,5 @@
 import 'diagnostics.dart';
+import 'button_detector.dart';
 import 'controller_config.dart';
 import 'dart:async';
 import 'cloud_relay.dart';
@@ -9,7 +10,75 @@ import 'package:http/http.dart' as http;
 import 'ble_ota_service.dart';
 
 /// Ephemeral BLE possession capability, kept only in memory.
-class ControlClient {
+class ControlClient implements LocalVisionSource {
+  Future<Uint8List> _localVisionBytes(
+      String operation, Map<String, dynamic> body, int limit) async {
+    if (!isPaired || !authorized || _http == null) {
+      throw StateError('请先在控制手机连接被控手机');
+    }
+    final ticket = _ticket;
+    final uri =
+        Uri.parse('${ControllerConfig.base}/app-local-vision/$operation');
+    final request = http.Request('POST', uri)..followRedirects = false;
+    request.headers.addAll({
+      'Authorization': 'Bearer $ticket',
+      'Content-Type': 'application/json'
+    });
+    request.body = jsonEncode(body);
+    final response =
+        await _http!.send(request).timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200 && response.statusCode != 202) {
+      await response.stream.listen((_) {}).cancel();
+      if (response.statusCode == 403 && _ticket == ticket) {
+        _ticket = null;
+        _expires = null;
+      }
+      throw ControlHttpFailure(response.statusCode, '控制手机本地识别请求未获确认');
+    }
+    if (response.contentLength != null && response.contentLength! > limit) {
+      await response.stream.listen((_) {}).cancel();
+      throw const FormatException('本地识别响应过大');
+    }
+    final builder = BytesBuilder(copy: false);
+    var count = 0;
+    await for (final chunk
+        in response.stream.timeout(const Duration(seconds: 30))) {
+      if (_closed || _ticket != ticket || !authorized) {
+        throw StateError('控制连接已结束');
+      }
+      count += chunk.length;
+      if (count > limit) throw const FormatException('本地识别响应超过声明长度');
+      builder.add(chunk);
+    }
+    if (_closed || _ticket != ticket || !authorized) {
+      throw StateError('控制连接已结束');
+    }
+    return builder.takeBytes();
+  }
+
+  @override
+  Future<Map<String, dynamic>> localVision(
+      String operation, Map<String, dynamic> body) async {
+    if (!const ['manifest', 'frame', 'result'].contains(operation)) {
+      throw ArgumentError('本地识别操作无效');
+    }
+    final raw = await _localVisionBytes(
+        operation, body, operation == 'frame' ? 750000 : 8192);
+    final value = jsonDecode(utf8.decode(raw));
+    if (value is! Map<String, dynamic>) {
+      throw const FormatException('本地识别响应格式无效');
+    }
+    return value;
+  }
+
+  @override
+  Future<Uint8List> localModelBytes(ButtonModelManifest manifest) async {
+    final raw = await _localVisionBytes(
+        'model', {'sha256': manifest.sha256}, manifest.size);
+    if (raw.length != manifest.size) throw const FormatException('模型下载长度不符');
+    return raw;
+  }
+
   static String get base => '${ControllerConfig.base}/app-control';
   http.Client? _http;
   CloudRelay? _relay;
@@ -24,6 +93,7 @@ class ControlClient {
   String? deviceId;
   Future<void> Function(bool hid)? onModeChange;
   ControlClient({http.Client? client}) : _http = client;
+  @override
   bool get isPaired => _paired;
   bool get supportsSkillReplay => _board != null;
   bool get canWifiUpgrade => ownsGateway && _relay?.supportsMaintenance == true;
@@ -54,13 +124,13 @@ class ControlClient {
               ? '已绑定目标；云端在线状态以任务回执为准'
               : '等待控制板授权';
 
-  Future<void> renewCapture(String usbSession) async {
+  Future<void> renewCapture([String? usbSession]) async {
     if (!authorized || _paired || _relay == null || _ticket == null) {
       throw StateError('被控端中继未连接');
     }
     await ScreenShare.channel.invokeMethod<void>('renewCapture', {
       'controlTicket': _ticket,
-      'usbSession': usbSession,
+      if (usbSession != null) 'usbSession': usbSession,
     });
   }
 
@@ -170,6 +240,7 @@ class ControlClient {
           (_ticket != null &&
               _expires != null &&
               DateTime.now().isBefore(_expires!)));
+  @override
   bool get authorized =>
       canReadStatus &&
       _relayError == null &&

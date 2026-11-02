@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'ios_target_screen.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -152,7 +154,9 @@ class _RoleRouterState extends State<_RoleRouter> {
     }
   }
 
-  void _openTarget() => _open(const DeviceScreen(targetOnly: true));
+  void _openTarget() => _open(Platform.isIOS
+      ? const IosTargetScreen()
+      : const DeviceScreen(targetOnly: true));
   @override
   Widget build(BuildContext context) => RoleHome(
         sharingActive: _sharing,
