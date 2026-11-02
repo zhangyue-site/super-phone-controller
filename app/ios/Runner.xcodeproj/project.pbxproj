@@ -28,6 +28,7 @@ CE78B79BDAC225281CE02445 = {isa = PBXBuildFile; fileRef = EBE4ECA53B5B9521033F66
 F8EB66166F9B89FC5DB7069F = {isa = PBXBuildFile; fileRef = B9680D3F936C4B671D94C40F; settings = {ATTRIBUTES = (Weak, ); }; };
 BC6D57FA030FAC483B3DB045 = {isa = PBXBuildFile; fileRef = BD6E569C6E403A1078D910C6; };
 6421235B79D8046729871F90 = {isa = PBXBuildFile; fileRef = BD6E569C6E403A1078D910C6; };
+5D291FFEC18DC2A1E62D934F /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1717569E56F4F4280EDF9F4A; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -81,6 +82,7 @@ EBE4ECA53B5B9521033F6612 = {isa = PBXFileReference; lastKnownFileType = sourceco
 11D8EF42E5557D7FD1CA56AC = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Runner/SCKCaptureSession.swift"; sourceTree = SOURCE_ROOT; };
 B9680D3F936C4B671D94C40F = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ScreenCaptureKit.framework; path = System/Library/Frameworks/ScreenCaptureKit.framework; sourceTree = SDKROOT; };
 BD6E569C6E403A1078D910C6 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shared/CapturePreparationFence.swift"; sourceTree = SOURCE_ROOT; };
+1717569E56F4F4280EDF9F4A /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Runner/SceneDelegate.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -127,6 +129,7 @@ EBE4ECA53B5B9521033F6612,
 11D8EF42E5557D7FD1CA56AC,
 B9680D3F936C4B671D94C40F,
 BD6E569C6E403A1078D910C6,
+1717569E56F4F4280EDF9F4A /* SceneDelegate.swift */,
 9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
 				97C146EF1CF9000F007C117D /* Products */,
@@ -316,6 +319,7 @@ CE78B79BDAC225281CE02445,
 0DE7E2D193D1AE0FBE16487D,
 7A2BE379DF0730865042A6B8,
 BC6D57FA030FAC483B3DB045,
+5D291FFEC18DC2A1E62D934F /* SceneDelegate.swift in Sources */,
 74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);

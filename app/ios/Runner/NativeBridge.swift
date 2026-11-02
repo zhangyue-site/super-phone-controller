@@ -7,15 +7,24 @@ final class NativeBridge {
   private var channels: [FlutterMethodChannel] = []
   private var consent: CaptureConsentController?
   private var modernCapture: ScreenCaptureSession?
-  init(controller: FlutterViewController) {
-    self.controller = controller
+  init(messenger: FlutterBinaryMessenger) {
     for name in ["app", "screen", "usb"] {
-      let channel = FlutterMethodChannel(name: "pcflash/\(name)", binaryMessenger: controller.binaryMessenger)
+      let channel = FlutterMethodChannel(name: "pcflash/\(name)", binaryMessenger: messenger)
       channel.setMethodCallHandler { [weak self] call, reply in self?.handle(name, call, reply) }
       channels.append(channel)
     }
     // Never resume a capability from a previous host process.
     if let ticket = CaptureContract.read("grant.json")?["ticket"] as? String { CaptureContract.clearGrant(); CaptureContract.revoke(ticket) }
+  }
+  func connectController(_ controller: FlutterViewController) { self.controller = controller }
+  func disconnectController(_ controller: FlutterViewController) {
+    guard self.controller === controller else { return }
+    // Only actual scene disconnection revokes consent. Cross-app capture backgrounds normally.
+    let ticket = CaptureContract.read("grant.json")?["ticket"] as? String
+    CaptureContract.clearGrant()
+    if let ticket = ticket { CaptureContract.revoke(ticket) }
+    consent?.cancel(); modernCapture?.cancel()
+    self.controller = nil
   }
   private func fail(_ reply: FlutterResult, _ code: String, _ message: String) { reply(FlutterError(code: code, message: message, details: nil)) }
   private func handle(_ channel: String, _ call: FlutterMethodCall, _ reply: @escaping FlutterResult) {
@@ -49,6 +58,8 @@ final class NativeBridge {
       let body: [String: Any] = ["active": active, "capture": active ? (status["capture"] as? String ?? "共享中") : "未共享", "task": active ? (status["task"] as? String ?? "") : ""]
       reply(String(data: try! JSONSerialization.data(withJSONObject: body), encoding: .utf8))
     case "start":
+      guard let presenter = controller, presenter.viewIfLoaded?.window != nil,
+        presenter.presentedViewController == nil else { fail(reply,"scene_unavailable","界面尚未就绪，请返回应用后重新共享"); return }
       guard consent == nil, modernCapture == nil else { fail(reply,"busy","共享正在准备或运行"); return }
       guard args["usbSession"] == nil else { fail(reply,"usb_unsupported","iOS USB CDC 会话不可用，请通过蓝牙授权共享"); return }
       if let value = args["baseUrl"] as? String {
@@ -82,7 +93,7 @@ final class NativeBridge {
         self?.consent = nil
         if started { reply(nil) } else { CaptureContract.clearGrant(); CaptureContract.revoke(ticket); self?.fail(reply,"cancelled","未启动屏幕共享") }
       }
-      consent = view; controller?.present(view, animated: true)
+      consent = view; presenter.present(view, animated: true)
     case "stop":
       let ticket = CaptureContract.read("grant.json")?["ticket"] as? String
       CaptureContract.clearGrant(); if let ticket = ticket { CaptureContract.revoke(ticket) }
