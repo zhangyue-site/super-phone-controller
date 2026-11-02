@@ -129,3 +129,9 @@ esp_err_t amoled_usb_enter_bootloader(void){
  REG_SET_BIT(RTC_CNTL_OPTION1_REG,RTC_CNTL_FORCE_DOWNLOAD_BOOT);
  esp_restart();return ESP_FAIL;
 }
+
+bool amoled_usb_maintenance(bool (*operation)(void *),void *context){
+ if(!operation||!input_mutex||xSemaphoreTake(input_mutex,0)!=pdTRUE)return false;
+ bool ok=amoled_usb_ready()&&!armed&&!amoled_ota_busy()&&operation(context);
+ xSemaphoreGive(input_mutex);return ok;
+}

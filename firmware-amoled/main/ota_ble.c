@@ -25,6 +25,7 @@ static uint8_t challenge[32],grant_digest[32];
 static uint32_t grant_size;static char grant_version[32];
 static bool challenge_live;static uint64_t challenge_issued;
 static atomic_bool pending,ready;
+static atomic_ullong wifi_deadline;
 static esp_ota_handle_t handle;
 static const esp_partition_t *partition;
 static psa_hash_operation_t sha=PSA_HASH_OPERATION_INIT;
@@ -57,6 +58,7 @@ static bool verify_image(void *ctx,const uint8_t digest[32]){
  esp_app_desc_t desc={0};return esp_ota_get_partition_description(partition,&desc)==ESP_OK&&
   !strcmp(desc.project_name,"phone_controller_amoled")&&!strcmp(desc.version,expected_version)&&newer(desc.version,esp_app_get_description()->version);
 }
+static bool commit_allowed(void *ctx){uint64_t deadline=atomic_load(&wifi_deadline);return !deadline||now_ms()<deadline;}
 static bool commit_image(void *ctx){return esp_ota_set_boot_partition(partition)==ESP_OK;}
 void amoled_ota_status(uint8_t out[4]){out[0]=pc_ota_state(&engine);out[1]=atomic_load(&engine.progress);out[2]=atomic_load(&engine.error);out[3]=0;}
 static void notify(void){
@@ -68,7 +70,7 @@ static void restart_image(void *ctx){notify();vTaskDelay(pdMS_TO_TICKS(1200));es
 bool amoled_ota_busy(void){return atomic_load(&pending)||pc_ota_busy(&engine);}
 bool amoled_ota_ready(void){return atomic_load(&ready);}
 void amoled_ota_cancel(void){if(!atomic_load(&ready))return;taskENTER_CRITICAL(&lock);challenge_live=false;memset(challenge,0,32);pc_ota_cancel(&engine);taskEXIT_CRITICAL(&lock);amoled_usb_gate(false);}
-void amoled_ota_connect(uint16_t conn){amoled_ota_cancel();taskENTER_CRITICAL(&lock);connection=conn;challenge_live=false;memset(challenge,0,32);taskEXIT_CRITICAL(&lock);}
+void amoled_ota_connect(uint16_t conn){amoled_ota_cancel();atomic_store(&wifi_deadline,0);taskENTER_CRITICAL(&lock);connection=conn;challenge_live=false;memset(challenge,0,32);taskEXIT_CRITICAL(&lock);}
 void amoled_ota_disconnect(void){amoled_ota_cancel();taskENTER_CRITICAL(&lock);connection=BLE_HS_CONN_HANDLE_NONE;challenge_live=false;memset(challenge,0,32);taskEXIT_CRITICAL(&lock);}
 static void writer(void *arg){
  Chunk *c=malloc(sizeof(*c));if(!c){atomic_store(&ready,false);vTaskDelete(NULL);return;}
@@ -83,7 +85,7 @@ static void writer(void *arg){
  }
 }
 esp_err_t amoled_ota_init(void){
- pc_ota_hooks h={begin_image,write_image,verify_image,commit_image,abort_image,restart_image};pc_ota_init(&engine,h,NULL);
+ pc_ota_hooks h={begin_image,write_image,verify_image,commit_image,abort_image,restart_image,commit_allowed};pc_ota_init(&engine,h,NULL);
  queue=xQueueCreate(8,sizeof(Chunk));if(!queue)return ESP_ERR_NO_MEM;
  if(xTaskCreate(writer,"amoled_ota",6144,NULL,4,NULL)!=pdPASS){vQueueDelete(queue);queue=NULL;return ESP_ERR_NO_MEM;}
  atomic_store(&ready,true);return ESP_OK;
@@ -132,4 +134,36 @@ int amoled_ota_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *c
  }else if(!amoled_ota_busy())return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
  if(xQueueSend(queue,&c,0)!=pdTRUE){if(cmd==1)atomic_store(&pending,false);return BLE_ATT_ERR_INSUFFICIENT_RES;}
  return 0;
+}
+
+bool amoled_ota_wifi_live(unsigned epoch){
+ return amoled_ota_ready()&&pc_ota_epoch(&engine)==epoch&&amoled_ota_busy();
+}
+bool amoled_ota_wifi_begin(const char *version,uint32_t size,const uint8_t digest[32],uint64_t deadline,unsigned *epoch){
+ if(deadline<=now_ms()||!version||strlen(version)>=32||!digest||!epoch||size<4096||size>0x600000||
+    !amoled_ota_ready()||!newer(version,esp_app_get_description()->version))return false;
+ taskENTER_CRITICAL(&lock);
+ bool idle=connection==BLE_HS_CONN_HANDLE_NONE&&!amoled_ota_busy();
+ unsigned before=pc_ota_epoch(&engine);
+ taskEXIT_CRITICAL(&lock);
+ if(!idle||!amoled_usb_reserve_ota(reserve_input))return false;
+ Chunk c={0};c.epoch=before;c.length=37;c.bytes[0]=1;
+ c.bytes[1]=size;c.bytes[2]=size>>8;c.bytes[3]=size>>16;c.bytes[4]=size>>24;
+ memcpy(c.bytes+5,digest,32);
+ taskENTER_CRITICAL(&lock);
+ bool valid=connection==BLE_HS_CONN_HANDLE_NONE&&pc_ota_epoch(&engine)==before;
+ if(valid){
+  memset(grant_version,0,sizeof(grant_version));memcpy(grant_version,version,strlen(version));
+  atomic_store(&wifi_deadline,deadline);
+  memcpy(grant_digest,digest,32);grant_size=size;pc_ota_grant(&engine,now_ms());
+ }
+ taskEXIT_CRITICAL(&lock);
+ if(!valid||xQueueSend(queue,&c,0)!=pdTRUE){atomic_store(&pending,false);return false;}
+ *epoch=before;return true;
+}
+bool amoled_ota_wifi_chunk(unsigned epoch,const uint8_t *bytes,size_t length,bool final){
+ if(!amoled_ota_wifi_live(epoch)||length>511||(!final&&(!bytes||!length))||(final&&length))return false;
+ Chunk c={0};c.epoch=epoch;c.length=final?1:length+1;c.bytes[0]=final?3:2;
+ if(length)memcpy(c.bytes+1,bytes,length);
+ return xQueueSend(queue,&c,pdMS_TO_TICKS(100))==pdTRUE;
 }
