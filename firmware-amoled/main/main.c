@@ -22,6 +22,7 @@
 #include "usb.h"
 #include "identity.h"
 #include "relay.h"
+#include "ota_ble.h"
 #include "esp_attr.h"
 #include "esp_private/panic_internal.h"
 #include "boot_recovery_policy.h"
@@ -84,8 +85,8 @@ static void process(char *line){
   if(found<0){status("not-found");goto done;}cJSON *next=cJSON_Duplicate(plugins,true);cJSON_DeleteItemFromArray(next,found);if(!save(next)){cJSON_Delete(next);status("storage-error");goto done;}page=1;refresh=true;status("removed");
  }else if(!strcmp(op,"view")){cJSON *p=cJSON_GetObjectItem(o,"page");if(cJSON_IsNumber(p)&&p->valueint>=0&&p->valueint<=6){page=p->valueint;refresh=true;status("view-changed");}else status("invalid-page");}
  else if(!strcmp(op,"snapshot")){if(refresh){render();refresh=false;}lv_draw_buf_t *buf=lv_snapshot_take(root,LV_COLOR_FORMAT_RGB565);if(!buf){status("snapshot-failed");goto done;}cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","snapshot");cJSON_AddNumberToObject(meta,"width",buf->header.w);cJSON_AddNumberToObject(meta,"height",buf->header.h);cJSON_AddNumberToObject(meta,"stride",buf->header.stride);cJSON_AddNumberToObject(meta,"bytes",buf->header.stride*buf->header.h);reply(meta);amoled_usb_write_bytes(buf->data,buf->header.stride*buf->header.h);lv_draw_buf_destroy(buf);amoled_usb_write("\n");}
- else if(!strcmp(op,"maintenance.restart")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()){status("restarting");vTaskDelay(pdMS_TO_TICKS(100));esp_restart();}
- else if(!strcmp(op,"maintenance.bootloader")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()){status("entering-bootloader");vTaskDelay(pdMS_TO_TICKS(100));if(amoled_usb_enter_bootloader()!=ESP_OK)status("bootloader-failed");}
+ else if(!strcmp(op,"maintenance.restart")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("restarting");vTaskDelay(pdMS_TO_TICKS(100));esp_restart();}
+ else if(!strcmp(op,"maintenance.bootloader")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("entering-bootloader");vTaskDelay(pdMS_TO_TICKS(100));if(amoled_usb_enter_bootloader()!=ESP_OK)status("bootloader-failed");}
  else status("unsupported-operation");
  done:cJSON_Delete(o);
 }
@@ -144,19 +145,34 @@ void app_main(void){
  size_t n=0;if(nvs_get_str(storage,"plugins",NULL,&n)==ESP_OK&&n<=MAX_JSON){char *s=malloc(n);if(s){if(nvs_get_str(storage,"plugins",s,&n)==ESP_OK)plugins=cJSON_Parse(s);free(s);}}
  if(!cJSON_IsArray(plugins)){cJSON_Delete(plugins);plugins=cJSON_CreateArray();}
  boot_recovery.stage=3;
- if(!bsp_display_start()){ESP_LOGE("amoled","display initialization failed");return;}
+ if(!bsp_display_start()){
+  ESP_LOGE("amoled","display initialization failed");
+  esp_ota_img_states_t failed_state=ESP_OTA_IMG_UNDEFINED;esp_ota_get_state_partition(esp_ota_get_running_partition(),&failed_state);
+  if(failed_state==ESP_OTA_IMG_PENDING_VERIFY){esp_ota_mark_app_invalid_rollback_and_reboot();esp_restart();}
+  return;
+ }
  boot_recovery.stage=4;
  bsp_display_lock(-1);root=lv_screen_active();lv_indev_t *in=NULL;while((in=lv_indev_get_next(in)))lv_indev_set_long_press_time(in,2000);render();bsp_display_unlock();
  snprintf(notice,sizeof(notice),"正在启动USB");bsp_display_lock(-1);render();bsp_display_unlock();
  boot_recovery.stage=5;
- esp_err_t amoled_usb_error=amoled_usb_start();if(amoled_usb_error!=ESP_OK){page=6;snprintf(notice,sizeof(notice),"USB启动失败 0x%x",(unsigned)amoled_usb_error);}else{notice[0]=0;esp_err_t health=esp_ota_mark_app_valid_cancel_rollback();if(health!=ESP_OK)ESP_LOGW("amoled","boot health mark: %s",esp_err_to_name(health));}
+ esp_err_t amoled_usb_error=amoled_usb_start();if(amoled_usb_error!=ESP_OK){page=6;snprintf(notice,sizeof(notice),"USB启动失败 0x%x",(unsigned)amoled_usb_error);}else{notice[0]=0;}
  bsp_display_lock(-1);render();bsp_display_unlock();
  boot_recovery.stage=6;
  ESP_LOGI("amoled","READY display=480x480 touch=enabled usb=CDC+HID persistentPlugins=%d psramFree=%u",cJSON_GetArraySize(plugins),(unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
  static char line[MAX_JSON+128];size_t pos=0;bool overflow=false;int tick=0;bool last_usb=false,last_ble=false,last_relay=false;
  boot_recovery.stage=7;
- if(amoled_identity_ready()){esp_err_t relay_error=amoled_relay_start();if(relay_error!=ESP_OK)ESP_LOGE("amoled","BLE startup failed: %s",esp_err_to_name(relay_error));}
- for(;;){char buf[128];size_t count=amoled_usb_read(buf,sizeof(buf));for(size_t i=0;i<count;i++){char c=buf[i];if(c=='\n'){if(!overflow){line[pos]=0;if(!amoled_control_console(line)){bsp_display_lock(-1);process(line);bsp_display_unlock();}memset(line,0,sizeof(line));}else status("request-too-large");pos=0;overflow=false;}else if(c!='\r'){if(pos+1<sizeof(line))line[pos++]=c;else overflow=true;}}
+ esp_err_t relay_error=ESP_ERR_INVALID_STATE;
+ if(amoled_identity_ready()){relay_error=amoled_relay_start();if(relay_error!=ESP_OK)ESP_LOGE("amoled","BLE startup failed: %s",esp_err_to_name(relay_error));}
+ esp_ota_img_states_t image_state=ESP_OTA_IMG_UNDEFINED;esp_ota_get_state_partition(esp_ota_get_running_partition(),&image_state);
+ bool boot_pending=image_state==ESP_OTA_IMG_PENDING_VERIFY;
+ int64_t healthy_since=esp_timer_get_time();
+ for(;;){
+  if(boot_pending&&esp_timer_get_time()-healthy_since>=30000000){
+   if(amoled_usb_error==ESP_OK&&relay_error==ESP_OK&&amoled_relay_ready()&&heap_caps_get_free_size(MALLOC_CAP_INTERNAL)>=32768){
+    esp_err_t health=esp_ota_mark_app_valid_cancel_rollback();if(health==ESP_OK)boot_pending=false;else ESP_LOGE("amoled","boot confirmation failed: %s",esp_err_to_name(health));
+   }else{ESP_LOGE("amoled","pending image failed startup health; rolling back");esp_ota_mark_app_invalid_rollback_and_reboot();}
+  }
+  char buf[128];size_t count=amoled_usb_read(buf,sizeof(buf));for(size_t i=0;i<count;i++){char c=buf[i];if(c=='\n'){if(!overflow){line[pos]=0;if(!amoled_control_console(line)){bsp_display_lock(-1);process(line);bsp_display_unlock();}memset(line,0,sizeof(line));}else status("request-too-large");pos=0;overflow=false;}else if(c!='\r'){if(pos+1<sizeof(line))line[pos++]=c;else overflow=true;}}
   if(amoled_usb_ready()!=last_usb||amoled_relay_connected()!=last_ble||amoled_relay_online()!=last_relay){last_usb=amoled_usb_ready();last_ble=amoled_relay_connected();last_relay=amoled_relay_online();refresh=true;}
   if(refresh){bsp_display_lock(-1);render();refresh=false;bsp_display_unlock();}
   if(notice_ticks>0&&--notice_ticks==0){notice[0]=0;refresh=true;}

@@ -230,8 +230,10 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
       final client = AppOtaClient(Uri.parse(otaBase));
       try {
         final result = await client.download(
-            board.device, widget.service.signDownloadChallenge);
-        final image = FirmwareImage.parse(result.bytes);
+            board.device, widget.service.signDownloadChallenge,
+            boardModel: board.boardModel);
+        final image =
+            FirmwareImage.parse(result.bytes, boardModel: board.boardModel);
         if (image.version != result.version) {
           throw const FormatException('下载版本与固件不符');
         }
@@ -258,7 +260,10 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     });
     late final FirmwareImage image;
     try {
-      image = FirmwareImage.parse(bytes);
+      final board = await widget.service.readInfo();
+      if (!mounted) return;
+      if (board == null) throw const FormatException('未能读取控制板型号，请重新连接');
+      image = FirmwareImage.parse(bytes, boardModel: board.boardModel);
     } on FormatException catch (error) {
       setState(() {
         _busy = false;

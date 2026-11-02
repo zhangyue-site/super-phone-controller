@@ -1,4 +1,5 @@
 #include "usb.h"
+#include "ota_ble.h"
 #include "relay.h"
 #include "touch_descriptor.h"
 #include <string.h>
@@ -46,7 +47,7 @@ esp_err_t amoled_usb_start(void){
 }
 bool amoled_usb_ready(void){return started&&tud_mounted();}
 bool amoled_usb_armed(void){return armed&&amoled_usb_ready();}
-static bool permitted(bool release,bool (*live)(uint32_t),uint32_t epoch){return amoled_usb_ready()&&(release||(armed&&(!live||live(epoch))));}
+static bool permitted(bool release,bool (*live)(uint32_t),uint32_t epoch){return amoled_usb_ready()&&(release||(!amoled_ota_busy()&&armed&&(!live||live(epoch))));}
 // One input owner at a time. Acknowledgement waits for the actual USB completion.
 static bool send_report(uint8_t instance,uint8_t id,const void *data,uint16_t length,bool release,bool (*live)(uint32_t),uint32_t epoch){
  int64_t deadline=esp_timer_get_time()+300000;
@@ -58,10 +59,19 @@ static bool send_report(uint8_t instance,uint8_t id,const void *data,uint16_t le
 }
 static bool touch(uint8_t down,uint16_t x,uint16_t y,bool release,bool (*live)(uint32_t),uint32_t epoch){uint8_t data[]={down,0,x&255,x>>8,y&255,y>>8,1};return send_report(1,4,data,sizeof(data),release,live,epoch);}
 static void release_all(void){uint8_t zero[8]={0};send_report(0,1,zero,5,true,NULL,0);send_report(0,2,zero,2,true,NULL,0);send_report(0,3,zero,8,true,NULL,0);touch(0,0,0,true,NULL,0);}
-void amoled_usb_gate(bool enable){
- armed=enable&&amoled_usb_ready();
- if(!armed&&input_mutex&&xSemaphoreTake(input_mutex,0)==pdTRUE){if(amoled_usb_ready())release_all();xSemaphoreGive(input_mutex);}
+bool amoled_usb_reserve_ota(bool (*reserve)(void)){
+ if(!input_mutex||xSemaphoreTake(input_mutex,0)!=pdTRUE)return false;
+ bool ok=!armed&&reserve();xSemaphoreGive(input_mutex);return ok;
 }
+void amoled_usb_gate(bool enable){
+ if(enable){
+  if(!input_mutex||xSemaphoreTake(input_mutex,0)!=pdTRUE)return;
+  armed=!amoled_ota_busy()&&amoled_usb_ready();xSemaphoreGive(input_mutex);return;
+ }
+ armed=false;
+ if(input_mutex&&xSemaphoreTake(input_mutex,0)==pdTRUE){if(amoled_usb_ready())release_all();xSemaphoreGive(input_mutex);}
+}
+
 static bool key_report(uint8_t modifier,uint8_t usage,bool (*live)(uint32_t),uint32_t epoch){uint8_t data[8]={modifier,0,usage,0,0,0,0,0};bool ok=send_report(0,3,data,8,false,live,epoch);memset(data,0,8);bool released=send_report(0,3,data,8,true,NULL,0);return ok&&released&&permitted(false,live,epoch);}
 static bool consumer(uint16_t usage,bool (*live)(uint32_t),uint32_t epoch){uint8_t data[2]={usage&255,usage>>8};bool ok=send_report(0,2,data,2,false,live,epoch);vTaskDelay(pdMS_TO_TICKS(20));data[0]=data[1]=0;bool released=send_report(0,2,data,2,true,NULL,0);return ok&&released&&permitted(false,live,epoch);}
 static bool ascii_key(uint8_t c,uint8_t *modifier,uint8_t *usage){

@@ -45,7 +45,7 @@ class Authority:
   if not isinstance(device,str) or device not in keys:raise ValueError("device")
   if not isinstance(boot,str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}",boot):raise ValueError("boot")
   if not isinstance(nonce,str) or not HEX.fullmatch(nonce) or not isinstance(proof,str) or not HEX.fullmatch(proof):raise ValueError("proof")
-  self.image(ticket)
+  entry,_=self.image(ticket)
   expected=hmac.new(keys[device].encode(),b"PCFLASH1\n"+device.encode()+b"\n"+bytes.fromhex(nonce),hashlib.sha256).hexdigest()
   if not hmac.compare_digest(expected,proof):raise ValueError("proof")
   with self.lock:
@@ -54,6 +54,15 @@ class Authority:
    identity=(device,boot,nonce)
    if identity in self.upgrade_nonces or len(self.upgrade_nonces)>=256:raise ValueError("replay or rate")
    self.upgrade_nonces[identity]=(now+300,)
+  project,_=firmware.target_profile(device)
+  if project=='phone_controller_amoled':
+   import struct
+   version=entry['version'];version_raw=version.encode('ascii')
+   if len(version_raw)>31:raise ValueError('version')
+   payload=bytes.fromhex(entry['sha256'])+struct.pack('<I',entry['size'])
+   message=b'PCOTA-AUTH2\n'+device.encode()+b'\n'+boot.encode()+b'\n'+project.encode()+b'\n'+version_raw+b'\n'+bytes.fromhex(nonce)+payload
+   raw=version_raw.ljust(32,b'\0')+payload+hmac.new(keys[device].encode(),message,hashlib.sha256).digest()
+   return {'authorization':raw.hex(),'scope':'ble-ota','expiresIn':60,'protocol':'hmac-sha256-image-v2'}
   message=b"PCOTA-AUTH1\n"+device.encode()+b"\n"+boot.encode()+b"\n"+bytes.fromhex(nonce)
   return {"authorization":hmac.new(keys[device].encode(),message,hashlib.sha256).hexdigest(),"scope":"ble-ota","expiresIn":60}
  def image(self,ticket):

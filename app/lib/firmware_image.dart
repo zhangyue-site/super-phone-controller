@@ -6,13 +6,32 @@ class FirmwareImage {
   final String version;
   final String sha;
   final String elfSha256;
-  const FirmwareImage(this.version, this.sha, this.elfSha256);
+  final String project;
+  const FirmwareImage(this.version, this.sha, this.elfSha256,
+      {this.project = 'phone_controller_epaper'});
   static const maxSize = 0x340000;
 
   /// Reject unknown or same-day ordering until a signed release sequence exists.
   void assertUpgradeAllowed(String currentVersion) {
+    if (project == 'phone_controller_amoled') {
+      List<int> parts(String value) {
+        final m = RegExp(
+                r'^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})-amoled$')
+            .firstMatch(value);
+        if (m == null) throw StateError('无法比较AMOLED固件版本，已停止更新');
+        return [int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3]!)];
+      }
+
+      final target = parts(version), current = parts(currentVersion);
+      for (var i = 0; i < 3; i++) {
+        if (target[i] > current[i]) return;
+        if (target[i] < current[i]) break;
+      }
+      throw StateError('目标固件不是可确认的较新版本，已停止更新');
+    }
     DateTime day(String value) {
-      final match = RegExp(r'^(\d{4})\.(\d{2})\.(\d{2})-[a-zA-Z0-9._-]+$').firstMatch(value);
+      final match = RegExp(r'^(\d{4})\.(\d{2})\.(\d{2})-[a-zA-Z0-9._-]+$')
+          .firstMatch(value);
       if (match == null) throw StateError('无法比较固件版本，已停止更新');
       final year = int.parse(match[1]!);
       final month = int.parse(match[2]!);
@@ -23,14 +42,22 @@ class FirmwareImage {
       }
       return result;
     }
+
     if (!day(version).isAfter(day(currentVersion))) {
       throw StateError('目标固件不是可确认的较新版本，已停止更新');
     }
   }
 
-  static FirmwareImage parse(Uint8List bytes) {
+  static FirmwareImage parse(Uint8List bytes, {String? boardModel}) {
+    if (boardModel != null && boardModel != 'esp32-s3-touch-amoled-2.16') {
+      throw const FormatException('未知控制板型号，已停止更新');
+    }
+    final project = boardModel == 'esp32-s3-touch-amoled-2.16'
+        ? 'phone_controller_amoled'
+        : 'phone_controller_epaper';
+    final limit = project == 'phone_controller_amoled' ? 0x600000 : maxSize;
     void reject(String message) => throw FormatException(message);
-    if (bytes.length < 4096 || bytes.length > maxSize) {
+    if (bytes.length < 4096 || bytes.length > limit) {
       reject('固件大小无效，必须是槽位范围内的 app.bin');
     }
     final data = ByteData.sublistView(bytes);
@@ -56,7 +83,7 @@ class FirmwareImage {
     }
 
     final version = field(48);
-    if (field(80) != 'phone_controller_epaper') reject('固件与控制板项目不匹配');
+    if (field(80) != project) reject('固件与控制板项目不匹配');
     var offset = 24;
     var checksum = 0xef;
     for (var i = 0; i < bytes[1]; i++) {
@@ -86,6 +113,7 @@ class FirmwareImage {
         bytes
             .sublist(176, 208)
             .map((b) => b.toRadixString(16).padLeft(2, '0'))
-            .join());
+            .join(),
+        project: project);
   }
 }

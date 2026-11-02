@@ -16,3 +16,5 @@ size_t amoled_usb_write_bytes(const void *data,size_t size);
 esp_err_t amoled_usb_enter_bootloader(void);
 
 bool amoled_usb_execute(uint8_t op,const uint16_t args[5],bool (*live)(uint32_t),uint32_t epoch);
+
+bool amoled_usb_reserve_ota(bool (*reserve)(void));

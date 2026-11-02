@@ -1,6 +1,8 @@
 #include "relay.h"
 #include "identity.h"
 #include "usb.h"
+#include "ota_ble.h"
+#include "esp_ota_ops.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdatomic.h>
@@ -17,12 +19,14 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #define UUID(n) BLE_UUID128_INIT(n,0,0,0,0,0,0,0,0x61,0x74,0x6f,0x2d,0x61,0x74,0x6f,0x6f)
-static const ble_uuid128_t service_uuid=UUID(1),info_uuid=UUID(4),auth_uuid=UUID(5),local_uuid=UUID(8);
+static const ble_uuid128_t service_uuid=UUID(1),ctrl_uuid=UUID(2),stat_uuid=UUID(3),info_uuid=UUID(4),auth_uuid=UUID(5),local_uuid=UUID(8),upgrade_uuid=UUID(9);
 static portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
 static uint16_t connection=BLE_HS_CONN_HANDLE_NONE;
 static uint8_t addr_type,key[32],auth_proof[32];
 static char nonce[33];
 static bool auth_ready,active,started,busy;
+static atomic_bool synced;
+bool amoled_relay_ready(void){return started&&atomic_load(&synced)&&amoled_ota_ready();}
 static atomic_uint epoch=1;
 static unsigned sequence,operation,result;
 static atomic_llong relay_until;
@@ -31,7 +35,7 @@ typedef struct {uint8_t op;uint32_t sequence,epoch;uint16_t a[5];} Work;
 static bool live(uint32_t e){return atomic_load(&epoch)==e&&amoled_relay_connected();}
 bool amoled_relay_connected(void){taskENTER_CRITICAL(&mux);bool v=active&&connection!=BLE_HS_CONN_HANDLE_NONE;taskEXIT_CRITICAL(&mux);return v;}
 bool amoled_relay_online(void){return amoled_relay_connected()&&atomic_load(&relay_until)>esp_timer_get_time();}
-void amoled_relay_cancel(void){taskENTER_CRITICAL(&mux);atomic_fetch_add(&epoch,1);relay_until=0;result=5;taskEXIT_CRITICAL(&mux);amoled_usb_gate(false);}
+void amoled_relay_cancel(void){taskENTER_CRITICAL(&mux);atomic_fetch_add(&epoch,1);relay_until=0;result=5;taskEXIT_CRITICAL(&mux);amoled_usb_gate(false);amoled_ota_cancel();}
 void amoled_relay_usb_detached(void){amoled_relay_cancel();}
 static bool parse(const uint8_t p[48],Work *w){
  if(p[0]!=1||p[1]<1||p[1]>14)return false;
@@ -47,6 +51,7 @@ static bool parse(const uint8_t p[48],Work *w){
 }
 static int command(uint16_t conn,const uint8_t p[48]){
  Work w={0};if(!parse(p,&w))return BLE_ATT_ERR_VALUE_NOT_ALLOWED;
+ if(amoled_ota_busy()&&w.op!=5&&w.op!=7)return BLE_ATT_ERR_UNLIKELY;
  uint8_t snapshot[32],proof[32];taskENTER_CRITICAL(&mux);bool allowed=active&&connection==conn;w.epoch=epoch;memcpy(snapshot,key,32);taskEXIT_CRITICAL(&mux);
  bool signed_ok=allowed&&amoled_hmac(snapshot,32,p,16,proof);memset(snapshot,0,32);unsigned diff=0;if(signed_ok)for(int i=0;i<32;i++)diff|=proof[i]^p[16+i];memset(proof,0,32);if(!signed_ok||diff)return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
  taskENTER_CRITICAL(&mux);allowed=active&&connection==conn&&epoch==w.epoch&&w.sequence>sequence&&(!busy||w.op==5);
@@ -61,7 +66,8 @@ static void worker(void *unused){
   if(xQueueReceive(queue,&w,pdMS_TO_TICKS(100))!=pdTRUE){if(amoled_usb_armed()&&relay_until&&esp_timer_get_time()>relay_until)amoled_relay_cancel();continue;}
   bool current=live(w.epoch);unsigned state=6;taskENTER_CRITICAL(&mux);if(current)result=2;taskEXIT_CRITICAL(&mux);
   if(current){
-   if(w.op==12){relay_until=esp_timer_get_time()+20000000;state=3;}
+   if(amoled_ota_busy()&&w.op!=7)state=4;
+   else if(w.op==12){relay_until=esp_timer_get_time()+20000000;state=3;}
    else if(w.op==6){amoled_usb_gate(true);if(!live(w.epoch))amoled_usb_gate(false);state=amoled_usb_armed()?7:4;if(state==7)relay_until=esp_timer_get_time()+20000000;}
    else if(w.op==7){amoled_usb_gate(false);state=8;}
    else if(w.op==11||!amoled_usb_armed())state=4;
@@ -74,7 +80,8 @@ static int access_cb(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ct
  uintptr_t kind=(uintptr_t)arg;
  if(kind==4&&ctxt->op==BLE_GATT_ACCESS_OP_READ_CHR){
   const esp_app_desc_t *app=esp_app_get_description();char sha[65],json[512];amoled_hex(app->app_elf_sha256,32,sha);
-  int n=snprintf(json,sizeof(json),"{\"protocol\":1,\"device\":\"%s\",\"version\":\"%s\",\"elfSha256\":\"%s\",\"boot\":\"%s\",\"imageState\":2,\"boardModel\":\"esp32-s3-touch-amoled-2.16\",\"usbProfile\":\"composite-fixed-v1\",\"otaSupported\":false}",amoled_identity_device(),app->version,sha,amoled_identity_boot());
+  esp_ota_img_states_t image_state=ESP_OTA_IMG_UNDEFINED;esp_ota_get_state_partition(esp_ota_get_running_partition(),&image_state);
+  int n=snprintf(json,sizeof(json),"{\"protocol\":1,\"device\":\"%s\",\"version\":\"%s\",\"elfSha256\":\"%s\",\"boot\":\"%s\",\"imageState\":%d,\"boardModel\":\"esp32-s3-touch-amoled-2.16\",\"usbProfile\":\"composite-fixed-v1\",\"otaSupported\":true,\"otaAuth\":\"hmac-sha256-image-v2\"}",amoled_identity_device(),app->version,sha,amoled_identity_boot(),(int)image_state);
   return n>0&&n<(int)sizeof(json)&&os_mbuf_append(ctxt->om,json,n)==0?0:BLE_ATT_ERR_INSUFFICIENT_RES;
  }
  if(kind==5){
@@ -94,6 +101,9 @@ static int access_cb(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ct
 }
 static const struct ble_gatt_svc_def services[]={
  {.type=BLE_GATT_SVC_TYPE_PRIMARY,.uuid=&service_uuid.u,.characteristics=(struct ble_gatt_chr_def[]){
+ {.uuid=&ctrl_uuid.u,.access_cb=amoled_ota_access,.arg=(void*)2,.flags=BLE_GATT_CHR_F_WRITE},
+ {.uuid=&stat_uuid.u,.access_cb=amoled_ota_access,.arg=(void*)3,.val_handle=&amoled_ota_status_handle,.flags=BLE_GATT_CHR_F_READ|BLE_GATT_CHR_F_NOTIFY},
+ {.uuid=&upgrade_uuid.u,.access_cb=amoled_ota_access,.arg=(void*)9,.flags=BLE_GATT_CHR_F_READ|BLE_GATT_CHR_F_WRITE},
  {.uuid=&info_uuid.u,.access_cb=access_cb,.arg=(void*)4,.flags=BLE_GATT_CHR_F_READ},
  {.uuid=&auth_uuid.u,.access_cb=access_cb,.arg=(void*)5,.flags=BLE_GATT_CHR_F_READ|BLE_GATT_CHR_F_WRITE},
  {.uuid=&local_uuid.u,.access_cb=access_cb,.arg=(void*)8,.flags=BLE_GATT_CHR_F_READ|BLE_GATT_CHR_F_WRITE},{0}}},{0}};
@@ -101,9 +111,10 @@ static void advertise(void);
 static int gap_event(struct ble_gap_event *e,void *arg){
  if(e->type==BLE_GAP_EVENT_CONNECT){
   if(e->connect.status){advertise();return 0;}
+  amoled_ota_connect(e->connect.conn_handle);
   uint8_t random[16],derived[32];char text[33],message[128];esp_fill_random(random,16);amoled_hex(random,16,text);int n=snprintf(message,sizeof(message),"PCBLE1\n%s\n%s",amoled_identity_device(),text);bool ok=amoled_identity_hmac(message,n,derived);
   taskENTER_CRITICAL(&mux);epoch++;connection=e->connect.conn_handle;active=ok;relay_until=0;sequence=operation=result=0;memcpy(nonce,text,33);memcpy(key,derived,32);auth_ready=false;taskEXIT_CRITICAL(&mux);memset(derived,0,32);
- }else if(e->type==BLE_GAP_EVENT_DISCONNECT){taskENTER_CRITICAL(&mux);active=false;connection=BLE_HS_CONN_HANDLE_NONE;auth_ready=false;memset(key,0,32);memset(auth_proof,0,32);taskEXIT_CRITICAL(&mux);amoled_relay_cancel();advertise();}
+ }else if(e->type==BLE_GAP_EVENT_DISCONNECT){amoled_ota_disconnect();taskENTER_CRITICAL(&mux);active=false;connection=BLE_HS_CONN_HANDLE_NONE;auth_ready=false;memset(key,0,32);memset(auth_proof,0,32);taskEXIT_CRITICAL(&mux);amoled_relay_cancel();advertise();}
  return 0;
 }
 static void advertise(void){
@@ -112,14 +123,15 @@ static void advertise(void){
  char name[26];snprintf(name,sizeof(name),"PhoneCtl-%.12s",amoled_identity_serial());struct ble_hs_adv_fields scan={0};scan.name=(uint8_t*)name;scan.name_len=strlen(name);scan.name_is_complete=1;ble_gap_adv_rsp_set_fields(&scan);
  struct ble_gap_adv_params p={0};p.conn_mode=BLE_GAP_CONN_MODE_UND;p.disc_mode=BLE_GAP_DISC_MODE_GEN;ble_gap_adv_start(addr_type,NULL,BLE_HS_FOREVER,&p,gap_event,NULL);
 }
-static void on_sync(void){if(!ble_hs_util_ensure_addr(0)&&!ble_hs_id_infer_auto(0,&addr_type))advertise();}
-static void on_reset(int reason){taskENTER_CRITICAL(&mux);active=false;connection=BLE_HS_CONN_HANDLE_NONE;taskEXIT_CRITICAL(&mux);amoled_relay_cancel();}
+static void on_sync(void){if(!ble_hs_util_ensure_addr(0)&&!ble_hs_id_infer_auto(0,&addr_type)){atomic_store(&synced,true);advertise();}}
+static void on_reset(int reason){atomic_store(&synced,false);amoled_ota_disconnect();taskENTER_CRITICAL(&mux);active=false;connection=BLE_HS_CONN_HANDLE_NONE;taskEXIT_CRITICAL(&mux);amoled_relay_cancel();}
 static void host_task(void *arg){nimble_port_run();nimble_port_freertos_deinit();}
 esp_err_t amoled_relay_start(void){
  if(started)return ESP_OK;
  if(!amoled_identity_ready())return ESP_ERR_INVALID_STATE;
  queue=xQueueCreate(1,sizeof(Work));if(!queue)return ESP_ERR_NO_MEM;
- esp_err_t e=nimble_port_init();if(e!=ESP_OK){vQueueDelete(queue);queue=NULL;return e;}
+ esp_err_t e=amoled_ota_init();if(e!=ESP_OK)return e;
+ e=nimble_port_init();if(e!=ESP_OK){vQueueDelete(queue);queue=NULL;return e;}
  ble_hs_cfg.sync_cb=on_sync;ble_hs_cfg.reset_cb=on_reset;ble_svc_gap_init();ble_svc_gatt_init();
  if(ble_gatts_count_cfg(services)||ble_gatts_add_svcs(services))return ESP_FAIL;
  ble_svc_gap_device_name_set("PhoneCtl AMOLED");ble_att_set_preferred_mtu(517);

@@ -48,11 +48,16 @@ class AppOtaClient {
   }
 
   Future<List<int>> authorizeBle(String ticket, String device, String boot,
-      List<int> challenge, Future<List<int>> Function(List<int>) sign) async {
+      List<int> challenge, Future<List<int>> Function(List<int>) sign,
+      {String protocol = 'hmac-sha256-v1'}) async {
+    final imageBound = protocol == 'hmac-sha256-image-v2';
+    if (!imageBound && protocol != 'hmac-sha256-v1')
+      throw const FormatException('升级授权协议不受支持');
     if (challenge.length != 32) throw const FormatException('蓝牙升级挑战无效');
     String hex(List<int> bytes) =>
         bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     final proof = await sign(challenge);
+    if (proof.length != 32) throw const FormatException('控制板升级授权响应无效');
     final result = await _post(
         'ble-authorize',
         {
@@ -69,15 +74,21 @@ class AppOtaClient {
         ttl < 1 ||
         ttl > 60 ||
         authorization is! String ||
-        !RegExp(r'^[0-9a-f]{64}$').hasMatch(authorization)) {
+        !RegExp(imageBound ? r'^[0-9a-f]{200}$' : r'^[0-9a-f]{64}$')
+            .hasMatch(authorization) ||
+        (imageBound && result['protocol'] != protocol)) {
       throw const FormatException('蓝牙升级授权无效');
     }
-    return List.generate(32,
+    return List.generate(imageBound ? 100 : 32,
         (i) => int.parse(authorization.substring(i * 2, i * 2 + 2), radix: 16));
   }
 
   Future<DownloadedFirmware> download(
-      String device, Future<List<int>> Function(List<int>) sign) async {
+      String device, Future<List<int>> Function(List<int>) sign,
+      {String? boardModel}) async {
+    final maxSize = boardModel == 'esp32-s3-touch-amoled-2.16'
+        ? 0x600000
+        : FirmwareImage.maxSize;
     final challenge = await _post('challenge', {'device': device});
     final nonce = challenge['challenge'];
     if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
@@ -98,7 +109,7 @@ class AppOtaClient {
         ticket = grant['ticket'];
     if (size is! int ||
         size < 4096 ||
-        size > FirmwareImage.maxSize ||
+        size > maxSize ||
         digest is! String ||
         !RegExp(r'^[0-9a-f]{64}$').hasMatch(digest) ||
         version is! String ||

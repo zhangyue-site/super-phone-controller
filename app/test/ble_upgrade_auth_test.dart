@@ -41,4 +41,28 @@ void main() {
             List.filled(32, 1), (_) async => List.filled(32, 2)),
         throwsFormatException);
   });
+  test(
+      'AMOLED image grant is 100 bytes and cannot fall back to legacy authorization',
+      () async {
+    var legacy = false;
+    final client = AppOtaClient(Uri.parse('https://example.test'),
+        client: MockClient((_) async => http.Response(
+            jsonEncode({
+              'scope': 'ble-ota',
+              'expiresIn': 60,
+              'protocol': legacy ? null : 'hmac-sha256-image-v2',
+              'authorization': legacy ? '03' * 32 : '03' * 100,
+            }),
+            200)));
+    final result = await client.authorizeBle('ticket', 'board', 'a' * 32,
+        List.filled(32, 1), (_) async => List.filled(32, 2),
+        protocol: 'hmac-sha256-image-v2');
+    expect(result.length, 100);
+    legacy = true;
+    await expectLater(
+        client.authorizeBle('ticket', 'board', 'a' * 32, List.filled(32, 1),
+            (_) async => List.filled(32, 2),
+            protocol: 'hmac-sha256-image-v2'),
+        throwsFormatException);
+  });
 }

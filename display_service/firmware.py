@@ -3,8 +3,20 @@ import hashlib,json,os,re,threading
 _REPORT_LOCK=threading.Lock()
 from pathlib import Path
 ROOT=Path(os.environ.get('EPAPER_FIRMWARE','/var/lib/phone-controller/firmware'))
+def target_profile(device):
+    """Private registry assigns a board family; client metadata cannot change it."""
+    path=os.environ.get('CONTROLLER_FIRMWARE_TARGETS')
+    project='phone_controller_epaper'
+    if path:
+        registry=json.loads(Path(path).read_text())
+        if not isinstance(registry,dict):raise ValueError('target registry')
+        project=registry.get(device,'phone_controller_epaper')
+    if project not in ('phone_controller_epaper','phone_controller_amoled'):raise ValueError('unknown target')
+    return project,(0x600000 if project=='phone_controller_amoled' else 0x340000)
+
 def release(device,sha=None):
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',device):raise ValueError('device')
+    project,max_size=target_profile(device)
     folder=ROOT/device
     if sha is None:
         entry=json.loads((folder/'current.json').read_text())
@@ -13,9 +25,10 @@ def release(device,sha=None):
         entry=json.loads((folder/(sha+'.json')).read_text()) if re.fullmatch(r'[0-9a-f]{64}',sha) else {}
     if not re.fullmatch(r'[0-9a-f]{64}',sha or '') or entry.get('sha256')!=sha:raise ValueError('hash')
     version=entry['version'];size=entry['size']
-    if not re.fullmatch(r'[a-zA-Z0-9._-]{1,31}',version) or type(size)!=int or not 1024<=size<=0x340000:raise ValueError('metadata')
+    if not re.fullmatch(r'[a-zA-Z0-9._-]{1,31}',version) or type(size)!=int or not 1024<=size<=max_size:raise ValueError('metadata')
     data=(folder/(sha+'.bin')).read_bytes()
     if len(data)!=size or hashlib.sha256(data).hexdigest()!=sha:raise ValueError('artifact')
+    if project=='phone_controller_amoled' and image_version(data,project=project)!=version:raise ValueError('target version')
     return entry,data
 
 def manifest(device):
@@ -40,10 +53,12 @@ def report(device,raw):
     return obj
 
 
-def image_version(data):
+def image_version(data,*,project="phone_controller_epaper"):
     """Validate unsigned ESP32-S3 image segments, XOR checksum and appended SHA."""
     import struct
-    if not 1024<=len(data)<=0x340000 or data[0]!=0xe9 or not 1<=data[1]<=16 or struct.unpack_from('<H',data,12)[0]!=9:
+    max_size=0x600000 if project=="phone_controller_amoled" else 0x340000
+    if project not in ("phone_controller_epaper","phone_controller_amoled"):raise ValueError("target")
+    if not 1024<=len(data)<=max_size or data[0]!=0xe9 or not 1<=data[1]<=16 or struct.unpack_from('<H',data,12)[0]!=9:
         raise ValueError('not an ESP32-S3 image')
     if struct.unpack_from('<I',data,32)[0]!=0xabcd5432:raise ValueError('missing app descriptor')
     def field(offset):
@@ -51,7 +66,8 @@ def image_version(data):
         if not re.fullmatch(r'[a-zA-Z0-9._-]{1,31}',value):raise ValueError('descriptor field')
         return value
     version=field(48)
-    if field(80)!='phone_controller_epaper':raise ValueError('wrong project')
+    if field(80)!=project:raise ValueError('wrong project')
+    if project=='phone_controller_amoled' and not re.fullmatch(r'(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})-amoled',version):raise ValueError('AMOLED version')
     offset=24;checksum=0xef
     for _ in range(data[1]):
         if offset+8>len(data):raise ValueError('segment header')
@@ -74,7 +90,7 @@ def _release_day(version):
 
 def _release_order(version):
     # Explicit migration: semantic releases supersede legacy date builds once.
-    match=re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',version or '')
+    match=re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-amoled)?',version or '')
     if match:return (1,*(int(x) for x in match.groups()))
     day=_release_day(version)
     return (0,day.year,day.month,day.day)
@@ -86,7 +102,8 @@ def publish(device,data,source,activate=False,generation=0):
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',device):raise ValueError('device')
     if not re.fullmatch(r'[0-9a-f]{40}',source):raise ValueError('source commit')
     if type(generation) is not int or not 0<=generation<2**53:raise ValueError('publish generation')
-    version=image_version(data);sha=hashlib.sha256(data).hexdigest()
+    project,_=target_profile(device)
+    version=image_version(data,project=project);sha=hashlib.sha256(data).hexdigest()
     entry={'version':version,'sha256':sha,'size':len(data),'source':source,'publishedAt':int(time.time())}
     folder=ROOT/device;folder.mkdir(parents=True,exist_ok=True,mode=0o700)
     def atomic(path,blob):
