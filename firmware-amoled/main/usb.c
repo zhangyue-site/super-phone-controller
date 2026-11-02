@@ -114,6 +114,7 @@ void amoled_usb_write(const char *s){amoled_usb_write_bytes(s,strlen(s));}
 const char *amoled_usb_serial(void){return serial;}
 
 esp_err_t amoled_usb_enter_bootloader(void){
+ if(amoled_ota_busy())return ESP_ERR_INVALID_STATE;
  amoled_relay_cancel();amoled_usb_gate(false);
  if(installed){
   tud_disconnect();vTaskDelay(pdMS_TO_TICKS(300));
