@@ -10,9 +10,11 @@ USB mouse/consumer controls after local long-press consent. USB descriptors rema
 fixed when input is stopped. Radio interfaces default off; no old device token is
 embedded. Imported descriptions cannot execute arbitrary code.
 
-Not yet integrated: phone-side import, authenticated BLE relay, server runner,
-audio/voice transport and phone screen sharing. Their UI reports unavailable;
-there is no simulated transaction, task success or shared-screen indicator.
+Authenticated BLE relay is implemented; the 0.3.0 candidate adds image-bound BLE
+OTA using the phone as its cloud gateway. See docs/amoled/STATUS.md for installed
+versus candidate versions and exact acceptance evidence. Phone-side plugin import,
+board-initiated server workflows and voice remain unavailable. Screen-sharing
+status is checked on the phone, not inferred from a BLE connection.
 
 Build on the configured cloud workspace using `.github/workflows/amoled-firmware.yml`.
 The initial full image changes partition layout: back up all 16 MiB before writing.
@@ -49,3 +51,17 @@ resets before 30 seconds of healthy operation request the same recovery path.
 Normal restarts do not count. The RTC policy is host-tested; hardware recovery
 must still be verified on the board. Failures before application entry and
 physical power/cable problems are outside that software recovery mechanism.
+
+## Target-specific protected updates
+
+Configure the server-private `CONTROLLER_FIRMWARE_TARGETS` JSON registry to map
+a device identifier to `phone_controller_amoled`. Unknown devices retain the
+legacy e-paper profile; malformed/missing configured registries fail closed.
+Keep the registry and device keys outside Git. No release is activated by this
+configuration alone. The helper downloads an immutable image via HTTPS and
+obtains a one-use image-bound BLE grant. E-paper images cannot be transferred
+to the AMOLED target. Current unsigned/full factory images are not BLE payloads.
+
+Use `python3 tools/test_amoled_ota.py`, `python3 tools/test_amoled_interlock.py`
+and `python3 tools/test_amoled_registry.py` for host checks; CI compiles the
+independent target. These do not replace real phone upgrade/recovery tests.

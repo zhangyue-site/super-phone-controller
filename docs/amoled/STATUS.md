@@ -1,5 +1,52 @@
 # AMOLED hardware port status
 
+## Phone gateway candidate (2026-11-02)
+
+The installed physical-board baseline below remains 0.2.1. The independent
+0.3.0-amoled candidate adds phone-mediated, image-bound BLE OTA; it has not
+been installed or accepted on the phone. Candidate Android helper: 1.2.12 (34).
+
+- The phone uses its own Wi-Fi/mobile connection for HTTPS. Screenshots and
+  private model packages do not traverse board BLE. Board Wi-Fi is not required
+  by this route, and direct board Wi-Fi OTA remains unavailable.
+- New 0002/0003/0009 GATT upgrade characteristics share the existing BLE host.
+  PCOTA-AUTH2 binds the fixed AMOLED project, exact version, byte size and SHA256.
+  A private server target registry selects the board family; client metadata cannot.
+- The 100-byte grant requires MTU >=103. It expires 60 seconds after the board
+  issues its challenge; STOP/disconnect revoke in-flight challenges and grants.
+- Flash writes use a bounded ordered worker and the inactive 6 MiB slot.
+  HID input and OTA reservation share a mutex; only release reports pass during OTA.
+  Cancellation wins before atomic boot-slot commit. USB maintenance cannot
+  interrupt an active update. NVS and USB descriptors are preserved.
+- Reported imageState comes from the actual running partition. Pending images
+  require display/USB/BLE initialization and 30 seconds of startup health;
+  failed display startup requests rollback immediately. This is not long-term
+  runtime health or proof that the phone has enumerated USB.
+- Flutter keeps target-specific image/size/version validation and fixes the
+  internal authorization call while a transfer is busy. A simulated BLE platform
+  exercises push -> board identity proof -> cloud grant -> image authorization
+  -> BEGIN. It deliberately returns an error after BEGIN and does not prove a
+  successful physical OTA. Restoring the old busy guard makes this test fail.
+
+Validation: 381 Python tests passed; 174 Flutter tests passed and one skipped;
+Flutter analyzer clean; host OTA lifecycle, actual HID interlock and registry
+checks passed with ASan/UBSan. The first firmware build failed because the
+registry test shim lacked the new OTA dependency; the shim was fixed and
+[the next firmware build passed](https://github.com/zhangyue-site/super-phone-controller/actions/runs/41387135900).
+The final expiry-hardening firmware and signed Android helper builds both passed:
+
+- [Firmware candidate](https://github.com/zhangyue-site/super-phone-controller/actions/runs/41387920057)
+- [Android helper candidate](https://github.com/zhangyue-site/super-phone-controller/actions/runs/41387922201)
+
+No release pointer, server deployment, physical flash, phone installation or
+phone control was performed for this candidate. Physical OTA, recovery,
+command latency and reconnect acceptance remain required. The current baseline
+cannot bootstrap BLE OTA; its first upgrade needs the existing USB maintenance
+path with explicit upgrade authorization. Private inference deployments are
+separate from this source tree; absence here is not proof that a phone model
+is absent. Their phone installation/inference state must be checked separately.
+
+
 ## Current build and software
 
 Firmware **0.2.1-amoled** is installed on the authorized ESP32-S3-Touch-AMOLED-2.16.
