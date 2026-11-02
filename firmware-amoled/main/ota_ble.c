@@ -99,7 +99,9 @@ int amoled_ota_access(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *c
   if(amoled_ota_busy())return BLE_ATT_ERR_UNLIKELY;
   if(ctxt->op==BLE_GATT_ACCESS_OP_READ_CHR){
    atomic_store(&engine.grant_until,0);uint8_t next[32];esp_fill_random(next,32);
-   taskENTER_CRITICAL(&lock);memcpy(challenge,next,32);challenge_live=true;taskEXIT_CRITICAL(&lock);
+   taskENTER_CRITICAL(&lock);bool current_epoch=connection==conn&&pc_ota_epoch(&engine)==auth_epoch;
+   if(current_epoch){memcpy(challenge,next,32);challenge_live=true;}taskEXIT_CRITICAL(&lock);
+   if(!current_epoch)return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
    return os_mbuf_append(ctxt->om,next,32)?BLE_ATT_ERR_INSUFFICIENT_RES:0;
   }
   if(ctxt->op!=BLE_GATT_ACCESS_OP_WRITE_CHR||OS_MBUF_PKTLEN(ctxt->om)!=100)return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;

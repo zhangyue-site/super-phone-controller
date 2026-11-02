@@ -60,6 +60,8 @@ static int nvs_set_str(int h,const char *k,const char *v){if(fail_set)return -1;
 static int nvs_commit(int h){return fail_commit?-1:0;}
 static void render(void){}
 static bool amoled_usb_armed(void){return false;}
+static bool ota_busy;
+static bool amoled_ota_busy(void){return ota_busy;}
 static const char *amoled_usb_serial(void){return "host-test-device";}
 static void amoled_usb_write(const char *s){}
 static void amoled_usb_write_bytes(const void *p,size_t n){}
@@ -80,6 +82,11 @@ for i,c in enumerate(cases):
  if c['name']=='upgrade-retain-parameters':code+=' assert(!strcmp(str(cJSON_GetObjectItem(cJSON_GetArrayItem(plugins,0),"parameters"),"until"),"2026-09-10"));\n'
 code+='''
 assert(cJSON_GetArraySize(plugins)==4);assert(restarts==0);assert(bootloader_calls==0);
+ota_busy=true;
+char restart_busy[]={"{\\\"op\\\":\\\"maintenance.restart\\\",\\\"device\\\":\\\"host-test-device\\\"}"};
+char bootloader_busy[]={"{\\\"op\\\":\\\"maintenance.bootloader\\\",\\\"device\\\":\\\"host-test-device\\\"}"};
+process(restart_busy);assert(!strcmp(last,"unsupported-operation")&&restarts==0);process(bootloader_busy);assert(!strcmp(last,"unsupported-operation")&&bootloader_calls==0);ota_busy=false;
+
 assert(amoled_boot_crashes(false,99,true)==1);assert(amoled_boot_crashes(true,1,true)==2);
 assert(amoled_boot_crashes(true,2,true)==3);assert(amoled_recovery_required(3));
 assert(!amoled_recovery_required(2));assert(amoled_boot_crashes(true,2,false)==0);
