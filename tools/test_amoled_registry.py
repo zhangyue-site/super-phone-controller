@@ -60,6 +60,8 @@ static int nvs_set_str(int h,const char *k,const char *v){if(fail_set)return -1;
 static int nvs_commit(int h){return fail_commit?-1:0;}
 static void render(void){}
 static bool amoled_usb_armed(void){return false;}
+/* Registry tests keep unrelated Wi-Fi maintenance in its separately exercised adapter. */
+static bool amoled_wifi_console(cJSON *request){return false;}
 static bool ota_busy;
 static bool amoled_ota_busy(void){return ota_busy;}
 static const char *amoled_usb_serial(void){return "host-test-device";}
