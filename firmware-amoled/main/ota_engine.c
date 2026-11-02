@@ -33,8 +33,10 @@ void pc_ota_process(pc_ota *o,unsigned epoch,const uint8_t *p,size_t n,uint64_t 
  }
  if(p[0]!=3||n!=1){reset(o,4,2);return;}
  if(o->written!=o->total){reset(o,4,4);return;}
+ if(o->hooks.commit_allowed&&!o->hooks.commit_allowed(o->ctx)){reset(o,4,1);return;}
  atomic_store(&o->state,2);
  if(!o->hooks.verify(o->ctx,o->digest)){reset(o,4,5);return;}
+ if(o->hooks.commit_allowed&&!o->hooks.commit_allowed(o->ctx)){reset(o,4,1);return;}
  unsigned expected=epoch;
  if(!atomic_compare_exchange_strong(&o->epoch,&expected,epoch|COMMIT)){pc_ota_tick(o,now);return;}
  if(!o->hooks.commit(o->ctx)){atomic_store(&o->epoch,epoch+1);reset(o,4,3);o->worker_epoch=epoch+1;return;}

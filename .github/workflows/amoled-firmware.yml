@@ -34,6 +34,9 @@ jobs:
           python3 tools/test_amoled_control.py
           python3 tools/test_amoled_ota.py
           python3 tools/test_amoled_interlock.py
+          python3 tools/test_amoled_wifi.py
+          python3 tools/test_amoled_wifi_transport.py
+          python3 tools/test_amoled_wifi_ingress.py
       - name: Build independent AMOLED target
         shell: bash
         run: |
