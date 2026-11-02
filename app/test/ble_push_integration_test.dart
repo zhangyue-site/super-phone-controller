@@ -11,7 +11,7 @@ import 'package:pcflash/app_ota_client.dart';
 import 'amoled_firmware_image_test.dart' show amoledImage;
 
 final class BoardPlatform extends bm.FlutterBluePlusPlatform {
-  final id = bm.DeviceIdentifier('00:11:22:33:44:55');
+  final id = const bm.DeviceIdentifier('00:11:22:33:44:55');
   final service = bm.Guid(BleOtaService.svcUuid);
   final states = StreamController<bm.BmConnectionStateResponse>.broadcast();
   final mtus = StreamController<bm.BmMtuChangedResponse>.broadcast();

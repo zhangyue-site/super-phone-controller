@@ -51,8 +51,9 @@ class AppOtaClient {
       List<int> challenge, Future<List<int>> Function(List<int>) sign,
       {String protocol = 'hmac-sha256-v1'}) async {
     final imageBound = protocol == 'hmac-sha256-image-v2';
-    if (!imageBound && protocol != 'hmac-sha256-v1')
+    if (!imageBound && protocol != 'hmac-sha256-v1') {
       throw const FormatException('升级授权协议不受支持');
+    }
     if (challenge.length != 32) throw const FormatException('蓝牙升级挑战无效');
     String hex(List<int> bytes) =>
         bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
