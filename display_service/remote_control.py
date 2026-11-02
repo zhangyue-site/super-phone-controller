@@ -121,10 +121,16 @@ class RemoteControl:
     return {'op':'start','task_id':ident}
    return {'op':'wait'}
  def board_status(self,device,session,sequence):
+  # Capture authority is sampled before mailbox/remote locks, matching claim.
+  has_screen=self.screen_ready(device)
   with self.lock:
    self._sync()
    for ident,r in self.records.items():
     if r['owner'][3]==device and (r.get('session'),r.get('sequence'))==(session,sequence):
+     if r['state']=='running' and not has_screen:
+      self.c.mailbox.cancel(device,session,sequence)
+      r.update(state='error',reply='屏幕共享授权已结束，本次任务已取消。',verified=False)
+      self._save()
      return {'op':'wait' if r['state']=='running' else 'done' if r['state']=='done' else 'cancelled'}
    return {'op':'cancelled'}
  def status(self,owner,ident=None):
