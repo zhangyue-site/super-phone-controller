@@ -95,6 +95,7 @@ static bool request_ota(void *unused){
  atomic_store(&requested_epoch,atomic_load(&generation));
  atomic_store(&requested,true);atomic_store(&stage,1);return true;
 }
+bool amoled_wifi_ota_request(void){return request_ota(NULL);}
 bool amoled_wifi_console(cJSON *o){
  const char *op=field(o,"op");
  bool setup=!strcmp(op,"maintenance.wifi.configure"),clear=!strcmp(op,"maintenance.wifi.clear"),ota=!strcmp(op,"maintenance.wifi.ota");
