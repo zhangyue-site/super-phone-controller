@@ -9,8 +9,8 @@
 // 约定：box 为归一化 {x, y, width, height, score}，左上角原点；模型输入 320x320，
 // 预处理 stretch-rgb-0-1（直接拉伸、除以 255，不做 letterbox），输出布局 xywh-score。
 //
-// 依赖：flutter pub add onnxruntime image
-//   onnxruntime: ^1.4.1   （Flutter 端 ONNX Runtime，iOS/Android 均支持）
+// 依赖：onnxruntime_plus（项目已有）+ image
+//   onnxruntime_plus: 1.5.0（Flutter ONNX Runtime，iOS/Android）
 //   image: ^4.2.0          （纯 Dart 解码/缩放，避免平台差异）
 //
 // 用法（在屏幕任务流程中）：
@@ -26,7 +26,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
-import 'package:onnxruntime/onnxruntime.dart';
+import "package:onnxruntime_plus/onnxruntime_plus.dart";
 import 'package:path_provider/path_provider.dart';
 
 class LocalVisionModel {
@@ -105,12 +105,11 @@ class LocalVisionClient {
       {double conf = 0.45, double iou = 0.45}) async {
     if (_session == null || _sessionSha != model.sha256) {
       _session?.release();
-      _session = await OrtSession.fromFile(File(model.path));
+      _session = OrtSession.fromFile(File(model.path), OrtSessionOptions());
       _sessionSha = model.sha256;
     }
     final decoded = img.decodeJpg(frame.jpegBytes);
     if (decoded == null) throw const FormatException('bad jpeg');
-    final W = decoded.width, H = decoded.height;
     final resized = img.copyResize(decoded, width: 320, height: 320);
     final input = Float32List(1 * 3 * 320 * 320);
     var i = 0;
@@ -124,11 +123,11 @@ class LocalVisionClient {
       }
     }
     final tensor = OrtValueTensor.createTensorWithDataList(input, [1, 3, 320, 320]);
-    final outputs = await _session!.run(OrtRunOptions(), {'images': tensor});
+    final outputs = _session!.run(OrtRunOptions(), {'images': tensor});
     tensor.release();
     // 输出 (1,5,2100) 或 (1,2100,5) —— 统一成 N×5(xywh+score)
     final raw = outputs.first!.value as List;
-    outputs.forEach((o) => o?.release());
+    for (final o in outputs) { o?.release(); }
     final first = raw.first as List; // [5][N] 或 [N][5]
     final rows = <List<double>>[];
     if ((first.length == 5 || first.length == 6) && first.first is List) {
