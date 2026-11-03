@@ -6,6 +6,7 @@ import 'board_rpc.dart';
 import 'dart:io';
 import 'dart:typed_data';
 import 'transfer_session.dart';
+import 'ota_data_write.dart';
 import 'firmware_image.dart';
 import 'board_info.dart';
 
@@ -398,6 +399,20 @@ class BleOtaService {
       begin[4] = (total >> 24) & 0xFF;
       begin.setRange(5, 37, digest);
       await ctrl.write(begin, withoutResponse: false);
+      yield const PushProgress(step: '准备接收', log: '正在等待控制板准备接收固件');
+      await waitForOtaReceiver(
+        read: () async {
+          if (session.completed) {
+            final result = await session.result;
+            throw StateError(OtaError.text(result[2]));
+          }
+          return stat.read();
+        },
+        checkActive: () {
+          checkActive();
+          if (!device.isConnected) throw StateError('蓝牙已断开，请重新连接后检查版本');
+        },
+      );
 
       // iOS 必须用 withResponse，否则 CoreBluetooth 会限流丢包。
       // Acknowledged writes provide backpressure on both platforms.
@@ -423,7 +438,14 @@ class BleOtaService {
         frame.setRange(1, 1 + n, data, sent);
         final payload =
             n == chunk ? frame : Uint8List.sublistView(frame, 0, 1 + n);
-        await ctrl.write(payload, withoutResponse: withoutResponse);
+        await writeOtaData(
+          write: () => ctrl.write(payload, withoutResponse: withoutResponse),
+          checkActive: () {
+            checkActive();
+            if (!device.isConnected) throw StateError('蓝牙已断开，请重新连接控制板后检查版本');
+            if (session.completed) throw StateError('控制板已停止接收固件，请检查设备状态');
+          },
+        );
         checkActive();
         sent += n;
 
@@ -483,7 +505,14 @@ class BleOtaService {
         log: verified ? '固件已写入，但重启确认超时，请检查控制板版本' : '等待板子校验超时，请重试',
       );
     } catch (e) {
-      yield PushProgress(done: true, success: false, log: '传输失败：$e');
+      yield PushProgress(
+          done: true,
+          success: false,
+          log: e is FlutterBluePlusException &&
+                  e.platform == ErrorPlatform.android &&
+                  e.code == 17
+              ? '控制板暂时无法接收升级数据，本次更新已停止。请保持供电，重新连接蓝牙后再试（蓝牙错误17）。'
+              : '传输失败：$e');
     } finally {
       if (!verified) {
         try {
