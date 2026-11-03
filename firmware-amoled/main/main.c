@@ -302,10 +302,10 @@ void app_main(void){
     if(key_event==1){page=(page+1)%7;notice[0]=0;refresh=true;}
     else if(key_event==2){page=0;notice[0]=0;refresh=true;}
     else if(key_event==3){
-     if(amoled_wifi_ota_request_now())snprintf(notice,sizeof(notice),"正在检查固件更新…");
+     if(amoled_wifi_ota_request_now())snprintf(notice,sizeof(notice),"正在检查固件更新...");
      else snprintf(notice,sizeof(notice),"Wi-Fi 未连接，无法升级");
      notice_ticks=120;refresh=true;}
-    else if(key_event==4){snprintf(notice,sizeof(notice),"正在重启…");refresh=true;bsp_display_unlock();vTaskDelay(pdMS_TO_TICKS(150));esp_restart();}
+    else if(key_event==4){snprintf(notice,sizeof(notice),"正在重启...");refresh=true;bsp_display_unlock();vTaskDelay(pdMS_TO_TICKS(150));esp_restart();}
     bsp_display_unlock();}}
   if(++tick%500==0)ESP_LOGI("amoled","HEALTH heap=%u plugins=%d",(unsigned)esp_get_free_heap_size(),cJSON_GetArraySize(plugins));
   vTaskDelay(pdMS_TO_TICKS(20));
