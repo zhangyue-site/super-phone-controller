@@ -99,7 +99,7 @@ final class NativeBridge {
       CaptureContract.clearGrant(); if let ticket = ticket { CaptureContract.revoke(ticket) }
       consent?.cancel(); modernCapture?.cancel(); reply(nil)
     case "renewCapture":
-      guard let grant = CaptureContract.validGrant(), let ticket = grant["ticket"] as? String,
+      guard let grant = CaptureContract.validGrant(), let ticket = grant["ticket"] as? String, let grantID = grant["id"] as? String,
         let control = args["controlTicket"] as? String, control.range(of:"^[A-Za-z0-9_-]{43}$", options:.regularExpression) != nil,
         let base = CaptureContract.base else { fail(reply,"capture_session_invalid","共享授权已失效"); return }
       let state = CaptureContract.read("status.json") ?? [:]
@@ -111,9 +111,9 @@ final class NativeBridge {
       _ = BoundedRequest(request,limit:4096) { code,data in DispatchQueue.main.async {
         guard code == 200, let data = data,
           let body = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any], body["scope"] as? String == "screen-frames", body["expiresIn"] as? Int == 300,
-          CaptureContract.validGrant()?["id"] as? String == grant["id"] as? String else { self.fail(reply,"capture_renew_failed","共享续期失败"); return }
+          CaptureContract.validGrant()?["id"] as? String == grantID else { self.fail(reply,"capture_renew_failed","共享续期失败"); return }
         var renewed = grant; renewed["until"] = Date().timeIntervalSince1970 + 270; renewed["uptimeUntil"] = ProcessInfo.processInfo.systemUptime + 270
-        do { try CaptureContract.write("grant.json",renewed); reply(nil) } catch { self.fail(reply,"storage_failed","续期未保存") }
+        do { try CaptureContract.updateExistingGrant(renewed, expectedID: grantID); reply(nil) } catch { self.fail(reply,"storage_failed","续期未保存") }
       }}
     case "captureSession", "replaceUsbCapture", "renewUsbCapture", "usbWindow": fail(reply,"usb_unsupported","iOS USB CDC 共享恢复不可用")
     default: reply(FlutterMethodNotImplemented)
