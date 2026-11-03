@@ -32,7 +32,7 @@ typedef struct {
  void *crt_bundle_attach;bool disable_auto_redirect,keep_alive_enable;
 } esp_http_client_config_t;
 static atomic_uint generation=1,stage;
-static atomic_bool connected=true;
+static atomic_bool connected=true,transfer=true;
 static int status_code=200,content_mode,read_mode,queue_mode;
 static int opened,closed,auth_calls,begins,finishes,cancels,chunks,read_calls;
 static unsigned bytes;
@@ -126,7 +126,7 @@ int main(void){
   reset();content_mode=mode;download("https://controller.test",1);
   assert(!finishes&&atomic_load(&stage)==4&&opened==closed);
  }
- for(int mode=1;mode<=6;mode++){
+ for(int mode=1;mode<=5;mode++){
   reset();read_mode=mode;download("https://controller.test",1);
   assert(!finishes&&cancels==1&&bytes==0&&opened==closed);
  }
@@ -137,7 +137,8 @@ int main(void){
  reset();queue_mode=1;download("https://controller.test",1);assert(!finishes&&cancels==1&&bytes==0);
  reset();manifest[10]='x';download("https://controller.test",1);assert(!begins&&opened==1);
  reset();atomic_store(&generation,2);download("https://controller.test",1);assert(!opened&&!begins);
- reset();ble=true;download("https://controller.test",1);assert(!opened&&!begins);
+ reset();read_mode=6;download("https://controller.test",1);assert(finishes==1&&!cancels);
+ reset();ble=true;atomic_store(&transfer,false);download("https://controller.test",1);assert(!opened&&!begins);
  puts("Production Wi-Fi TLS/redirect/bounds/partial-read/STOP/disconnect/deadline/queue adapter passed");
 }
 """

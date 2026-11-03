@@ -13,12 +13,16 @@ class AppRelease {
       version = '暂时无法读取';
     }
     if (!context.mounted) return;
+    final ios = Theme.of(context).platform == TargetPlatform.iOS;
+    final update = ios
+        ? 'App 更新：通过 TestFlight 安装或更新，请使用收到内测邀请的 Apple 账号。'
+        : 'App 更新：从官方下载页安装新版，保留原应用。';
     await showDialog<void>(
         context: context,
         builder: (dialogContext) => AlertDialog(
               title: const Text('App 版本与更新'),
               content: Text(
-                  '本机已安装：$version\n\nApp 更新：从官方下载页安装新版，保留原应用。\n控制板固件：连接板子后，在固件页下载并升级。两者分别更新。'),
+                  '本机已安装：$version\n\n$update\n控制板固件：连接板子后，在固件页下载并升级。两者分别更新。'),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(dialogContext),
@@ -35,7 +39,7 @@ class AppRelease {
                         }
                       }
                     },
-                    child: const Text('官方下载与更新')),
+                    child: Text(ios ? '打开 TestFlight' : '官方下载与更新')),
               ],
             ));
   }

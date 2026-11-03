@@ -14,34 +14,56 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <stdatomic.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
-static atomic_uint generation=1;
+static atomic_uint generation=1,permit_epoch;
+static _Atomic(SemaphoreHandle_t) enable_lock;
 static atomic_bool online,started,enabled;
 static atomic_llong action_until;
 static pc_direct policy; /* Only direct worker mutates this state. */
 static char session[17];
 static unsigned turn;
+static char expected_task[33];
 static uint64_t now_ms(void){return (uint64_t)esp_timer_get_time()/1000;}
-void amoled_direct_cancel(void){atomic_store(&enabled,false);atomic_fetch_add(&generation,1);atomic_store(&online,false);}
+void amoled_direct_cancel(void){
+ SemaphoreHandle_t held_lock=atomic_load(&enable_lock);
+ if(held_lock)xSemaphoreTake(held_lock,portMAX_DELAY);
+ atomic_store(&enabled,false);atomic_fetch_add(&generation,1);atomic_store(&online,false);amoled_usb_gate(false);
+ if(held_lock)xSemaphoreGive(held_lock);
+}
 bool amoled_direct_online(void){return atomic_load(&online);}
 static bool live(uint32_t epoch){
- return atomic_load(&enabled)&&atomic_load(&generation)==epoch&&amoled_relay_direct_owned()&&
+ return atomic_load(&enabled)&&atomic_load(&permit_epoch)==epoch&&atomic_load(&generation)==epoch&&amoled_relay_direct_owned()&&
   amoled_wifi_connected()&&amoled_usb_armed()&&!amoled_relay_connected()&&!amoled_ota_busy()&&
   esp_timer_get_time()<atomic_load(&action_until);
 }
-bool amoled_direct_enable(void){
- if(!atomic_load(&started)||!amoled_identity_ready()||!amoled_wifi_connected()||
-    amoled_relay_connected()||amoled_relay_direct_owned()||amoled_ota_busy()||!amoled_ota_ready())return false;
+static bool enable_direct(const char *task,unsigned expected){
+ if(task){if(strlen(task)!=32)return false;for(unsigned i=0;i<32;i++)if(!((task[i]>='0'&&task[i]<='9')||(task[i]>='a'&&task[i]<='f')))return false;}
+ SemaphoreHandle_t held_lock=atomic_load(&enable_lock);
+ if(!atomic_load(&started)||!held_lock)return false;
+ xSemaphoreTake(held_lock,portMAX_DELAY);
+ bool ok=false;
+ if(atomic_load(&generation)!=expected||!amoled_identity_ready()||!amoled_wifi_connected()||
+    amoled_relay_connected()||amoled_relay_direct_owned()||amoled_ota_busy()||!amoled_ota_ready())goto done;
  amoled_usb_gate(true);
- if(!amoled_usb_armed())return false;
+ if(!amoled_usb_armed())goto done;
+ memset(expected_task,0,sizeof(expected_task));if(task)memcpy(expected_task,task,33);
  atomic_store(&action_until,esp_timer_get_time()+20000000);
- atomic_store(&enabled,true);return true;
+ atomic_store(&permit_epoch,expected);atomic_store(&enabled,true);
+ ok=atomic_load(&generation)==expected;
+ if(!ok){atomic_store(&enabled,false);amoled_usb_gate(false);}
+ done:xSemaphoreGive(held_lock);return ok;
 }
+unsigned amoled_direct_epoch(void){return atomic_load(&generation);}
+bool amoled_direct_enable(void){return enable_direct(NULL,amoled_direct_epoch());}
+bool amoled_direct_enable_task(const char *task){return enable_direct(task,amoled_direct_epoch());}
+bool amoled_direct_enable_task_epoch(const char *task,unsigned expected){return enable_direct(task,expected);}
+static bool expected_claim(const char *task){return !expected_task[0]||!strcmp(expected_task,task);}
 static void rotate(void){
  uint8_t bytes[8];esp_fill_random(bytes,sizeof(bytes));amoled_hex(bytes,sizeof(bytes),session);
  turn=0;pc_direct_cancel(&policy);
@@ -182,7 +204,7 @@ static void retire(unsigned epoch){
 static void worker(void *unused){
  pc_direct_init(&policy);rotate();
  for(;;){
-  if(!atomic_load(&enabled)||!amoled_wifi_connected()||!amoled_usb_armed()||amoled_relay_connected()||amoled_ota_busy()||!amoled_ota_ready()){
+  if(!atomic_load(&enabled)||atomic_load(&permit_epoch)!=atomic_load(&generation)||!amoled_wifi_connected()||!amoled_usb_armed()||amoled_relay_connected()||amoled_ota_busy()||!amoled_ota_ready()){
    if(amoled_relay_direct_owned())retire(atomic_load(&generation));
    vTaskDelay(pdMS_TO_TICKS(100));continue;
   }
@@ -195,7 +217,7 @@ static void worker(void *unused){
   const char *lease=str(claim,"lease"),*op=str(claim,"op");
   if(lease[0]&&!pc_direct_lease(&policy,lease)){cJSON_Delete(claim);retire(epoch);continue;}
   if(!strcmp(op,"wait")){cJSON_Delete(claim);vTaskDelay(pdMS_TO_TICKS(300));continue;}
-  bool begin=had_lease&&!strcmp(op,"start")&&pc_direct_begin(&policy,str(claim,"task_id"),now_ms(),
+  bool begin=had_lease&&!strcmp(op,"start")&&expected_claim(str(claim,"task_id"))&&pc_direct_begin(&policy,str(claim,"task_id"),now_ms(),
       amoled_usb_ready(),amoled_usb_armed(),amoled_relay_connected(),amoled_ota_busy());
   cJSON_Delete(claim);
   if(!begin){retire(epoch);continue;}
@@ -220,6 +242,8 @@ static void worker(void *unused){
 }
 esp_err_t amoled_direct_start(void){
  bool expected=false;if(!atomic_compare_exchange_strong(&started,&expected,true))return ESP_OK;
+ if(!atomic_load(&enable_lock))atomic_store(&enable_lock,xSemaphoreCreateMutex());
+ if(!atomic_load(&enable_lock)){atomic_store(&started,false);return ESP_ERR_NO_MEM;}
  if(xTaskCreate(worker,"amoled_direct",8192,NULL,3,NULL)!=pdPASS){atomic_store(&started,false);return ESP_ERR_NO_MEM;}
  return ESP_OK;
 }

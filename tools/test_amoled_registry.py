@@ -73,6 +73,10 @@ static int amoled_usb_enter_bootloader(void){bootloader_calls++;return 0;}
 typedef struct {struct {int w,h,stride;} header;void *data;} lv_draw_buf_t;
 static lv_draw_buf_t *lv_snapshot_take(void *p,int fmt){return NULL;}
 static void lv_draw_buf_destroy(lv_draw_buf_t *p){}
+/* OTA-priority: view deferencing inside process() needs these stubs. */
+static char notice[160];
+static int notice_ticks;
+static unsigned amoled_wifi_ota_stage(void){return ota_busy?3u:0u;}
 '''
 code='#include "boot_recovery_policy.h"\n'+shim+'\n'+'\n'.join(re.findall(r'^#define MAX_(?:PLUGINS|JSON) .*$',source,re.M))+'\n'
 code+='\n'.join(extract(name) for name in ['str','version','compare','valid','save','process'])

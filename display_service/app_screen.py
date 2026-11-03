@@ -139,6 +139,8 @@ def handle(handler,config):
     mailbox.cancel(device);STORE.invalidate(device)
    handler.reply(200,b'{}');return True
   if handler.headers.get('Content-Type')!='image/jpeg' or not 1<=size<=524288:raise ValueError('size')
+  platform=handler.headers.get('X-Screen-Platform','android')
+  if platform not in ('android','ios'):raise ValueError('capture platform')
   sequence=int(handler.headers.get('X-Screen-Sequence','0'))
   if not 1<=sequence<=2147483647:raise ValueError('sequence')
   payload=handler.rfile.read(size)
@@ -159,10 +161,11 @@ def handle(handler,config):
     j.screen_session=ticket
     if j.fenced and handler.headers.get('X-Screen-Barrier','')!=j.video_barrier:
      handler.reply(202,json.dumps({'accepted':False,'reason':'capture barrier required','barrier':j.video_barrier}).encode());return True
+    if getattr(j,'video_platform','') and j.video_platform!=platform:raise ValueError('capture platform changed')
     capture_barrier=j.video_barrier
     voice_session,voice_sequence,frame_sequence=j.session,j.sequence,j.video_sequence+1
    try:
-    result=mailbox.ingest_video(device,voice_session,voice_sequence,frame_sequence,payload,'jpeg',expected_barrier=capture_barrier,source='user-consented-app-screen')
+    result=mailbox.ingest_video(device,voice_session,voice_sequence,frame_sequence,payload,'jpeg',expected_barrier=capture_barrier,source='user-consented-app-screen',platform=platform)
    except ValueError as error:
     if str(error) in ('unknown turn','turn cancelled or expired','capture barrier required','capture superseded','video superseded'):
      with mailbox.lock:
@@ -175,6 +178,7 @@ def handle(handler,config):
     if obsolete is not None:
      handler.reply(202,json.dumps(obsolete).encode());return True
     if mailbox._job(device,voice_session,voice_sequence) is not j or j.done or j.video_barrier!=capture_barrier:raise ValueError('superseded')
+    if getattr(j,'video_platform','') and j.video_platform!=platform:raise ValueError('capture platform changed')
     j.video_source='user-consented-app-screen'
     result['barrier']=j.video_barrier
   result['source']='user-consented-app-screen'

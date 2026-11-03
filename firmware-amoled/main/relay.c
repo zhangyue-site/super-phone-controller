@@ -4,6 +4,8 @@
 #include "ota_ble.h"
 #include "wifi.h"
 #include "direct.h"
+#include "audio.h"
+#include "plugin.h"
 #include "esp_ota_ops.h"
 #include <stdio.h>
 #include <string.h>
@@ -26,7 +28,7 @@ static portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
 static uint16_t connection=BLE_HS_CONN_HANDLE_NONE;
 static uint8_t addr_type,key[32],auth_proof[32];
 static char nonce[33];
-static bool auth_ready,active,started,busy,direct_owner;
+static bool auth_ready,active,started,busy,direct_owner,audio_owner;
 static atomic_bool synced;
 bool amoled_relay_ready(void){return started&&atomic_load(&synced)&&amoled_ota_ready();}
 static atomic_uint epoch=1;
@@ -37,8 +39,10 @@ typedef struct {uint8_t op;uint32_t sequence,epoch;uint16_t a[5];} Work;
 static bool live(uint32_t e){return atomic_load(&epoch)==e&&amoled_relay_connected();}
 bool amoled_relay_connected(void){taskENTER_CRITICAL(&mux);bool v=active&&connection!=BLE_HS_CONN_HANDLE_NONE;taskEXIT_CRITICAL(&mux);return v;}
 bool amoled_relay_online(void){return amoled_relay_connected()&&atomic_load(&relay_until)>esp_timer_get_time();}
-void amoled_relay_cancel(void){amoled_direct_cancel();amoled_wifi_cancel();taskENTER_CRITICAL(&mux);atomic_fetch_add(&epoch,1);relay_until=0;result=5;taskEXIT_CRITICAL(&mux);amoled_usb_gate(false);amoled_ota_cancel();}
-void amoled_relay_usb_detached(void){amoled_relay_cancel();}
+void amoled_relay_cancel(void){amoled_plugin_cancel();amoled_audio_cancel();amoled_direct_cancel();
+ /* OTA has top priority: STOP/disconnect/USB-detach suspend the control session
+  * but never cancel a running Wi-Fi upgrade. */
+ if(!amoled_wifi_transferring()){amoled_wifi_cancel();}taskENTER_CRITICAL(&mux);atomic_fetch_add(&epoch,1);relay_until=0;result=5;taskEXIT_CRITICAL(&mux);amoled_usb_gate(false);if(!amoled_wifi_transferring()){amoled_ota_cancel();}}void amoled_relay_usb_detached(void){amoled_relay_cancel();}
 static bool parse(const uint8_t p[48],Work *w){
  if(p[0]!=1||p[1]<1||p[1]>14)return false;
  w->op=p[1];w->sequence=(uint32_t)p[2]|((uint32_t)p[3]<<8)|((uint32_t)p[4]<<16)|((uint32_t)p[5]<<24);if(!w->sequence)return false;
@@ -68,7 +72,8 @@ static void worker(void *unused){
   if(xQueueReceive(queue,&w,pdMS_TO_TICKS(100))!=pdTRUE){if(amoled_usb_armed()&&relay_until&&esp_timer_get_time()>relay_until)amoled_relay_cancel();continue;}
   bool current=live(w.epoch);unsigned state=6;taskENTER_CRITICAL(&mux);if(current)result=2;taskEXIT_CRITICAL(&mux);
   if(current){
-   if(amoled_ota_busy()&&w.op!=7)state=4;
+   /* Keepalive keeps flowing during OTA so the control page session stays consistent. */
+   if(amoled_ota_busy()&&w.op!=7&&w.op!=12)state=4;
    else if(w.op==12){relay_until=esp_timer_get_time()+20000000;state=3;}
    else if(w.op==6){amoled_usb_gate(true);if(!live(w.epoch))amoled_usb_gate(false);state=amoled_usb_armed()?7:4;if(state==7)relay_until=esp_timer_get_time()+20000000;}
    else if(w.op==7){amoled_usb_gate(false);state=8;}
@@ -114,7 +119,7 @@ static int gap_event(struct ble_gap_event *e,void *arg){
  if(e->type==BLE_GAP_EVENT_CONNECT){
   if(e->connect.status){advertise();return 0;}
   taskENTER_CRITICAL(&mux);
-  bool occupied=direct_owner;
+  bool occupied=direct_owner||audio_owner;
   if(!occupied)connection=e->connect.conn_handle;
   taskEXIT_CRITICAL(&mux);
   if(occupied){ble_gap_terminate(e->connect.conn_handle,BLE_ERR_REM_USER_CONN_TERM);return 0;}
@@ -158,7 +163,7 @@ esp_err_t amoled_relay_start(void){
 
 bool amoled_relay_direct_acquire(void){
  taskENTER_CRITICAL(&mux);
- bool allowed=!active&&connection==BLE_HS_CONN_HANDLE_NONE&&!busy;
+ bool allowed=!audio_owner&&!active&&connection==BLE_HS_CONN_HANDLE_NONE&&!busy;
  if(allowed)direct_owner=true;
  taskEXIT_CRITICAL(&mux);return allowed;
 }
@@ -167,4 +172,17 @@ bool amoled_relay_direct_owned(void){
 }
 void amoled_relay_direct_release(void){
  taskENTER_CRITICAL(&mux);direct_owner=false;taskEXIT_CRITICAL(&mux);
+}
+
+bool amoled_relay_audio_acquire(void){
+ taskENTER_CRITICAL(&mux);
+ bool allowed=!audio_owner&&!direct_owner&&!active&&connection==BLE_HS_CONN_HANDLE_NONE&&!busy;
+ if(allowed)audio_owner=true;
+ taskEXIT_CRITICAL(&mux);return allowed;
+}
+bool amoled_relay_audio_owned(void){
+ taskENTER_CRITICAL(&mux);bool owned=audio_owner;taskEXIT_CRITICAL(&mux);return owned;
+}
+void amoled_relay_audio_release(void){
+ taskENTER_CRITICAL(&mux);audio_owner=false;taskEXIT_CRITICAL(&mux);
 }

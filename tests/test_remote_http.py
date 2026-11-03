@@ -110,4 +110,32 @@ class RemoteHttpTests(unittest.TestCase):
     self.assertEqual(self.bridge('stop')[0],200)
    finally:release.set();t.join(4)
   self.assertEqual(out[0][0],409);self.assertFalse(self.mailbox.jobs)
+ def test_opt_in_voice_text_result_is_current_and_does_not_start_task(self):
+  import array
+  raw=array.array('h',[600,-600]*4000).tobytes()
+  before=dict(self.mailbox.jobs)
+  with patch.object(app,'recognize',lambda _:'打开设置'):
+   code,body=self.request('/voice',raw,extra={'X-Voice-Result':'text-v1'})
+   self.assertEqual(code,200);self.assertEqual(body['recognizedText'],'打开设置')
+   self.assertEqual(body['session'],'a'*16);self.assertEqual(body['sequence'],self.turn)
+   self.assertEqual(self.mailbox.jobs,before)
+   code,legacy=self.request('/voice',raw)
+   self.assertEqual(code,200);self.assertNotIn('recognizedText',legacy)
+ def test_opt_in_voice_text_is_not_returned_after_stop(self):
+  import array
+  entered=threading.Event();release=threading.Event();out=[]
+  def asr(_):entered.set();release.wait(3);return '本次文字'
+  with patch.object(app,'recognize',asr):
+   worker=threading.Thread(target=lambda:out.append(self.request('/voice',array.array('h',[600,-600]*4000).tobytes(),extra={'X-Voice-Result':'text-v1'})))
+   worker.start()
+   try:
+    self.assertTrue(entered.wait(2));self.request('/stop')
+   finally:release.set();worker.join(4)
+  self.assertEqual(out[0][0],409);self.assertNotIn('recognizedText',out[0][1])
+ def test_opt_in_voice_text_rejects_unbounded_or_control_text(self):
+  import array
+  for text in ('x'*121,'bad\x00text'):
+   with patch.object(app,'recognize',lambda _,text=text:text):
+    code,body=self.request('/voice',array.array('h',[600,-600]*4000).tobytes(),extra={'X-Voice-Result':'text-v1'})
+    self.assertNotEqual(code,200);self.assertNotIn('recognizedText',body)
 if __name__=='__main__':unittest.main()

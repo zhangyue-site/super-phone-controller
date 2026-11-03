@@ -46,6 +46,41 @@ class VisionTransportError(ValueError):
   super().__init__('视觉识别服务连接失败，本次停止；请稍后重试。')
   self.provider=provider;self.model=model;self.config=dict(config);self.retryable=retryable
 
+
+
+_PHONE_PLATFORM = ContextVar('capture_phone_platform',default='android')
+@contextmanager
+def phone_platform_context(platform):
+ if platform not in ('android','ios'):raise ValueError('capture platform')
+ token=_PHONE_PLATFORM.set(platform)
+ try:yield
+ finally:_PHONE_PLATFORM.reset(token)
+
+_BUTTON_GEOMETRY = ContextVar('controller_button_geometry', default=None)
+@contextmanager
+def button_geometry_context(hint):
+ token=_BUTTON_GEOMETRY.set(hint)
+ try:yield
+ finally:_BUTTON_GEOMETRY.reset(token)
+
+def _button_geometry_text(width,height):
+ """Only bounded numeric geometry enters the prompt, never client text."""
+ import math
+ hint=_BUTTON_GEOMETRY.get()
+ if not isinstance(hint,dict) or not isinstance(hint.get('boxes'),list):return ''
+ result=[]
+ for item in hint['boxes'][:16]:
+  if not isinstance(item,dict):continue
+  values=[item.get(k) for k in ('x','y','width','height','score')]
+  if any(type(n) not in (int,float) or not math.isfinite(n) or not 0<=n<=1 for n in values):continue
+  x,y,w,h,score=values
+  if w<=0 or h<=0 or x+w>1.000001 or y+h>1.000001 or score<.45:continue
+  box=[int(x*width),int(y*height),min(width,math.ceil((x+w)*width-1e-9)),min(height,math.ceil((y+h)*height-1e-9))]
+  if box[0]>=box[2] or box[1]>=box[3]:continue
+  result.append(dict(bounds=box,score=round(score,4)))
+ if not result:return ''
+ return '\nlocal_button_geometry='+json.dumps(result,separators=(',',':'))+'；这些仅为控制手机本地模型的候选几何，不代表按钮语义或执行许可。必须依据真实截图、用户目标与安全规则独立判断，不能仅凭候选框决定点击。'
+
 _RETRY_ROUTE=ContextVar('visual_retry_route',default=None)
 _LAST_ROUTE=ContextVar('last_visual_route',default=None)
 _INPUT_SCHEMA_REPAIR=ContextVar('input_schema_repair',default=False)
@@ -125,7 +160,7 @@ def launcher_method(result,jpeg,query):
 
 def observe(jpeg,query,verify=False):
  settings_locator_page=None
- if not verify and os.environ.get('EPAPER_NAV_JUDGE')=='jev':
+ if not verify and _PHONE_PLATFORM.get()!='ios' and os.environ.get('EPAPER_NAV_JUDGE')=='jev':
   from .jev_vision import TASKS,SettingsEntryUncertain,clear_swipe_region,observe as judge
   # Pixel texture selects the specialist; it never authorizes an action.
   # Other pages use the general locator with the same semantic and geometry validation.
@@ -141,7 +176,7 @@ def observe(jpeg,query,verify=False):
     if result.get('screen')=='launcher' and result.get('action')=='drag':result['_trusted_launcher_blank']=True
     if result.get('screen')=='launcher' and result.get('action')=='click' and result.get('target_label') in ('设置','系统设置'):result['_trusted_launcher_settings']=True
     return result
- if not verify and os.environ.get('EPAPER_NAV_JUDGE')=='jev' and query not in ('打开设置','进入设置','打开系统设置','进入系统设置'):
+ if not verify and _PHONE_PLATFORM.get()!='ios' and os.environ.get('EPAPER_NAV_JUDGE')=='jev' and query not in ('打开设置','进入设置','打开系统设置','进入系统设置'):
   from .general_nav import parse_task
   import re
   if isinstance(query,str) and re.fullmatch(r'(?:请|帮我)?(?:打开|进入).{1,100}',query) and parse_task(query) is not None:
@@ -161,6 +196,9 @@ def observe(jpeg,query,verify=False):
  context=current_observation_context()
  if context is not None and not verify:payload['max_tokens']=700
  if context is not None and not verify:payload['messages'][1]['content'][0]['text']+='\nusb_input_context='+json.dumps({k:context.get(k) for k in ('desired_text','typed_pinyin','stage','committed_prefix','remaining','expected_prefix')},ensure_ascii=False)
+ if _PHONE_PLATFORM.get()=='ios':
+  payload['messages'][1]['content'][0]['text']+='\n当前手机系统：iOS。不要套用安卓应用抽屉、安卓导航条或Pixel专属布局，只依据当前iPhone截图。'
+ if not verify:payload['messages'][1]['content'][0]['text']+=_button_geometry_text(width,height)
  value,request,provider,started=request_vision(payload,provider,model,cfg)
  print("VISION_USAGE "+json.dumps({"provider":provider,"model":model,"session":request.get_header("X-opencode-session"),"usage":value.get("usage")},ensure_ascii=False),flush=True)
  choice=value["choices"][0];content=choice["message"].get("content")
@@ -172,7 +210,7 @@ def observe(jpeg,query,verify=False):
  if not isinstance(result,dict):raise ValueError("invalid visual observation")
  print("VISION_OBSERVATION "+json.dumps({k:result.get(k) for k in ('confidence','safe','complete','screen','action','target_label','bounds','end','verified')},ensure_ascii=False),flush=True)
  normalized=normalize_observation(result,width,height)
- if not verify and settings_locator_page is None:normalized=launcher_method(normalized,jpeg,query)
+ if not verify and _PHONE_PLATFORM.get()!='ios' and settings_locator_page is None:normalized=launcher_method(normalized,jpeg,query)
  if settings_locator_page is not None:
   if normalized.get('action')!='click' or normalized.get('safe') is not True or normalized.get('target_label') not in ('设置','系统设置'):raise ValueError('独立定位没有确认设置入口')
   if settings_locator_page=='launcher' and normalized.get('screen') in ('launcher','安卓桌面','桌面'):normalized['_trusted_launcher_settings']=True

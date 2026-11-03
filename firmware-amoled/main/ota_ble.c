@@ -1,6 +1,7 @@
 #include "ota_ble.h"
 #include "ota_engine.h"
 #include "version_policy.h"
+#include "wifi.h"
 #include "identity.h"
 #include "usb.h"
 #include "esp_app_desc.h"
@@ -68,8 +69,8 @@ static void restart_image(void *ctx){notify();vTaskDelay(pdMS_TO_TICKS(1200));es
 bool amoled_ota_busy(void){return atomic_load(&pending)||atomic_load(&engine.power_requested)||pc_ota_busy(&engine);}
 bool amoled_ota_ready(void){return atomic_load(&ready);}
 void amoled_ota_cancel(void){if(!atomic_load(&ready))return;taskENTER_CRITICAL(&lock);challenge_live=false;memset(challenge,0,32);pc_ota_cancel(&engine);taskEXIT_CRITICAL(&lock);amoled_usb_gate(false);}
-void amoled_ota_connect(uint16_t conn){amoled_ota_cancel();atomic_store(&wifi_deadline,0);taskENTER_CRITICAL(&lock);connection=conn;challenge_live=false;memset(challenge,0,32);taskEXIT_CRITICAL(&lock);}
-void amoled_ota_disconnect(void){amoled_ota_cancel();taskENTER_CRITICAL(&lock);connection=BLE_HS_CONN_HANDLE_NONE;challenge_live=false;memset(challenge,0,32);taskEXIT_CRITICAL(&lock);}
+void amoled_ota_connect(uint16_t conn){if(!amoled_wifi_transferring())amoled_ota_cancel();atomic_store(&wifi_deadline,0);taskENTER_CRITICAL(&lock);connection=conn;challenge_live=false;memset(challenge,0,32);taskEXIT_CRITICAL(&lock);}
+void amoled_ota_disconnect(void){if(!amoled_wifi_transferring())amoled_ota_cancel();taskENTER_CRITICAL(&lock);connection=BLE_HS_CONN_HANDLE_NONE;challenge_live=false;memset(challenge,0,32);taskEXIT_CRITICAL(&lock);}
 static void writer(void *arg){
  Chunk *c=malloc(sizeof(*c));if(!c){atomic_store(&ready,false);vTaskDelete(NULL);return;}
  uint8_t before[4]={0},after[4];for(;;){

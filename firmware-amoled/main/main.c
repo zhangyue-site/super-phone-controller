@@ -26,6 +26,8 @@
 #include "wifi.h"
 #include "direct.h"
 #include "power.h"
+#include "audio.h"
+#include "plugin.h"
 #include "esp_attr.h"
 #include "esp_private/panic_internal.h"
 #include "boot_recovery_policy.h"
@@ -67,7 +69,7 @@ static bool shutdown_sent;
 static bool power_notice_persistent;
 static esp_err_t power_error=ESP_ERR_INVALID_STATE;
 
-static lv_obj_t *root,*link_label;
+static lv_obj_t *root,*link_label,*voice_status_label,*plugin_status_label,*plugin_confirm_button;
 static const char *str(cJSON *o,const char *key){cJSON *v=cJSON_GetObjectItemCaseSensitive(o,key);return cJSON_IsString(v)?v->valuestring:"";}
 static cJSON *current(void){return cJSON_GetArrayItem(plugins,selected);}
 static void render(void);
@@ -94,7 +96,10 @@ static void process(char *line){
  }else if(!strcmp(op,"remove")){
   int found=-1;for(int i=0;i<cJSON_GetArraySize(plugins);i++)if(!strcmp(str(cJSON_GetArrayItem(plugins,i),"id"),str(o,"id")))found=i;
   if(found<0){status("not-found");goto done;}cJSON *next=cJSON_Duplicate(plugins,true);cJSON_DeleteItemFromArray(next,found);if(!save(next)){cJSON_Delete(next);status("storage-error");goto done;}page=1;refresh=true;status("removed");
- }else if(!strcmp(op,"view")){cJSON *p=cJSON_GetObjectItem(o,"page");if(cJSON_IsNumber(p)&&p->valueint>=0&&p->valueint<=9){page=p->valueint;refresh=true;status("view-changed");}else status("invalid-page");}
+ }else if(!strcmp(op,"view")){cJSON *p=cJSON_GetObjectItem(o,"page");
+  unsigned ota_stage=amoled_wifi_ota_stage();
+  if(ota_stage==2||ota_stage==3){snprintf(notice,sizeof(notice),"固件升级中，请勿断开电源");refresh=true;status("view-deferred");}
+  else if(cJSON_IsNumber(p)&&p->valueint>=0&&p->valueint<=10){page=p->valueint;refresh=true;status("view-changed");}else status("invalid-page");}
  else if(!strcmp(op,"snapshot")){if(refresh){render();refresh=false;}lv_draw_buf_t *buf=lv_snapshot_take(root,LV_COLOR_FORMAT_RGB565);if(!buf){status("snapshot-failed");goto done;}cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","snapshot");cJSON_AddNumberToObject(meta,"width",buf->header.w);cJSON_AddNumberToObject(meta,"height",buf->header.h);cJSON_AddNumberToObject(meta,"stride",buf->header.stride);cJSON_AddNumberToObject(meta,"bytes",buf->header.stride*buf->header.h);reply(meta);amoled_usb_write_bytes(buf->data,buf->header.stride*buf->header.h);lv_draw_buf_destroy(buf);amoled_usb_write("\n");}
  else if(!strcmp(op,"maintenance.restart")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("restarting");vTaskDelay(pdMS_TO_TICKS(100));esp_restart();}
  else if(!strcmp(op,"maintenance.bootloader")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("entering-bootloader");vTaskDelay(pdMS_TO_TICKS(100));if(amoled_usb_enter_bootloader()!=ESP_OK)status("bootloader-failed");}
@@ -102,7 +107,7 @@ static void process(char *line){
  done:cJSON_Delete(o);
 }
 static lv_obj_t *label(lv_obj_t *parent,const char *text,int x,int y,int w,lv_color_t color){lv_obj_t *o=lv_label_create(parent);lv_label_set_text(o,text);lv_obj_set_pos(o,x,y);lv_obj_set_width(o,w);lv_obj_set_style_text_font(o,&ui_font,0);lv_obj_set_style_text_color(o,color,0);lv_label_set_long_mode(o,LV_LABEL_LONG_WRAP);return o;}
-static void action(lv_event_t *e){int a=(int)(intptr_t)lv_event_get_user_data(e);notice[0]=0;power_notice_persistent=false;if((pending_power||atomic_load(&power_request))&&a!=20){snprintf(notice,sizeof(notice),"正在处理电源请求，请稍候");refresh=true;return;}
+static void action(lv_event_t *e){if(page==5)amoled_audio_cancel();int a=(int)(intptr_t)lv_event_get_user_data(e);notice[0]=0;power_notice_persistent=false;if((pending_power||atomic_load(&power_request))&&a!=20){snprintf(notice,sizeof(notice),"正在处理电源请求，请稍候");refresh=true;return;}
  if(a>=100&&a<104){selected=a-100;page=2;}
  else if(a==10){page=0;}
  else if(a==11){page=1;}
@@ -110,20 +115,40 @@ static void action(lv_event_t *e){int a=(int)(intptr_t)lv_event_get_user_data(e)
  else if(a==13){page=4;}
  else if(a==14){page=5;}
  else if(a==15){page=6;}
- else if(a==50){page=7;}
- else if(a==51){page=8;}
- else if(a==52){page=9;}
+ else if(a==50){page=8;}
+ else if(a==51){page=9;}
+ else if(a==52){page=10;}
  else if(a==53||a==54){atomic_store(&power_request,a==53?1:2);}
  else if(a==20){amoled_relay_cancel();snprintf(notice,sizeof(notice),"输入已停止，USB连接保留");}
  else if(a==23){bool ok=amoled_direct_enable();snprintf(notice,sizeof(notice),ok?"本地许可已开启，等待已确认任务":"Wi-Fi未连接或控制板忙，未开启");}
  else if(a==22){esp_err_t e=amoled_usb_enter_bootloader();snprintf(notice,sizeof(notice),"维护入口错误 0x%x",(unsigned)e);}
  else if(a==21){if(lv_event_get_code(e)==LV_EVENT_LONG_PRESSED){amoled_usb_gate(true);snprintf(notice,sizeof(notice),amoled_usb_armed()?"手动输入已开启":"请先连接USB主机");}else return;}
  else if(a>=30&&a<=38){bool ok=false;if(a<=33)ok=amoled_usb_mouse(a==30?-24:a==31?24:0,a==32?-24:a==33?24:0,false);else if(a==34)ok=amoled_usb_mouse(0,0,true);else ok=amoled_usb_consumer(a==35?0x224:a==36?0x223:a==37?0xe9:0xea);snprintf(notice,sizeof(notice),ok?"已提交USB输入，待观察手机":"输入未开启或USB未就绪");}
- else if(a==40){snprintf(notice,sizeof(notice),"106执行器尚未接入，未启动任务");}
+ else if(a==40){
+  cJSON *plugin=current(),*runner=cJSON_GetObjectItem(plugin,"runner"),*params=cJSON_GetObjectItem(plugin,"parameters");
+  char *encoded=params?cJSON_PrintUnformatted(params):strdup("{}");
+  bool ok=encoded&&amoled_plugin_prepare(str(runner,"entry"),encoded);free(encoded);
+  if(ok)page=7;else snprintf(notice,sizeof(notice),"插件计划未开启，请检查连接或先停止当前任务");
+ }
+ else if(a==42){if(!amoled_plugin_confirm())snprintf(notice,sizeof(notice),"本次确认不可用，请重新预览");}
+ else if(a==43){amoled_relay_cancel();}
+ else if(a==44){page=2;}
  else if(a==41){cJSON *p=current();if(p){cJSON *next=cJSON_Duplicate(plugins,true);cJSON_DeleteItemFromArray(next,selected);if(save(next))page=1;else{cJSON_Delete(next);snprintf(notice,sizeof(notice),"移除失败，原插件保留");}}}
  refresh=true;
 }
-static void button(const char *text,int x,int y,int w,int h,int a,bool primary){lv_obj_t *b=lv_button_create(root);lv_obj_set_pos(b,x,y);lv_obj_set_size(b,w,h);if(pending_power||atomic_load(&power_request))lv_obj_add_state(b,LV_STATE_DISABLED);lv_obj_set_style_radius(b,22,0);lv_obj_set_style_bg_color(b,lv_color_hex(primary?0x14c69b:0x1c1c1c),0);lv_obj_set_style_shadow_width(b,0,0);lv_obj_set_style_border_width(b,0,0);lv_obj_set_style_pad_all(b,6,0);lv_obj_add_event_cb(b,action,(a==21||a==22||a==23)?LV_EVENT_LONG_PRESSED:LV_EVENT_CLICKED,(void*)(intptr_t)a);if(a==21)lv_obj_set_style_anim_duration(b,2000,0);lv_obj_t *l=label(b,text,0,0,w-12,lv_color_hex(primary?0:0xf5f5f5));lv_label_set_long_mode(l,LV_LABEL_LONG_DOT);lv_obj_set_height(l,46);lv_obj_set_style_text_align(l,LV_TEXT_ALIGN_CENTER,0);lv_obj_center(l);}
+static lv_obj_t *button(const char *text,int x,int y,int w,int h,int a,bool primary){lv_obj_t *b=lv_button_create(root);lv_obj_set_pos(b,x,y);lv_obj_set_size(b,w,h);if(pending_power||atomic_load(&power_request))lv_obj_add_state(b,LV_STATE_DISABLED);lv_obj_set_style_radius(b,22,0);lv_obj_set_style_bg_color(b,lv_color_hex(primary?0x14c69b:0x1c1c1c),0);lv_obj_set_style_shadow_width(b,0,0);lv_obj_set_style_border_width(b,0,0);lv_obj_set_style_pad_all(b,6,0);lv_obj_add_event_cb(b,action,(a==21||a==22||a==23)?LV_EVENT_LONG_PRESSED:LV_EVENT_CLICKED,(void*)(intptr_t)a);if(a==21)lv_obj_set_style_anim_duration(b,2000,0);lv_obj_t *l=label(b,text,0,0,w-12,lv_color_hex(primary?0:0xf5f5f5));lv_label_set_long_mode(l,LV_LABEL_LONG_DOT);lv_obj_set_height(l,46);lv_obj_set_style_text_align(l,LV_TEXT_ALIGN_CENTER,0);lv_obj_center(l);return b;}
+static void voice_hold(lv_event_t *e){
+ lv_event_code_t code=lv_event_get_code(e);
+ if(code==LV_EVENT_PRESSED){
+  if(!amoled_audio_press()){snprintf(notice,sizeof(notice),"录音未开启，请检查网络或控制板状态");refresh=true;}
+ }else if(code==LV_EVENT_RELEASED)amoled_audio_release();
+ else if(code==LV_EVENT_PRESS_LOST||(code==LV_EVENT_DELETE&&amoled_audio_busy()))amoled_audio_cancel();
+}
+static void voice_button(void){
+ lv_obj_t *button=lv_button_create(root);lv_obj_set_pos(button,72,270);lv_obj_set_size(button,336,86);
+ lv_obj_add_event_cb(button,voice_hold,LV_EVENT_ALL,NULL);
+ lv_obj_t *text=label(button,"按住说话，松手识别",0,0,300,lv_color_hex(0xf5f5f5));lv_obj_center(text);
+}
 static const char *link_status(void){
  if(!amoled_usb_ready())return "USB未连";
  if(amoled_direct_online())return "USB已连 · Wi-Fi任务中";
@@ -132,15 +157,15 @@ static const char *link_status(void){
  return amoled_identity_ready()?"USB已连 · 等待手机":"USB已连 · 等待配置";
 }
 static void render(void){
- lv_obj_clean(root);lv_obj_set_style_bg_color(root,lv_color_black(),0);lv_obj_set_style_pad_all(root,0,0);lv_obj_remove_flag(root,LV_OBJ_FLAG_SCROLLABLE);
+ voice_status_label=NULL;plugin_status_label=NULL;plugin_confirm_button=NULL;lv_obj_clean(root);lv_obj_set_style_bg_color(root,lv_color_black(),0);lv_obj_set_style_pad_all(root,0,0);lv_obj_remove_flag(root,LV_OBJ_FLAG_SCROLLABLE);
  link_label=label(root,link_status(),80,36,320,lv_color_hex(0x17baf1));lv_obj_set_style_text_align(link_label,LV_TEXT_ALIGN_CENTER,0);
- const char *titles[]={"手机控制器","我的插件","插件详情","导入插件","手动控制","语音任务","设置","电源","确认重启","确认关机"};lv_obj_t *title=label(root,titles[page],72,88,336,lv_color_hex(0xf5f5f5));lv_obj_set_style_text_align(title,LV_TEXT_ALIGN_CENTER,0);
+ const char *titles[]={"手机控制器","我的插件","插件详情","导入插件","手动控制","语音任务","设置","插件任务","电源","确认重启","确认关机"};lv_obj_t *title=label(root,titles[page],72,88,336,lv_color_hex(0xf5f5f5));lv_obj_set_style_text_align(title,LV_TEXT_ALIGN_CENTER,0);
  if(page==0){button("语音任务",56,144,176,96,14,false);button("插件",248,144,176,96,11,true);button("手动控制",56,260,176,96,13,false);button("设置",248,260,176,96,15,false);}
  else if(page==1){int n=cJSON_GetArraySize(plugins);if(!n){label(root,"尚未导入插件",88,168,304,lv_color_hex(0xf5f5f5));label(root,"业务随插件扩展\n保留通用控制能力",88,224,304,lv_color_hex(0xaaaaaa));}if(n){lv_obj_t *list=lv_obj_create(root);lv_obj_set_pos(list,64,136);lv_obj_set_size(list,352,232);lv_obj_set_style_bg_opa(list,0,0);lv_obj_set_style_border_width(list,0,0);lv_obj_set_style_pad_all(list,0,0);lv_obj_t *saved=root;root=list;for(int i=0;i<n;i++)button(str(cJSON_GetArrayItem(plugins,i),"name"),0,i*76,352,64,100+i,false);root=saved;}button("导入说明",112,386,120,56,12,true);button("首页",248,386,120,56,10,false);}
- else if(page==2){cJSON *p=current();label(root,p?str(p,"name"):"未选择插件",80,140,320,lv_color_hex(0xf5f5f5));label(root,p?str(p,"version"):"",80,186,320,lv_color_hex(0x17baf1));label(root,"描述文件已保存\n执行器尚未连接",80,232,320,lv_color_hex(0xaaaaaa));button("开始任务",80,318,320,56,40,true);button("移除插件",112,386,120,56,41,false);button("插件列表",248,386,120,56,11,false);}
+ else if(page==2){cJSON *p=current();label(root,p?str(p,"name"):"未选择插件",80,140,320,lv_color_hex(0xf5f5f5));label(root,p?str(p,"version"):"",80,186,320,lv_color_hex(0x17baf1));label(root,"描述文件已保存\n执行须私有工作流允许及本地确认",80,232,320,lv_color_hex(0xaaaaaa));button("预览任务计划",80,318,320,56,40,true);button("移除插件",112,386,120,56,41,false);button("插件列表",248,386,120,56,11,false);}
  else if(page==3){label(root,"通过USB导入JSON插件\n支持独立更新与移除\n手机导入待接入",80,144,320,lv_color_hex(0xaaaaaa));label(root,"API 1 · 最多4个插件\n导入后不会自动运行",80,288,320,lv_color_hex(0x17baf1));button("返回插件",112,386,256,56,11,true);}
  else if(page==4){if(!amoled_usb_armed()){label(root,"控制当前USB主机\n长按开启输入\n停止后连接保留",80,154,320,lv_color_hex(0xaaaaaa));button("长按2秒开启输入",72,310,336,56,21,true);}else{button("左",60,144,104,64,30,false);button("上",188,144,104,64,32,false);button("右",316,144,104,64,31,false);button("返回",60,220,104,64,35,false);button("点击",188,220,104,64,34,false);button("下",316,220,104,64,33,false);button("音量+",60,296,104,64,37,false);button("主页",188,296,104,64,36,false);button("音量-",316,296,104,64,38,false);}button("停止输入",112,386,120,56,20,false);button("首页",248,386,120,56,10,false);}
- else if(page==5){label(root,"语音服务尚未接入\n当前不会录音或上传",80,176,320,lv_color_hex(0xaaaaaa));button("回到首页",112,386,256,56,10,true);}
+ else if(page==5){lv_obj_t *voice_box=lv_obj_create(root);lv_obj_set_pos(voice_box,80,136);lv_obj_set_size(voice_box,320,120);lv_obj_set_style_pad_all(voice_box,0,0);lv_obj_set_style_border_width(voice_box,0,0);voice_status_label=label(voice_box,"仅按住时录音，最长10秒\n本次仅识别，不执行手机任务",0,0,300,lv_color_hex(0xaaaaaa));voice_button();button("回到首页",112,386,256,56,10,true);}
  else if(page==6){
   char version_text[64];snprintf(version_text,sizeof(version_text),"固件 %s",esp_app_get_description()->version);
   label(root,version_text,80,138,320,lv_color_hex(0x17baf1));
@@ -150,16 +175,22 @@ static void render(void){
   button("回到首页",112,386,256,56,10,true);
  }
  else if(page==7){
+  lv_obj_t *box=lv_obj_create(root);lv_obj_set_pos(box,64,136);lv_obj_set_size(box,352,172);
+  plugin_status_label=label(box,"正在读取真实插件状态",0,0,308,lv_color_hex(0xf5f5f5));
+  plugin_confirm_button=button("确认执行本次计划",72,318,336,56,42,true);
+  button("停止任务",80,386,152,56,43,false);button("返回详情",248,386,152,56,44,false);
+ }
+ else if(page==8){
   char version_text[64];snprintf(version_text,sizeof(version_text),"固件 %s",esp_app_get_description()->version);
   label(root,version_text,80,140,320,lv_color_hex(0x17baf1));
   button("重新启动",80,202,320,64,51,false);
   button("关机",80,286,320,64,52,false);
   button("返回设置",112,386,256,56,15,true);
  }
- else if(page==8||page==9){
-  label(root,page==8?"将停止输入并重新启动":"将停止输入并关闭电源",80,154,320,lv_color_hex(0xf5f5f5));
+ else if(page==9||page==10){
+  label(root,page==9?"将停止输入并重新启动":"将停止输入并关闭电源",80,154,320,lv_color_hex(0xf5f5f5));
   label(root,"升级写入会先取消\n切槽提交中请等待",80,222,320,lv_color_hex(0xaaaaaa));
-  button(page==8?"确认重启":"确认关机",80,318,320,56,page==8?53:54,true);
+  button(page==9?"确认重启":"确认关机",80,318,320,56,page==9?53:54,true);
   button("取消",112,386,256,56,50,false);
  }
 
@@ -246,6 +277,22 @@ void app_main(void){
   char buf[128];size_t count=amoled_usb_read(buf,sizeof(buf));for(size_t i=0;i<count;i++){char c=buf[i];if(c=='\n'){if(!overflow){line[pos]=0;if(!amoled_control_console(line)){bsp_display_lock(-1);process(line);bsp_display_unlock();}memset(line,0,sizeof(line));}else status("request-too-large");pos=0;overflow=false;}else if(c!='\r'){if(pos+1<sizeof(line))line[pos++]=c;else overflow=true;}}
   if(amoled_usb_ready()!=last_usb||amoled_relay_connected()!=last_ble||amoled_relay_online()!=last_relay||amoled_direct_online()!=last_direct){last_direct=amoled_direct_online();last_usb=amoled_usb_ready();last_ble=amoled_relay_connected();last_relay=amoled_relay_online();refresh=true;}
   if(refresh){bsp_display_lock(-1);render();refresh=false;bsp_display_unlock();}
+  if(plugin_status_label){
+   char text[1024];
+   if(amoled_plugin_text(text,sizeof(text))){bsp_display_lock(-1);if(plugin_status_label)lv_label_set_text(plugin_status_label,text);if(plugin_confirm_button){if(amoled_plugin_stage()==1)lv_obj_remove_state(plugin_confirm_button,LV_STATE_DISABLED);else lv_obj_add_state(plugin_confirm_button,LV_STATE_DISABLED);}bsp_display_unlock();}
+  }
+  if(voice_status_label){
+   unsigned stage=amoled_audio_stage();char text[640],recognized[481];
+   const char *states[]={"仅按住时录音，最长10秒\n本次仅识别，不执行手机任务","正在录音","正在上传语音","语音识别已返回，未执行任务","未识别：录音过短、静音或上传失败","语音已停止"};
+   snprintf(text,sizeof(text),"%s%s%u%s",states[stage<6?stage:4],stage==1?" · ":"",stage==1?amoled_audio_duration_ms():0,stage==1?"毫秒":"");
+   if(stage!=1)snprintf(text,sizeof(text),"%s",states[stage<6?stage:4]);
+   if(stage==3&&amoled_audio_result(recognized,sizeof(recognized)))snprintf(text,sizeof(text),"识别文字：%s\n未执行手机任务",recognized);
+   bsp_display_lock(-1);if(voice_status_label)lv_label_set_text(voice_status_label,text);bsp_display_unlock();
+  }
+  {static unsigned ota_prev=0;unsigned ota_stage=amoled_wifi_ota_stage();
+   if((ota_stage==2||ota_stage==3)&&strcmp(notice,"固件升级中，请勿断开电源")){snprintf(notice,sizeof(notice),"固件升级中，请勿断开电源");notice_ticks=0;refresh=true;}
+   if(ota_prev&&ota_prev<=3&&ota_stage==4){snprintf(notice,sizeof(notice),"升级失败，已恢复原固件，可继续控制");notice_ticks=250;refresh=true;}
+   ota_prev=ota_stage;}
   if(notice_ticks>0&&--notice_ticks==0){notice[0]=0;refresh=true;}
   if(boot_recovery.crashes&&amoled_boot_healthy((uint64_t)esp_timer_get_time()/1000))boot_recovery.crashes=0;
   if(++tick%500==0)ESP_LOGI("amoled","HEALTH heap=%u plugins=%d",(unsigned)esp_get_free_heap_size(),cJSON_GetArraySize(plugins));

@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BroadcastExtensionID</key>
+	<string>$(BROADCAST_BUNDLE_ID)</string>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -22,8 +26,26 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>CaptureKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)$(APP_BUNDLE_ID).capture</string>
+	<key>ControllerBaseURL</key>
+	<string>$(CONTROLLER_BASE_URL)</string>
+	<key>DownloadURL</key>
+	<string>$(DOWNLOAD_URL)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>连接 PhoneCtl 墨水屏控制器并推送固件更新。不用于定位，也不收集任何数据。</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>连接 PhoneCtl 墨水屏控制器并推送固件更新。</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>共享您主动选择的完整屏幕，以识别界面并核验控制板 HID 操作；可随时停止。</string>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>screen-capture</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -41,13 +63,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>CADisableMinimumFrameDurationOnPhone</key>
-	<true/>
-	<key>UIApplicationSupportsIndirectInputEvents</key>
-	<true/>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>连接 PhoneCtl 墨水屏控制器并推送固件更新。不用于定位，也不收集任何数据。</string>
-	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>连接 PhoneCtl 墨水屏控制器并推送固件更新。</string>
 </dict>
 </plist>

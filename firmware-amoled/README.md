@@ -133,3 +133,12 @@ partial network-stack initialization failure this boot does not attempt duplicat
 netif/event-handler initialization; saved configuration remains available for an
 explicit maintenance restart. No successful network initialization is inferred
 from saving that configuration.
+
+## Confirmed plugin candidate
+
+The 0.6.0 source candidate adds USB-imported descriptor -> private allowlisted
+safe-navigation plan -> explicit board confirmation -> exact-task direct permit
+and real status/STOP. Missing private configuration refuses to run. It does not
+implement phone BLE import, arbitrary scripts or financial/message workflows.
+See [candidate evidence and remaining acceptance](../docs/amoled/2026-11-03-plugin-execution-candidate.md).
+No successful physical operation or deployed firmware is implied by this source.

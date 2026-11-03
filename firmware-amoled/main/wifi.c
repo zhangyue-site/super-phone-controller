@@ -1,5 +1,7 @@
 #include "wifi.h"
 #include "direct.h"
+#include "audio.h"
+#include "plugin.h"
 #include "wifi_policy.h"
 #include "esp_app_desc.h"
 #include "version_policy.h"
@@ -43,13 +45,15 @@ static const char *field(cJSON *o,const char *name){
 bool amoled_wifi_configured(void){return atomic_load(&configured);}
 bool amoled_wifi_connected(void){return atomic_load(&connected);}
 unsigned amoled_wifi_ota_stage(void){return atomic_load(&stage);}
+bool amoled_wifi_transferring(void){return atomic_load(&transfer);}
 void amoled_wifi_cancel(void){
+ amoled_plugin_cancel();amoled_audio_cancel();
  amoled_direct_cancel();
  atomic_fetch_add(&generation,1);atomic_store(&requested,false);
  if(atomic_load(&transfer))amoled_ota_cancel();
 }
 static bool allowed(void){
- return atomic_load(&ready)&&!amoled_relay_direct_owned()&&!atomic_load(&requested)&&!atomic_load(&transfer)&&
+ return atomic_load(&ready)&&!amoled_relay_audio_owned()&&!amoled_relay_direct_owned()&&!atomic_load(&requested)&&!atomic_load(&transfer)&&
   pc_wifi_maintenance_allowed(amoled_usb_ready(),amoled_usb_armed(),amoled_ota_busy(),amoled_relay_connected());
 }
 static bool configure(void *context){
@@ -109,7 +113,7 @@ static void wifi_event(void *unused,esp_event_base_t base,int32_t id,void *data)
  }
 }
 static bool live(unsigned epoch){
- return atomic_load(&generation)==epoch&&atomic_load(&connected)&&!amoled_relay_connected();
+ return atomic_load(&generation)==epoch&&atomic_load(&connected)&&(atomic_load(&transfer)||!amoled_relay_connected());
 }
 static void close_http(esp_http_client_handle_t client){
  if(client){esp_http_client_close(client);esp_http_client_cleanup(client);}
@@ -217,7 +221,7 @@ static void worker(void *unused){
   }
   if(atomic_load(&auto_enabled)&&atomic_load(&connected)&&time(NULL)>=1700000000&&
      esp_timer_get_time()>=auto_check&&!amoled_usb_armed()&&!amoled_ota_busy()&&
-     !amoled_relay_connected()&&!amoled_relay_direct_owned()&&amoled_identity_ready()){
+     !amoled_relay_connected()&&!amoled_relay_audio_owned()&&!amoled_relay_direct_owned()&&amoled_identity_ready()){
    char endpoint[191];xSemaphoreTake(mutex,portMAX_DELAY);memcpy(endpoint,config.endpoint,sizeof(endpoint));xSemaphoreGive(mutex);
    auto_check=esp_timer_get_time()+600000000; /* At most once per five minutes, including failures/STOP. */
    atomic_store(&transfer,true);atomic_store(&stage,1);automatic_download=true;
