@@ -40,6 +40,9 @@ static const char *field(cJSON *o,const char *name){
 bool amoled_wifi_configured(void){return atomic_load(&configured);}
 bool amoled_wifi_connected(void){return atomic_load(&connected);}
 unsigned amoled_wifi_ota_stage(void){return atomic_load(&stage);}
+/* An in-flight Wi-Fi OTA outranks the control session: BLE reconnects mid-transfer
+ * must not starve or abort the upgrade. */
+bool amoled_wifi_transferring(void){return atomic_load(&transfer);}
 void amoled_wifi_cancel(void){
  amoled_plugin_cancel();
  amoled_audio_cancel();
@@ -102,7 +105,7 @@ static void wifi_event(void *unused,esp_event_base_t base,int32_t id,void *data)
  }
 }
 static bool live(unsigned epoch){
- return atomic_load(&generation)==epoch&&atomic_load(&connected)&&!amoled_relay_connected();
+ return atomic_load(&generation)==epoch&&atomic_load(&connected)&&(!amoled_relay_connected()||atomic_load(&transfer));
 }
 static void close_http(esp_http_client_handle_t client){
  if(client){esp_http_client_close(client);esp_http_client_cleanup(client);}

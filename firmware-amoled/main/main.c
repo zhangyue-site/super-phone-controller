@@ -88,7 +88,10 @@ static void process(char *line){
  }else if(!strcmp(op,"remove")){
   int found=-1;for(int i=0;i<cJSON_GetArraySize(plugins);i++)if(!strcmp(str(cJSON_GetArrayItem(plugins,i),"id"),str(o,"id")))found=i;
   if(found<0){status("not-found");goto done;}cJSON *next=cJSON_Duplicate(plugins,true);cJSON_DeleteItemFromArray(next,found);if(!save(next)){cJSON_Delete(next);status("storage-error");goto done;}page=1;refresh=true;status("removed");
- }else if(!strcmp(op,"view")){cJSON *p=cJSON_GetObjectItem(o,"page");if(cJSON_IsNumber(p)&&p->valueint>=0&&p->valueint<=6){page=p->valueint;refresh=true;status("view-changed");}else status("invalid-page");}
+ }else if(!strcmp(op,"view")){cJSON *p=cJSON_GetObjectItem(o,"page");
+  unsigned ota_stage=amoled_wifi_ota_stage();
+  if(ota_stage==2||ota_stage==3){snprintf(notice,sizeof(notice),"固件升级中，请勿断开电源");refresh=true;status("view-deferred");}
+  else if(cJSON_IsNumber(p)&&p->valueint>=0&&p->valueint<=6){page=p->valueint;refresh=true;status("view-changed");}else status("invalid-page");}
  else if(!strcmp(op,"snapshot")){if(refresh){render();refresh=false;}lv_draw_buf_t *buf=lv_snapshot_take(root,LV_COLOR_FORMAT_RGB565);if(!buf){status("snapshot-failed");goto done;}cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","snapshot");cJSON_AddNumberToObject(meta,"width",buf->header.w);cJSON_AddNumberToObject(meta,"height",buf->header.h);cJSON_AddNumberToObject(meta,"stride",buf->header.stride);cJSON_AddNumberToObject(meta,"bytes",buf->header.stride*buf->header.h);reply(meta);amoled_usb_write_bytes(buf->data,buf->header.stride*buf->header.h);lv_draw_buf_destroy(buf);amoled_usb_write("\n");}
  else if(!strcmp(op,"maintenance.restart")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("restarting");vTaskDelay(pdMS_TO_TICKS(100));esp_restart();}
  else if(!strcmp(op,"maintenance.bootloader")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("entering-bootloader");vTaskDelay(pdMS_TO_TICKS(100));if(amoled_usb_enter_bootloader()!=ESP_OK)status("bootloader-failed");}
@@ -221,6 +224,10 @@ void app_main(void){
    if(stage==3&&amoled_audio_result(recognized,sizeof(recognized)))snprintf(text,sizeof(text),"识别文字：%s\n未执行手机任务",recognized);
    bsp_display_lock(-1);if(voice_status_label)lv_label_set_text(voice_status_label,text);bsp_display_unlock();
   }
+  {static unsigned ota_prev=0;unsigned ota_stage=amoled_wifi_ota_stage();
+   if((ota_stage==2||ota_stage==3)&&strcmp(notice,"固件升级中，请勿断开电源")){snprintf(notice,sizeof(notice),"固件升级中，请勿断开电源");notice_ticks=0;refresh=true;}
+   if(ota_prev&&ota_prev<=3&&ota_stage==4){snprintf(notice,sizeof(notice),"升级失败，已恢复原固件，可继续控制");notice_ticks=250;refresh=true;}
+   ota_prev=ota_stage;}
   if(notice_ticks>0&&--notice_ticks==0){notice[0]=0;refresh=true;}
   if(boot_recovery.crashes&&amoled_boot_healthy((uint64_t)esp_timer_get_time()/1000))boot_recovery.crashes=0;
   if(++tick%500==0)ESP_LOGI("amoled","HEALTH heap=%u plugins=%d",(unsigned)esp_get_free_heap_size(),cJSON_GetArraySize(plugins));
