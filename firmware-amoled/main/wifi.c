@@ -14,6 +14,8 @@
 #include <time.h>
 #include "cJSON.h"
 #include "nvs.h"
+#include "esp_app_desc.h"
+#include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
@@ -198,6 +200,37 @@ static void worker(void *unused){
   vTaskDelay(pdMS_TO_TICKS(100));
  }
 }
+
+/* ---- 自动检查：WiFi 在线时静默比对云端版本；仅在版本不同时排队下载 ----
+   6 小时节流；不打断进行中的传输；失败不重试（等下一周期）。
+   只在主循环调用（非 BLE/网络 RPC），保持既有权限边界。 */
+static int64_t auto_last=0;
+void amoled_wifi_auto_check(void){
+ if(!atomic_load(&configured)||!atomic_load(&connected)||atomic_load(&transfer)||atomic_load(&requested))return;
+ int64_t now=esp_timer_get_time();
+ if(auto_last&&now-auto_last<6LL*3600*1000000LL)return;
+ auto_last=now;
+ unsigned epoch=atomic_load(&generation);
+ char endpoint[191];xSemaphoreTake(mutex,portMAX_DELAY);memcpy(endpoint,config.endpoint,sizeof(endpoint));xSemaphoreGive(mutex);
+ int length=0;esp_http_client_handle_t client=open_http(endpoint,"/firmware/manifest",epoch,&length);
+ if(!client){memset(endpoint,0,sizeof(endpoint));return;}
+ char manifest[193]={0};int used=0;int64_t deadline=esp_timer_get_time()+6000000;
+ while(used<length&&live(epoch)&&esp_timer_get_time()<deadline){
+  int count=esp_http_client_read(client,manifest+used,length-used);
+  if(count<=0)break;
+  used+=count;
+ }
+ bool complete=used==length&&esp_http_client_is_complete_data_received(client);
+ close_http(client);memset(endpoint,0,sizeof(endpoint));
+ uint32_t total=0;char sha[65],version[32];
+ if(!complete||!pc_wifi_manifest(manifest,length,&total,sha,version))return;
+ const char *running=esp_app_get_description()->version;
+ if(strcmp(version,running)==0)return;
+ ESP_LOGI("amoled","auto OTA: cloud=%s running=%s",version,running);
+ atomic_store(&requested_epoch,epoch);
+ atomic_store(&requested,true);
+}
+
 esp_err_t amoled_wifi_start(void){
  mutex=xSemaphoreCreateMutex();if(!mutex)return ESP_ERR_NO_MEM;
  nvs_handle_t storage;size_t size=sizeof(config);

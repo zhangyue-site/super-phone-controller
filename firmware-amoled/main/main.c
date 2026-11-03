@@ -231,6 +231,7 @@ void app_main(void){
   if(notice_ticks>0&&--notice_ticks==0){notice[0]=0;refresh=true;}
   if(boot_recovery.crashes&&amoled_boot_healthy((uint64_t)esp_timer_get_time()/1000))boot_recovery.crashes=0;
   if(++tick%500==0)ESP_LOGI("amoled","HEALTH heap=%u plugins=%d",(unsigned)esp_get_free_heap_size(),cJSON_GetArraySize(plugins));
+  if(tick%1500==0)amoled_wifi_auto_check();  /* 30s 一次，内部 6h 节流 */
   vTaskDelay(pdMS_TO_TICKS(20));
  }
 }
