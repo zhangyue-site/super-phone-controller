@@ -6,6 +6,7 @@ import 'package:http/testing.dart';
 import 'package:crypto/crypto.dart';
 import 'package:pcflash/app_ota_client.dart';
 import 'package:pcflash/board_info.dart';
+import 'package:pcflash/firmware_image.dart';
 
 Map<String, dynamic> info(
         {String boot = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -23,6 +24,47 @@ Map<String, dynamic> info(
       'imageState': state
     };
 void main() {
+  test(
+      'only advertised policy permits reinstall and slot confirmation requires a different slot',
+      () {
+    const target = FirmwareImage('0.4.2-amoled', 'sha', 'elf',
+        project: 'phone_controller_amoled');
+    const old = BoardInfo('one', '0.4.2-amoled', 'elf', 'boot', 2);
+    const modern = BoardInfo('one', '0.4.2-amoled', 'elf', 'boot', 2,
+        otaVersionPolicy: 'manual-confirmed-any', runningSlot: 'ota_0');
+    expect(() => old.assertFirmwareAllowed(target), throwsStateError);
+    expect(() => modern.assertFirmwareAllowed(target), returnsNormally);
+    const sameSlot = BoardInfo('one', '0.4.2-amoled', 'elf', 'newboot', 2,
+        runningSlot: 'ota_0');
+    const newSlot = BoardInfo('one', '0.4.2-amoled', 'elf', 'newboot', 2,
+        runningSlot: 'ota_1');
+    expect(sameSlot.confirms(modern, target.version, 'elf'), isFalse);
+    expect(newSlot.confirms(modern, target.version, 'elf'), isTrue);
+  });
+
+  test(
+      'authorization errors show only stage and HTTP guidance, never server secrets',
+      () async {
+    for (final status in [403, 429, 410]) {
+      final client = AppOtaClient(Uri.parse('https://example.test'),
+          client: MockClient(
+              (_) async => http.Response('secret nonce proof ticket', status)));
+      try {
+        await client.authorizeBle('t' * 43, 'one', 'boot', List.filled(32, 1),
+            (_) async => List.filled(32, 2));
+        fail('must reject');
+      } on AppOtaException catch (error) {
+        expect(error.stage, '蓝牙刷写授权');
+        expect(error.statusCode, status);
+        expect(error.toString(), contains('HTTP $status'));
+        expect(error.toString(), isNot(contains('secret')));
+        expect(error.toString(), isNot(contains('nonce')));
+        if (status == 410) expect(error.toString(), contains('重新下载'));
+        if (status == 429) expect(error.toString(), contains('频繁'));
+      }
+    }
+  });
+
   test('boot confirmation requires new boot, correct identity and valid image',
       () {
     final before = BoardInfo.parse(utf8.encode(jsonEncode(info())));

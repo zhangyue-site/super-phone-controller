@@ -124,9 +124,31 @@ class BleOtaService {
   }
 
   String? _otaTicket, _otaDigest;
+  DateTime? _otaExpiresAt;
   void retainOfficialUpgrade(DownloadedFirmware image) {
     _otaTicket = image.ticket;
+    _otaExpiresAt = image.expiresAt;
     _otaDigest = sha256.convert(image.bytes).toString();
+  }
+
+  String? _confirmedDevice, _confirmedBoot, _confirmedVersion, _confirmedSha;
+  DateTime? _confirmedAt;
+  void confirmFirmware(
+      {required String device,
+      required String boot,
+      required String currentVersion,
+      required String sha}) {
+    _confirmedDevice = device;
+    _confirmedBoot = boot;
+    _confirmedVersion = currentVersion;
+    _confirmedSha = sha;
+    _confirmedAt = DateTime.now();
+  }
+
+  void _clearConfirmation() {
+    _confirmedDevice =
+        _confirmedBoot = _confirmedVersion = _confirmedSha = null;
+    _confirmedAt = null;
   }
 
   bool _busy = false;
@@ -148,6 +170,7 @@ class BleOtaService {
 
   /// 连接并发现服务，返回设备的 MTU 与每帧正文大小。
   Future<int> connect(BluetoothDevice device) async {
+    _clearConfirmation();
     final epoch = ++_connectionEpoch;
     _device = device;
     try {
@@ -354,8 +377,21 @@ class BleOtaService {
         throw StateError('当前控制板请使用USB维护通道升级');
       }
       target = FirmwareImage.parse(data, boardModel: before.boardModel);
-      target.assertUpgradeAllowed(before.version);
+      final confirmed = _confirmedDevice == before.device &&
+          _confirmedBoot == before.boot &&
+          _confirmedVersion == before.version &&
+          _confirmedSha == target.sha &&
+          _confirmedAt != null &&
+          DateTime.now().difference(_confirmedAt!) < const Duration(minutes: 2);
+      _clearConfirmation(); // Every attempt consumes consent; never replay it.
+      if (!confirmed) {
+        throw StateError('请先核对当前→目标版本并手动确认刷写；设备或镜像变化后需重新确认');
+      }
+      before.assertFirmwareAllowed(target);
       if (before.otaAuth != null) {
+        if (_otaExpiresAt != null && !DateTime.now().isBefore(_otaExpiresAt!)) {
+          throw StateError('蓝牙刷写授权凭证已过期，请重新下载官方固件并再次确认刷写');
+        }
         if (!const ['hmac-sha256-v1', 'hmac-sha256-image-v2']
                 .contains(before.otaAuth) ||
             _upgradeAuth == null) {
@@ -514,6 +550,7 @@ class BleOtaService {
               ? '控制板暂时无法接收升级数据，本次更新已停止。请保持供电，重新连接蓝牙后再试（蓝牙错误17）。'
               : '传输失败：$e');
     } finally {
+      _clearConfirmation();
       if (!verified) {
         try {
           await ctrl.write([0x04],
@@ -529,6 +566,7 @@ class BleOtaService {
   }
 
   Future<void> cancelPush() async {
+    _clearConfirmation();
     final session = _transfer;
     if (session == null) return;
     session.cancel();
@@ -543,6 +581,7 @@ class BleOtaService {
   }
 
   Future<void> disconnect() async {
+    _clearConfirmation();
     _controlRpc?.close();
     _controlRpc = null;
     ++_connectionEpoch;

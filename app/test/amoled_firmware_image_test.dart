@@ -19,6 +19,18 @@ Uint8List amoledImage() {
 }
 
 void main() {
+  test(
+      'explicit confirmation permits reinstall and downgrade but not unknown version',
+      () {
+    const image = FirmwareImage('0.4.1-amoled', 'sha', 'elf',
+        project: 'phone_controller_amoled');
+    expect(() => image.assertUpgradeAllowed('0.4.1-amoled', confirmed: true),
+        returnsNormally);
+    expect(() => image.assertUpgradeAllowed('0.5.0-amoled', confirmed: true),
+        returnsNormally);
+    expect(() => image.assertUpgradeAllowed('legacy', confirmed: true),
+        throwsStateError);
+  });
   test('AMOLED image accepted only for its explicit connected board target',
       () {
     final target = FirmwareImage.parse(amoledImage(),

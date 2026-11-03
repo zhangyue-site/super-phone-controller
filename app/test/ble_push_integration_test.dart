@@ -1,3 +1,4 @@
+import 'package:crypto/crypto.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,6 +23,7 @@ final class BoardPlatform extends bm.FlutterBluePlusPlatform {
   @override
   Stream<bm.BmDescriptorData> get onDescriptorWritten => descriptors.stream;
   final List<String> events = [];
+  String version = '0.2.1-amoled';
   bm.Guid uuid(int n) =>
       bm.Guid('6f6f7461-2d6f-7461-0000-${n.toString().padLeft(12, '0')}');
   @override
@@ -116,12 +118,13 @@ final class BoardPlatform extends bm.FlutterBluePlusPlatform {
         ? utf8.encode(jsonEncode({
             'protocol': 1,
             'device': 'test-board',
-            'version': '0.2.1-amoled',
+            'version': version,
             'elfSha256': 'a' * 64,
             'boot': 'b' * 32,
             'imageState': 2,
             'boardModel': 'esp32-s3-touch-amoled-2.16',
             'otaSupported': true,
+            'otaVersionPolicy': 'manual-confirmed-any',
             'otaAuth': 'hmac-sha256-image-v2'
           }))
         : List.filled(32, u == uuid(9) ? 1 : 2);
@@ -172,11 +175,54 @@ void main() {
     final bytes = amoledImage();
     helper.retainOfficialUpgrade(
         DownloadedFirmware(bytes, '0.3.0-amoled', ticket: 'ticket'));
+    helper.confirmFirmware(
+        device: 'test-board',
+        boot: 'b' * 32,
+        currentVersion: platform.version,
+        sha: sha256.convert(bytes).toString());
     final result = await helper.push(bytes, chunkSize: 511).toList();
     expect(platform.events,
         ['identity-proof', 'cloud-authorize', 'image-authorization', 'begin']);
     expect(result.last.success, isFalse);
     expect(result.last.log, contains('状态不允许'));
+    platform.version = '0.3.0-amoled';
+    platform.events.clear();
+    helper.retainOfficialUpgrade(
+        DownloadedFirmware(bytes, platform.version, ticket: 'ticket'));
+    final denied = await helper.push(bytes, chunkSize: 511).toList();
+    expect(denied.last.success, isFalse);
+    expect(platform.events, isEmpty);
+    helper.confirmFirmware(
+        device: 'test-board',
+        boot: 'b' * 32,
+        currentVersion: platform.version,
+        sha: sha256.convert(bytes).toString());
+    await helper.push(bytes, chunkSize: 511).toList();
+    expect(platform.events, contains('begin'));
+    platform.events.clear();
+    await helper.push(bytes, chunkSize: 511).toList();
+    expect(platform.events, isEmpty);
+    for (final wrong in ['device', 'boot', 'version', 'sha']) {
+      helper.confirmFirmware(
+          device: wrong == 'device' ? 'another' : 'test-board',
+          boot: wrong == 'boot' ? 'c' * 32 : 'b' * 32,
+          currentVersion:
+              wrong == 'version' ? '0.2.0-amoled' : platform.version,
+          sha: wrong == 'sha' ? '0' * 64 : sha256.convert(bytes).toString());
+      await helper.push(bytes, chunkSize: 511).toList();
+      expect(platform.events, isEmpty, reason: wrong);
+    }
+    helper.retainOfficialUpgrade(DownloadedFirmware(bytes, platform.version,
+        ticket: 'ticket',
+        expiresAt: DateTime.now().subtract(const Duration(seconds: 1))));
+    helper.confirmFirmware(
+        device: 'test-board',
+        boot: 'b' * 32,
+        currentVersion: platform.version,
+        sha: sha256.convert(bytes).toString());
+    final expired = await helper.push(bytes, chunkSize: 511).toList();
+    expect(expired.last.log, contains('凭证已过期'));
+    expect(platform.events, isEmpty);
     await helper.disconnect();
   });
 }

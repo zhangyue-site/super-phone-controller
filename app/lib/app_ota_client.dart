@@ -8,7 +8,26 @@ class DownloadedFirmware {
   final Uint8List bytes;
   final String version;
   final String? ticket;
-  const DownloadedFirmware(this.bytes, this.version, {this.ticket});
+  final DateTime? expiresAt;
+  const DownloadedFirmware(this.bytes, this.version,
+      {this.ticket, this.expiresAt});
+}
+
+class AppOtaException implements Exception {
+  final String stage;
+  final int statusCode;
+  const AppOtaException(this.stage, this.statusCode);
+  @override
+  String toString() {
+    final advice = statusCode == 429
+        ? '请求过于频繁，请稍后手动重试'
+        : statusCode == 401 || statusCode == 410
+            ? '凭证已失效，请重新下载官方固件并再次确认刷写'
+            : statusCode == 403
+                ? '服务拒绝授权；可能是凭证过期或校验未通过。请重新下载官方固件；仍失败请提供此阶段和状态码'
+                : '升级服务暂时不可用，请稍后手动重试';
+    return '$stage失败（HTTP $statusCode）：$advice';
+  }
 }
 
 class AppOtaClient {
@@ -37,7 +56,14 @@ class AppOtaClient {
             body: jsonEncode(body))
         .timeout(const Duration(seconds: 25));
     if (response.statusCode != 200) {
-      throw Exception('升级授权失败或已过期，请重新连接后重试（${response.statusCode}）');
+      throw AppOtaException(
+          const {
+                'challenge': '获取升级挑战',
+                'authorize': '固件下载授权',
+                'ble-authorize': '蓝牙刷写授权'
+              }[path] ??
+              '升级请求',
+          response.statusCode);
     }
     if (response.bodyBytes.length > 4096) {
       throw const FormatException('升级服务响应过大');
@@ -104,6 +130,7 @@ class AppOtaClient {
       'challenge': nonce,
       'proof': proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
     });
+    final grantedAt = DateTime.now();
     final size = grant['size'],
         digest = grant['sha256'],
         version = grant['version'],
@@ -123,7 +150,9 @@ class AppOtaClient {
     request.headers['Authorization'] = 'Bearer $ticket';
     final response =
         await _client.send(request).timeout(const Duration(seconds: 25));
-    if (response.statusCode != 200) throw Exception('固件下载失败，请重试');
+    if (response.statusCode != 200) {
+      throw AppOtaException('固件下载', response.statusCode);
+    }
     if (response.contentLength != null && response.contentLength != size) {
       throw const FormatException('固件下载长度不符');
     }
@@ -139,6 +168,7 @@ class AppOtaClient {
     if (bytes.length != size || sha256.convert(bytes).toString() != digest) {
       throw const FormatException('固件下载不完整或 SHA256 校验失败，请重试');
     }
-    return DownloadedFirmware(bytes, version, ticket: ticket);
+    return DownloadedFirmware(bytes, version,
+        ticket: ticket, expiresAt: grantedAt.add(const Duration(seconds: 300)));
   }
 }

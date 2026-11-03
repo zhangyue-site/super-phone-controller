@@ -287,6 +287,44 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
 
   Future<void> _start() async {
     if (_bytes == null || _info == null || !_connected || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final board = await widget.service.readInfo();
+      if (!mounted) return;
+      if (board == null) throw StateError('未能读取当前版本，请重新连接');
+      final image = FirmwareImage.parse(_bytes!, boardModel: board.boardModel);
+      board.assertFirmwareAllowed(image);
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('确认刷写固件'),
+          content: SingleChildScrollView(
+              child: Text('当前 ${board.version} → 目标 ${image.version}\n\n'
+                  '同版本将重新安装；较低版本将降级，旧版本可能失去重刷、降级等新能力。刷写期间请保持供电和蓝牙连接。\n'
+                  '大小 ${_bytes!.length} 字节\nSHA256 ${image.sha}')),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('确认刷写')),
+          ],
+        ),
+      );
+      if (!mounted || accepted != true || !_connected) return;
+      widget.service.confirmFirmware(
+          device: board.device,
+          boot: board.boot,
+          currentVersion: board.version,
+          sha: image.sha);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+      return;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => PushScreen(
         service: widget.service,

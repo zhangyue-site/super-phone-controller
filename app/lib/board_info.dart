@@ -1,9 +1,10 @@
 import 'dart:convert';
+import 'firmware_image.dart';
 
 class BoardInfo {
   final String device, version, elfSha256, boot;
   final int imageState;
-  final String? otaAuth, boardModel;
+  final String? otaAuth, boardModel, otaVersionPolicy, runningSlot;
   final bool otaSupported;
   const BoardInfo(
     this.device,
@@ -13,6 +14,8 @@ class BoardInfo {
     this.imageState, {
     this.otaAuth,
     this.boardModel,
+    this.otaVersionPolicy,
+    this.runningSlot,
     this.otaSupported = true,
   });
   static BoardInfo parse(List<int> bytes) {
@@ -38,8 +41,22 @@ class BoardInfo {
       obj['imageState'],
       otaAuth: obj['otaAuth'] as String?,
       boardModel: obj['boardModel'] as String?,
+      otaVersionPolicy: obj['otaVersionPolicy'] as String?,
+      runningSlot: obj['runningSlot'] as String?,
       otaSupported: obj['otaSupported'] != false,
     );
+  }
+
+  void assertFirmwareAllowed(FirmwareImage image) {
+    if (otaVersionPolicy == 'manual-confirmed-any') {
+      image.assertUpgradeAllowed(version, confirmed: true);
+      return;
+    }
+    try {
+      image.assertUpgradeAllowed(version);
+    } on StateError {
+      throw StateError('当前控制板不支持同版本重刷或降级，请先升级到0.4.2或更新的支持版本');
+    }
   }
 
   bool confirms(BoardInfo before, String targetVersion, String targetElf) =>
@@ -47,5 +64,7 @@ class BoardInfo {
       boot != before.boot &&
       version == targetVersion &&
       elfSha256 == targetElf &&
-      imageState == 2;
+      imageState == 2 &&
+      (before.runningSlot == null ||
+          (runningSlot != null && runningSlot != before.runningSlot));
 }
