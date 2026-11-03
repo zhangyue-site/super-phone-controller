@@ -44,6 +44,7 @@ static bool live(uint32_t epoch){
 }
 static bool enable_direct(const char *task,unsigned expected){
  if(task){if(strlen(task)!=32)return false;for(unsigned i=0;i<32;i++)if(!((task[i]>='0'&&task[i]<='9')||(task[i]>='a'&&task[i]<='f')))return false;}
+ if(!atomic_load(&started)&&amoled_direct_start()!=ESP_OK)return false;
  SemaphoreHandle_t held_lock=atomic_load(&enable_lock);
  if(!atomic_load(&started)||!held_lock)return false;
  xSemaphoreTake(held_lock,portMAX_DELAY);

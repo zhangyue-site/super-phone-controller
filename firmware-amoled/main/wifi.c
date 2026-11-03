@@ -266,7 +266,6 @@ static esp_err_t runtime_initialize(void){
  esp_sntp_config_t sntp=ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
  if((err=esp_netif_sntp_init(&sntp))!=ESP_OK)return err;
  if(xTaskCreate(worker,"amoled_wifi",8192,NULL,3,NULL)!=pdPASS)return ESP_ERR_NO_MEM;
- if((err=amoled_direct_start())!=ESP_OK)return err;
  runtime_started=true;return ESP_OK;
 }
 

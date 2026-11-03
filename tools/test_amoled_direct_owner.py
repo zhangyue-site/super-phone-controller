@@ -23,6 +23,9 @@ code=r"""
 static int mux,connection=65535;
 static bool active,busy,direct_owner,audio_owner;
 static atomic_bool started=true,enabled,online;
+#define ESP_OK 0
+static bool start_fails;static unsigned starts;
+static int amoled_direct_start(void){starts++;if(start_fails)return -1;atomic_store(&started,true);return 0;}
 static atomic_uint generation=1,permit_epoch;
 typedef void *SemaphoreHandle_t;static _Atomic(SemaphoreHandle_t) enable_lock=(void *)1;static bool mutex_held;
 #define portMAX_DELAY 1
@@ -44,6 +47,7 @@ code+="\n".join(fn(relay,n) for n in ["amoled_relay_direct_acquire","amoled_rela
 code+="\n"+"\n".join(fn(direct,n) for n in ["amoled_direct_cancel","live","enable_direct","amoled_direct_epoch","amoled_direct_enable","amoled_direct_enable_task","amoled_direct_enable_task_epoch","expected_claim"])
 code+=r"""
 int main(void){
+ atomic_store(&started,false);start_fails=true;assert(!amoled_direct_enable()&&!enabled&&starts==1);start_fails=false;
  amoled_usb_gate(true);assert(armed&&!enabled); /* Manual ARM grants no network permit. */
  active=true;assert(!amoled_relay_direct_acquire());assert(!amoled_direct_enable());active=false;
  connection=1;assert(!amoled_relay_direct_acquire());assert(!amoled_direct_enable());connection=65535;
