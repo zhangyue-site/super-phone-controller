@@ -83,7 +83,7 @@ static int access_cb(uint16_t conn,uint16_t attr,struct ble_gatt_access_ctxt *ct
  if(kind==4&&ctxt->op==BLE_GATT_ACCESS_OP_READ_CHR){
   const esp_app_desc_t *app=esp_app_get_description();char sha[65],json[512];amoled_hex(app->app_elf_sha256,32,sha);
   esp_ota_img_states_t image_state=ESP_OTA_IMG_UNDEFINED;esp_ota_get_state_partition(esp_ota_get_running_partition(),&image_state);
-  int n=snprintf(json,sizeof(json),"{\"protocol\":1,\"device\":\"%s\",\"version\":\"%s\",\"elfSha256\":\"%s\",\"boot\":\"%s\",\"imageState\":%d,\"boardModel\":\"esp32-s3-touch-amoled-2.16\",\"usbProfile\":\"composite-fixed-v1\",\"otaSupported\":true,\"otaAuth\":\"hmac-sha256-image-v2\"}",amoled_identity_device(),app->version,sha,amoled_identity_boot(),(int)image_state);
+  int n=snprintf(json,sizeof(json),"{\"protocol\":1,\"device\":\"%s\",\"version\":\"%s\",\"elfSha256\":\"%s\",\"boot\":\"%s\",\"imageState\":%d,\"boardModel\":\"esp32-s3-touch-amoled-2.16\",\"usbProfile\":\"composite-fixed-v1\",\"otaSupported\":true,\"otaAuth\":\"hmac-sha256-image-v2\",\"otaVersionPolicy\":\"manual-confirmed-any\",\"runningSlot\":\"%s\"}",amoled_identity_device(),app->version,sha,amoled_identity_boot(),(int)image_state,esp_ota_get_running_partition()->label);
   return n>0&&n<(int)sizeof(json)&&os_mbuf_append(ctxt->om,json,n)==0?0:BLE_ATT_ERR_INSUFFICIENT_RES;
  }
  if(kind==5){

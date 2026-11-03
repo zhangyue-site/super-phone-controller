@@ -33,6 +33,8 @@ jobs:
           python3 tools/test_amoled_registry.py --output-dir /tmp/amoled-registry-tests
           python3 tools/test_amoled_control.py
           python3 tools/test_amoled_ota.py
+          python3 tools/test_amoled_power.py
+          python3 tools/test_amoled_version_policy.py
           python3 tools/test_amoled_interlock.py
           python3 tools/test_amoled_wifi.py
           python3 tools/test_amoled_wifi_transport.py

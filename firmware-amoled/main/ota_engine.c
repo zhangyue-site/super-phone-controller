@@ -1,16 +1,36 @@
 #include "ota_engine.h"
 #include <string.h>
 #define COMMIT (1u<<31)
-void pc_ota_init(pc_ota *o,pc_ota_hooks h,void *ctx){memset(o,0,sizeof(*o));o->hooks=h;o->ctx=ctx;atomic_init(&o->epoch,1);atomic_init(&o->state,0);atomic_init(&o->error,0);atomic_init(&o->progress,0);atomic_init(&o->reserved,false);atomic_init(&o->grant_until,0);o->worker_epoch=1;}
+void pc_ota_init(pc_ota *o,pc_ota_hooks h,void *ctx){memset(o,0,sizeof(*o));o->hooks=h;o->ctx=ctx;atomic_init(&o->epoch,1);atomic_init(&o->state,0);atomic_init(&o->error,0);atomic_init(&o->progress,0);atomic_init(&o->reserved,false);atomic_init(&o->power_requested,false);atomic_init(&o->power_quiescent,false);atomic_init(&o->grant_until,0);o->worker_epoch=1;}
 unsigned pc_ota_epoch(pc_ota *o){return atomic_load(&o->epoch);}
 unsigned pc_ota_state(pc_ota *o){return atomic_load(&o->state);}
 bool pc_ota_busy(pc_ota *o){return atomic_load(&o->reserved);}
 bool pc_ota_cancel(pc_ota *o){unsigned e=pc_ota_epoch(o);atomic_store(&o->grant_until,0);while(!(e&COMMIT)){if(atomic_compare_exchange_weak(&o->epoch,&e,e+1))return true;}return false;}
 void pc_ota_grant(pc_ota *o,uint64_t now){if(!pc_ota_busy(o))atomic_store(&o->grant_until,now+60000);}
 static void reset(pc_ota *o,unsigned state,unsigned error){if(o->open)o->hooks.abort(o->ctx);o->open=false;o->total=o->written=0;atomic_store(&o->grant_until,0);atomic_store(&o->reserved,false);atomic_store(&o->progress,0);atomic_store(&o->error,error);atomic_store(&o->state,state);}
-void pc_ota_tick(pc_ota *o,uint64_t now){unsigned e=pc_ota_epoch(o);if(e&COMMIT)return;if(e!=o->worker_epoch){reset(o,0,0);o->worker_epoch=e;}else if(o->open&&now-o->last>30000){pc_ota_cancel(o);reset(o,4,1);o->worker_epoch=pc_ota_epoch(o);}}
+void pc_ota_tick(pc_ota *o,uint64_t now){
+ unsigned e=pc_ota_epoch(o);if(e&COMMIT)return;
+ if(e!=o->worker_epoch){reset(o,0,0);o->worker_epoch=e;}
+ else if(o->open&&now-o->last>30000){pc_ota_cancel(o);reset(o,4,1);o->worker_epoch=pc_ota_epoch(o);}
+ /* Only the flash worker publishes quiescence, after abort() returned. */
+ if(atomic_load(&o->power_requested)&&!o->open&&!pc_ota_busy(o))
+  atomic_store(&o->power_quiescent,true);
+}
+bool pc_ota_request_power(pc_ota *o){
+ bool expected=false;
+ if(!atomic_compare_exchange_strong(&o->power_requested,&expected,true))return false;
+ atomic_store(&o->power_quiescent,false);
+ if(pc_ota_cancel(o))return true;
+ atomic_store(&o->power_requested,false);return false;
+}
+bool pc_ota_power_ready(pc_ota *o){
+ return atomic_load(&o->power_requested)&&atomic_load(&o->power_quiescent)&&!pc_ota_busy(o);
+}
+void pc_ota_release_power(pc_ota *o){
+ atomic_store(&o->power_quiescent,false);atomic_store(&o->power_requested,false);
+}
 void pc_ota_process(pc_ota *o,unsigned epoch,const uint8_t *p,size_t n,uint64_t now){
- pc_ota_tick(o,now);if(epoch!=pc_ota_epoch(o)||(epoch&COMMIT)||!n)return;
+ pc_ota_tick(o,now);if(atomic_load(&o->power_requested)||epoch!=pc_ota_epoch(o)||(epoch&COMMIT)||!n)return;
  if(p[0]==4){pc_ota_cancel(o);pc_ota_tick(o,now);return;}
  if(p[0]==1){
   uint64_t until=atomic_exchange(&o->grant_until,0);

@@ -16,7 +16,7 @@ typedef struct {
  pc_ota_hooks hooks;void *ctx;
  atomic_uint epoch,state,error,progress;
  atomic_ullong grant_until;
- atomic_bool reserved;
+ atomic_bool reserved,power_requested,power_quiescent;
  unsigned worker_epoch;uint32_t total,written;uint64_t last;
  uint8_t digest[32];bool open;
 } pc_ota;
@@ -30,3 +30,7 @@ void pc_ota_tick(pc_ota *,uint64_t);
 void pc_ota_process(pc_ota *,unsigned,const uint8_t *,size_t,uint64_t);
 
 bool pc_ota_challenge_valid(uint64_t issued,uint64_t now);
+
+bool pc_ota_request_power(pc_ota *);
+bool pc_ota_power_ready(pc_ota *);
+void pc_ota_release_power(pc_ota *);

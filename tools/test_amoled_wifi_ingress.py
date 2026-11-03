@@ -11,6 +11,7 @@ def fn(name):
  return source[start:end]
 code=r"""
 #include "ota_engine.h"
+#include "version_policy.h"
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
@@ -55,14 +56,14 @@ static void reset(void){
  head=tail=begins=writes=commits=aborts=restarts=0;
 }
 """
-code+="\n".join(fn(n) for n in ["newer","reserve_input","amoled_ota_wifi_live","amoled_ota_wifi_begin","amoled_ota_wifi_chunk"])
+code+="\n".join(fn(n) for n in ["authorized_release_version","reserve_input","amoled_ota_wifi_live","amoled_ota_wifi_begin","amoled_ota_wifi_chunk"])
 code+=r"""
 int main(void){
  uint8_t digest[32]={7},bytes[511]={0};unsigned epoch=0;
  reset();connection=1;assert(!amoled_ota_wifi_begin("0.3.1-amoled",4096,digest,121000,&epoch));assert(!tail&&!pending);
  reset();armed=true;assert(!amoled_ota_wifi_begin("0.3.1-amoled",4096,digest,121000,&epoch));assert(!pending);
  reset();held=true;assert(!amoled_ota_wifi_begin("0.3.1-amoled",4096,digest,121000,&epoch));
- reset();assert(!amoled_ota_wifi_begin("0.3.0-amoled",4096,digest,121000,&epoch));assert(!amoled_ota_wifi_begin("0.3.1-amoled",0x600001,digest,121000,&epoch));
+ reset();assert(amoled_ota_wifi_begin("0.3.0-amoled",4096,digest,121000,&epoch));reset();assert(amoled_ota_wifi_begin("0.2.0-amoled",4096,digest,121000,&epoch));reset();assert(!amoled_ota_wifi_begin("0.3.1-amoled",0x600001,digest,121000,&epoch));
  reset();queue_full=true;assert(!amoled_ota_wifi_begin("0.3.1-amoled",4096,digest,121000,&epoch));assert(!pending);
  reset();assert(amoled_ota_wifi_begin("0.3.1-amoled",4096,digest,121000,&epoch));assert(pending);
  assert(!amoled_ota_wifi_begin("0.3.1-amoled",4096,digest,121000,&epoch));

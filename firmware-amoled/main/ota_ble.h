@@ -18,3 +18,8 @@ extern uint16_t amoled_ota_status_handle;
 bool amoled_ota_wifi_begin(const char *,uint32_t,const uint8_t[32],uint64_t,unsigned *);
 bool amoled_ota_wifi_chunk(unsigned,const uint8_t *,size_t,bool);
 bool amoled_ota_wifi_live(unsigned);
+
+/* Block new transfers, cancel before commit and await actual worker abort. */
+bool amoled_ota_prepare_power(void);
+bool amoled_ota_power_idle(void);
+void amoled_ota_finish_power(void);

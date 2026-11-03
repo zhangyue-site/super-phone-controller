@@ -35,4 +35,13 @@ int main(void){pc_ota o;
  setup(&o);start(&o);fill(&o);expired=true;send(&o,&end,1,112);assert(!commits&&aborts==1);
  setup(&o);start(&o);fill(&o);expire_verify=true;send(&o,&end,1,112);assert(!commits&&aborts==1);
  puts("AMOLED OTA lifecycle: auth expiry, ordered transfer, bounds, hash, cancel, timeout and commit passed");
+
+ setup(&o);start(&o);assert(pc_ota_request_power(&o));assert(!pc_ota_power_ready(&o));
+ send(&o,data,512,120);assert(writes==0&&aborts==1);assert(pc_ota_power_ready(&o));
+ pc_ota_grant(&o,121);send(&o,b,sizeof(b),122);assert(begins==1);
+ pc_ota_release_power(&o);assert(!pc_ota_power_ready(&o));
+ setup(&o);assert(pc_ota_request_power(&o));pc_ota_tick(&o,100);assert(pc_ota_power_ready(&o));
+ pc_ota_grant(&o,100);send(&o,b,sizeof(b),101);assert(begins==0&&!pc_ota_busy(&o));
+ setup(&o);start(&o);fill(&o);send(&o,&end,1,112);assert(!pc_ota_request_power(&o));assert(!pc_ota_power_ready(&o));
+ puts("Power requests block new BEGIN, await worker abort and lose safely to commit");
 }
