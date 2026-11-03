@@ -63,6 +63,7 @@ static char notice[160];
 static bool refresh;
 static int notice_ticks;
 static atomic_int power_request;
+static atomic_int deferred_action; /* LVGL 事件里不做阻塞调用，延迟到主循环执行 */
 static atomic_int pending_power;
 static int64_t power_started;
 static bool shutdown_sent;
@@ -108,6 +109,7 @@ static void process(char *line){
 }
 static lv_obj_t *label(lv_obj_t *parent,const char *text,int x,int y,int w,lv_color_t color){lv_obj_t *o=lv_label_create(parent);lv_label_set_text(o,text);lv_obj_set_pos(o,x,y);lv_obj_set_width(o,w);lv_obj_set_style_text_font(o,&ui_font,0);lv_obj_set_style_text_color(o,color,0);lv_label_set_long_mode(o,LV_LABEL_LONG_WRAP);return o;}
 static void action(lv_event_t *e){if(page==5)amoled_audio_cancel();int a=(int)(intptr_t)lv_event_get_user_data(e);notice[0]=0;power_notice_persistent=false;if((pending_power||atomic_load(&power_request))&&a!=20){snprintf(notice,sizeof(notice),"正在处理电源请求，请稍候");refresh=true;return;}
+ if(atomic_load(&deferred_action)&&(a==23||a==40||a==42)){snprintf(notice,sizeof(notice),"上一操作仍在处理，请稍候");refresh=true;return;}
  if(a>=100&&a<104){selected=a-100;page=2;}
  else if(a==10){page=0;}
  else if(a==11){page=1;}
@@ -120,17 +122,12 @@ static void action(lv_event_t *e){if(page==5)amoled_audio_cancel();int a=(int)(i
  else if(a==52){page=10;}
  else if(a==53||a==54){atomic_store(&power_request,a==53?1:2);}
  else if(a==20){amoled_relay_cancel();snprintf(notice,sizeof(notice),"输入已停止，USB连接保留");}
- else if(a==23){bool ok=amoled_direct_enable();snprintf(notice,sizeof(notice),ok?"本地许可已开启，等待已确认任务":"Wi-Fi未连接或控制板忙，未开启");}
+ else if(a==23){atomic_store(&deferred_action,23);snprintf(notice,sizeof(notice),"正在开启直连，请稍候");}
  else if(a==22){esp_err_t e=amoled_usb_enter_bootloader();snprintf(notice,sizeof(notice),"维护入口错误 0x%x",(unsigned)e);}
  else if(a==21){if(lv_event_get_code(e)==LV_EVENT_LONG_PRESSED){amoled_usb_gate(true);snprintf(notice,sizeof(notice),amoled_usb_armed()?"手动输入已开启":"请先连接USB主机");}else return;}
  else if(a>=30&&a<=38){bool ok=false;if(a<=33)ok=amoled_usb_mouse(a==30?-24:a==31?24:0,a==32?-24:a==33?24:0,false);else if(a==34)ok=amoled_usb_mouse(0,0,true);else ok=amoled_usb_consumer(a==35?0x224:a==36?0x223:a==37?0xe9:0xea);snprintf(notice,sizeof(notice),ok?"已提交USB输入，待观察手机":"输入未开启或USB未就绪");}
- else if(a==40){
-  cJSON *plugin=current(),*runner=cJSON_GetObjectItem(plugin,"runner"),*params=cJSON_GetObjectItem(plugin,"parameters");
-  char *encoded=params?cJSON_PrintUnformatted(params):strdup("{}");
-  bool ok=encoded&&amoled_plugin_prepare(str(runner,"entry"),encoded);free(encoded);
-  if(ok)page=7;else snprintf(notice,sizeof(notice),"插件计划未开启，请检查连接或先停止当前任务");
- }
- else if(a==42){if(!amoled_plugin_confirm())snprintf(notice,sizeof(notice),"本次确认不可用，请重新预览");}
+ else if(a==40){atomic_store(&deferred_action,40);snprintf(notice,sizeof(notice),"正在准备插件计划，请稍候");}
+ else if(a==42){atomic_store(&deferred_action,42);snprintf(notice,sizeof(notice),"正在确认执行，请稍候");}
  else if(a==43){amoled_relay_cancel();}
  else if(a==44){page=2;}
  else if(a==41){cJSON *p=current();if(p){cJSON *next=cJSON_Duplicate(plugins,true);cJSON_DeleteItemFromArray(next,selected);if(save(next))page=1;else{cJSON_Delete(next);snprintf(notice,sizeof(notice),"移除失败，原插件保留");}}}
@@ -250,6 +247,14 @@ void app_main(void){
     snprintf(notice,sizeof(notice),"正在停止输入与升级写入");refresh=true;
    }
   }
+  {int ua=atomic_exchange(&deferred_action,0);
+   if(ua==23){bool ok=amoled_direct_enable();snprintf(notice,sizeof(notice),ok?"本地许可已开启，等待已确认任务":"Wi-Fi未连接或控制板忙，未开启");refresh=true;}
+   else if(ua==40){cJSON *plugin=current(),*runner=plugin?cJSON_GetObjectItem(plugin,"runner"):NULL,*params=plugin?cJSON_GetObjectItem(plugin,"parameters"):NULL;
+    char *encoded=params?cJSON_PrintUnformatted(params):strdup("{}");
+    bool ok=encoded&&amoled_plugin_prepare(str(runner,"entry"),encoded);free(encoded);
+    if(ok)page=7;else snprintf(notice,sizeof(notice),"插件计划未开启，请检查连接或先停止当前任务");
+    refresh=true;}
+   else if(ua==42){if(!amoled_plugin_confirm())snprintf(notice,sizeof(notice),"本次确认不可用，请重新预览");refresh=true;}}
   if(pending_power){
    if(!shutdown_sent&&amoled_ota_power_idle()){
     if(pending_power==1){esp_restart();}
