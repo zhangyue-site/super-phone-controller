@@ -45,7 +45,7 @@ class IOSCaptureContract(unittest.TestCase):
         self.assertIn('private static let recordLimit = 16384', source)
         self.assertIn('recordNames.contains(name)', source)
         self.assertIn('["grant.json", "status.json", "endpoint.json"]', source)
-        self.assertEqual(source.count('data.count <= recordLimit'), 2)
+        self.assertEqual(source.count('data.count <= recordLimit'), 3)
         self.assertIn('SecItemUpdate(', source)
         self.assertIn('SecItemAdd(', source)
         self.assertIn('SecItemDelete(', source)
@@ -53,6 +53,110 @@ class IOSCaptureContract(unittest.TestCase):
         native = (IOS / 'Runner/NativeBridge.swift').read_text()
         self.assertIn('CaptureContract.storageAvailable', native)
         self.assertNotIn('CaptureContract.root', native)
+
+    def test_scene_startup_registers_engine_channels_and_binds_scene_controller(self):
+        manifest = self.plist('Runner/Info.plist')['UIApplicationSceneManifest']
+        self.assertFalse(manifest['UIApplicationSupportsMultipleScenes'])
+        configurations = manifest['UISceneConfigurations']['UIWindowSceneSessionRoleApplication']
+        self.assertEqual(len(configurations), 1)
+        self.assertEqual(configurations[0]['UISceneDelegateClassName'], '$(PRODUCT_MODULE_NAME).SceneDelegate')
+        self.assertEqual(configurations[0]['UISceneStoryboardFile'], 'Main')
+        app = (IOS / 'Runner/AppDelegate.swift').read_text()
+        self.assertIn('FlutterImplicitEngineDelegate', app)
+        self.assertIn('GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)', app)
+        self.assertIn('NativeBridge(messenger: engineBridge.applicationRegistrar.messenger())', app)
+        self.assertNotIn('window?.rootViewController', app)
+        scene = (IOS / 'Runner/SceneDelegate.swift').read_text()
+        self.assertIn('class SceneDelegate: FlutterSceneDelegate', scene)
+        self.assertIn('super.scene(scene, willConnectTo: session, options: connectionOptions)', scene)
+        self.assertIn('connectController(controller)', scene)
+        self.assertIn('disconnectController(controller)', scene)
+        self.assertNotIn('sceneDidEnterBackground', scene)
+        native = (IOS / 'Runner/NativeBridge.swift').read_text()
+        self.assertIn('init(messenger: FlutterBinaryMessenger)', native)
+        self.assertIn('binaryMessenger: messenger', native)
+        self.assertIn('func disconnectController(', native)
+        self.assertIn('modernCapture?.cancel()', native)
+        self.assertIn('scene_unavailable', native)
+        self.assertIn('presenter.present(view, animated: true)', native)
+        project = (IOS / 'Runner.xcodeproj/project.pbxproj').read_text()
+        self.assertIn('SceneDelegate.swift', project)
+
+    def test_renewal_uses_existing_only_store(self):
+        source = (IOS / 'Shared/CaptureContract.swift').read_text()
+        self.assertIn('static func updateExistingGrant(', source)
+        method = source.split('// BEGIN updateExistingGrant', 1)[1].split('// END updateExistingGrant', 1)[0]
+        self.assertIn('SecItemUpdate(', method)
+        self.assertNotIn('SecItemAdd(', method)
+        native = (IOS / 'Runner/NativeBridge.swift').read_text()
+        renewal = native.split('case "renewCapture":', 1)[1].split('case "captureSession"', 1)[0]
+        self.assertIn('CaptureContract.updateExistingGrant(renewed, expectedID: grantID)', renewal)
+        self.assertNotIn('CaptureContract.write("grant.json",renewed)', renewal)
+        self.assertIn('UUID().uuidString', native)
+
+    def test_existing_only_production_method_with_injected_store(self):
+        swift = shutil.which('swift')
+        if swift is None:
+            self.skipTest('standalone Swift runtime absent; no real Keychain calls are made')
+        source = (IOS / 'Shared/CaptureContract.swift').read_text()
+        self.assertIn('// BEGIN updateExistingGrant', source)
+        method = source.split('// BEGIN updateExistingGrant', 1)[1].split('// END updateExistingGrant', 1)[0]
+        fixture = r'''import Foundation
+import CoreFoundation
+typealias OSStatus = Int32
+let errSecSuccess: OSStatus = 0
+let errSecItemNotFound: OSStatus = -25300
+let errSecParam: OSStatus = -50
+let errSecDataTooLarge: OSStatus = -25302
+let kSecValueData = "data"
+let kSecAttrAccessible = "accessible"
+let kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly = "deviceOnly"
+var record: [String:Any]? = ["id":"A", "ticket":"opaque"]
+var clearBeforeUpdate = false
+var updateCalls = 0
+var addCalls = 0
+func SecItemAdd(_ attributes: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
+  addCalls += 1; record = ["id":"A","renewed":true]; return errSecSuccess
+}
+func SecItemUpdate(_ query: CFDictionary, _ attributes: CFDictionary) -> OSStatus {
+  updateCalls += 1
+  if clearBeforeUpdate { record = nil; clearBeforeUpdate = false }
+  guard record != nil else { return errSecItemNotFound }
+  let values = attributes as NSDictionary
+  record = try! JSONSerialization.jsonObject(with:values[kSecValueData] as! Data) as? [String:Any]
+  return errSecSuccess
+}
+enum CaptureContract {
+  static let recordLimit = 16384
+  static func query(_ name:String) -> [String:Any]? { ["account":name] }
+  static func validGrant() -> [String:Any]? { record }
+  static func storageError(_ code:OSStatus) -> NSError { NSError(domain:"test",code:Int(code)) }
+'''
+        checks = r'''
+}
+let renewed: [String:Any] = ["id":"A","ticket":"opaque","until":270]
+try CaptureContract.updateExistingGrant(renewed,expectedID:"A")
+precondition(record?["until"] as? Int == 270 && updateCalls == 1)
+clearBeforeUpdate = true
+var rejected = false
+do { try CaptureContract.updateExistingGrant(renewed,expectedID:"A") } catch { rejected = true }
+precondition(rejected && record == nil && updateCalls == 2 && addCalls == 0)
+record = ["id":"B","ticket":"new"]
+rejected = false
+do { try CaptureContract.updateExistingGrant(renewed,expectedID:"A") } catch { rejected = true }
+precondition(rejected && record?["id"] as? String == "B" && updateCalls == 2)
+record = ["id":"A","ticket":"opaque"]
+rejected = false
+do { try CaptureContract.updateExistingGrant(["id":"B"],expectedID:"A") } catch { rejected = true }
+precondition(rejected && updateCalls == 2)
+print("production method: normal renew, clear-before-update, new UUID, body UUID all passed")
+'''
+        with tempfile.TemporaryDirectory(prefix='renew-existing-') as tmp:
+            script = pathlib.Path(tmp) / 'RenewExisting.swift'
+            script.write_text(fixture + method + checks)
+            run = subprocess.run([swift, str(script)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn('all passed', run.stdout)
 
     def test_usb_snapshot_matches_nullable_dart_contract(self):
         native = (IOS / 'Runner/NativeBridge.swift').read_text()
@@ -66,8 +170,10 @@ class IOSCaptureContract(unittest.TestCase):
         self.assertTrue(host['NSScreenCaptureUsageDescription'])
         self.assertIn('screen-capture', host['UIBackgroundModes'])
         source = (IOS / 'Runner.xcodeproj/project.pbxproj').read_text()
-        self.assertIn('System/Library/Frameworks/ScreenCaptureKit.framework', source)
-        self.assertRegex(source, r'ATTRIBUTES = \(Weak, \)')
+        # Simulator SDK has no SCK framework: link it only for actual iPhoneOS targets.
+        self.assertEqual(source.count('"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) -weak_framework ScreenCaptureKit";'), 3)
+        self.assertNotIn('path = System/Library/Frameworks/ScreenCaptureKit.framework;', source)
+        self.assertNotIn('name = ScreenCaptureKit.framework;', source)
         native = (IOS / 'Runner/NativeBridge.swift').read_text()
         self.assertIn('SCKCaptureSession()', native)
         self.assertIn('CaptureConsentController()', native)

@@ -66,6 +66,23 @@ enum CaptureContract {
     }
     guard status == errSecSuccess else { throw storageError(status) }
   }
+  // BEGIN updateExistingGrant
+  /// A renewal must never recreate a capability removed by STOP or another capture process.
+  static func updateExistingGrant(_ body: [String: Any], expectedID: String) throws {
+    guard !expectedID.isEmpty, body["id"] as? String == expectedID,
+      validGrant()?["id"] as? String == expectedID,
+      let request = query("grant.json") else { throw storageError(errSecItemNotFound) }
+    let data = try JSONSerialization.data(withJSONObject: body)
+    guard data.count <= recordLimit else { throw storageError(errSecDataTooLarge) }
+    let attributes: [String: Any] = [
+      kSecValueData as String: data,
+      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    ]
+    // Delete and update serialize inside Keychain. Missing means revoked, never insert.
+    let status = SecItemUpdate(request as CFDictionary, attributes as CFDictionary)
+    guard status == errSecSuccess else { throw storageError(status) }
+  }
+  // END updateExistingGrant
   static func clearGrant() {
     // Remove task presentation along with the capability; keep only the non-secret endpoint setting.
     for name in ["grant.json", "status.json"] {
