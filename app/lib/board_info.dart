@@ -66,5 +66,6 @@ class BoardInfo {
       elfSha256 == targetElf &&
       imageState == 2 &&
       (before.runningSlot == null ||
-          (runningSlot != null && runningSlot != before.runningSlot));
+          runningSlot == null ||
+          runningSlot != before.runningSlot);
 }

@@ -295,7 +295,7 @@ class BleOtaService {
     return auth.read().timeout(const Duration(seconds: 5));
   }
 
-  Future<void> _confirmReboot(
+  Future<BoardInfo> _confirmReboot(
     BluetoothDevice device,
     BoardInfo before,
     FirmwareImage target,
@@ -315,7 +315,7 @@ class BleOtaService {
         if (session.cancelled) throw StateError('已停止等待启动确认');
         if (current != null &&
             current.confirms(before, target.version, target.elfSha256)) {
-          return;
+          return current;
         }
         if (current != null && current.device != before.device) {
           throw StateError('重连设备身份不符');
@@ -519,13 +519,14 @@ class BleOtaService {
           step: '等待重启确认',
           log: '写入校验通过，等待同一控制板重启并完成自检',
         );
-        await _confirmReboot(device, before, target, session);
+        final restarted = await _confirmReboot(device, before, target, session);
         yield PushProgress(
           percent: 100,
           step: '升级完成',
           done: true,
           success: true,
-          log: '已确认新版本 ${target.version} 启动、自检通过',
+          log: '已确认目标版本 ${target.version} 启动、自检通过'
+              '${before.runningSlot != null && restarted.runningSlot == null ? '；旧固件未提供槽位信息，已按新启动、镜像标识与有效状态核验' : ''}',
         );
       } else {
         yield PushProgress(

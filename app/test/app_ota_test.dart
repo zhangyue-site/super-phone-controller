@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -25,6 +26,119 @@ Map<String, dynamic> info(
     };
 void main() {
   test(
+      'cancel during selected authorization and mismatched grant never fetch image',
+      () async {
+    for (final cancel in [true, false]) {
+      var active = true;
+      final paths = <String>[];
+      final client = AppOtaClient(Uri.parse('https://example.test'),
+          client: MockClient((r) async {
+        paths.add(r.url.path);
+        if (r.url.path.endsWith('challenge')) {
+          return http.Response(jsonEncode({'challenge': 'a' * 64}), 200);
+        }
+        expect(r.headers['Authorization'], isNull);
+        expect(jsonDecode(r.body)['sha256'], 'a' * 64);
+        if (cancel) active = false;
+        return http.Response(
+            jsonEncode({
+              'version': '0.4.1-amoled',
+              'size': 4096,
+              'sha256': 'b' * 64,
+              'ticket': 't' * 43
+            }),
+            200);
+      }));
+      await expectLater(
+          client.download('one', (_) async => List.filled(32, 1),
+              selectedSha: 'a' * 64, isActive: () => active),
+          cancel ? throwsStateError : throwsFormatException);
+      expect(paths, ['/app-ota/challenge', '/app-ota/authorize']);
+    }
+  });
+
+  test('selected immutable release binds new authorization and download',
+      () async {
+    final bytes = Uint8List.fromList(List.filled(4096, 1));
+    final digest = sha256.convert(bytes).toString();
+    final requests = <String>[];
+    final client = AppOtaClient(Uri.parse('https://example.test'),
+        client: MockClient((r) async {
+      requests.add(r.url.path);
+      if (r.url.path.endsWith('releases')) {
+        expect(r.headers['Authorization'], 'Bearer old-ticket');
+        expect(jsonDecode(r.body), {});
+        return http.Response(
+            jsonEncode({
+              'releases': [
+                {
+                  'version': '0.4.2-amoled',
+                  'size': 4096,
+                  'sha256': 'a' * 64,
+                  'current': true
+                },
+                {
+                  'version': '0.4.1-amoled',
+                  'size': 4096,
+                  'sha256': digest,
+                  'current': false
+                }
+              ]
+            }),
+            200);
+      }
+      if (r.url.path.endsWith('challenge')) {
+        return http.Response(jsonEncode({'challenge': 'a' * 64}), 200);
+      }
+      if (r.url.path.endsWith('authorize')) {
+        expect(jsonDecode(r.body)['sha256'], digest);
+        return http.Response(
+            jsonEncode({
+              'version': '0.4.1-amoled',
+              'size': 4096,
+              'sha256': digest,
+              'ticket': 'n' * 43
+            }),
+            200);
+      }
+      expect(r.headers['Authorization'], 'Bearer ${'n' * 43}');
+      return http.Response.bytes(bytes, 200);
+    }));
+    final releases = await client.releases('old-ticket');
+    expect(releases.last.current, isFalse);
+    final result = await client.download('one', (_) async => List.filled(32, 2),
+        selectedSha: releases.last.sha256);
+    expect(result.version, '0.4.1-amoled');
+    expect(requests, [
+      '/app-ota/releases',
+      '/app-ota/challenge',
+      '/app-ota/authorize',
+      '/app-ota/image'
+    ]);
+  });
+  test('cancelled challenge never signs, authorizes or downloads afterwards',
+      () async {
+    final response = Completer<http.Response>();
+    var active = true;
+    var signed = false;
+    final requests = <String>[];
+    final client =
+        AppOtaClient(Uri.parse('https://example.test'), client: MockClient((r) {
+      requests.add(r.url.path);
+      return response.future;
+    }));
+    final future = client.download('one', (_) async {
+      signed = true;
+      return List.filled(32, 2);
+    }, selectedSha: 'a' * 64, isActive: () => active);
+    active = false;
+    response.complete(http.Response(jsonEncode({'challenge': 'a' * 64}), 200));
+    await expectLater(future, throwsStateError);
+    expect(signed, isFalse);
+    expect(requests, ['/app-ota/challenge']);
+  });
+
+  test(
       'only advertised policy permits reinstall and slot confirmation requires a different slot',
       () {
     const target = FirmwareImage('0.4.2-amoled', 'sha', 'elf',
@@ -40,6 +154,8 @@ void main() {
         runningSlot: 'ota_1');
     expect(sameSlot.confirms(modern, target.version, 'elf'), isFalse);
     expect(newSlot.confirms(modern, target.version, 'elf'), isTrue);
+    const noSlot = BoardInfo('one', '0.4.2-amoled', 'elf', 'newboot', 2);
+    expect(noSlot.confirms(modern, target.version, 'elf'), isTrue);
   });
 
   test(
