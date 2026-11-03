@@ -64,6 +64,7 @@ static atomic_int power_request;
 static atomic_int pending_power;
 static int64_t power_started;
 static bool shutdown_sent;
+static bool power_notice_persistent;
 static esp_err_t power_error=ESP_ERR_INVALID_STATE;
 
 static lv_obj_t *root,*link_label;
@@ -101,7 +102,7 @@ static void process(char *line){
  done:cJSON_Delete(o);
 }
 static lv_obj_t *label(lv_obj_t *parent,const char *text,int x,int y,int w,lv_color_t color){lv_obj_t *o=lv_label_create(parent);lv_label_set_text(o,text);lv_obj_set_pos(o,x,y);lv_obj_set_width(o,w);lv_obj_set_style_text_font(o,&ui_font,0);lv_obj_set_style_text_color(o,color,0);lv_label_set_long_mode(o,LV_LABEL_LONG_WRAP);return o;}
-static void action(lv_event_t *e){int a=(int)(intptr_t)lv_event_get_user_data(e);notice[0]=0;if((pending_power||atomic_load(&power_request))&&a!=20){snprintf(notice,sizeof(notice),"正在处理电源请求，请稍候");refresh=true;return;}
+static void action(lv_event_t *e){int a=(int)(intptr_t)lv_event_get_user_data(e);notice[0]=0;power_notice_persistent=false;if((pending_power||atomic_load(&power_request))&&a!=20){snprintf(notice,sizeof(notice),"正在处理电源请求，请稍候");refresh=true;return;}
  if(a>=100&&a<104){selected=a-100;page=2;}
  else if(a==10){page=0;}
  else if(a==11){page=1;}
@@ -162,7 +163,7 @@ static void render(void){
   button("取消",112,386,256,56,50,false);
  }
 
- if(notice[0]){notice_ticks=pending_power?0:100;lv_obj_t *box=lv_obj_create(root);lv_obj_set_pos(box,72,180);lv_obj_set_size(box,336,120);lv_obj_set_style_bg_color(box,lv_color_hex(0x21332f),0);lv_obj_set_style_border_width(box,0,0);label(box,notice,0,0,288,lv_color_hex(0xf5f5f5));}
+ if(notice[0]){notice_ticks=(pending_power||power_notice_persistent)?0:100;lv_obj_t *box=lv_obj_create(root);lv_obj_set_pos(box,72,180);lv_obj_set_size(box,336,120);lv_obj_set_style_bg_color(box,lv_color_hex(0x21332f),0);lv_obj_set_style_border_width(box,0,0);label(box,notice,0,0,288,lv_color_hex(0xf5f5f5));}
  ESP_LOGI("ui","page=%d plugins=%d usb=%d armed=%d",page,cJSON_GetArraySize(plugins),amoled_usb_ready(),amoled_usb_armed());
 }
 void app_main(void){
@@ -209,9 +210,9 @@ void app_main(void){
   int requested=atomic_exchange(&power_request,0);
   if(requested&&!pending_power){
    if(requested==2&&power_error!=ESP_OK){
-    snprintf(notice,sizeof(notice),"电源管理不可用，未关机");refresh=true;
+    power_notice_persistent=true;snprintf(notice,sizeof(notice),"电源管理不可用，未关机");refresh=true;
    }else if(!amoled_ota_prepare_power()){
-    snprintf(notice,sizeof(notice),"正在提交升级，请等待重启后再操作");refresh=true;
+    power_notice_persistent=true;snprintf(notice,sizeof(notice),"正在提交升级，请等待重启后再操作");refresh=true;
    }else{
     amoled_relay_cancel();amoled_usb_gate(false);
     pending_power=requested;power_started=esp_timer_get_time();shutdown_sent=false;
@@ -225,7 +226,7 @@ void app_main(void){
      esp_err_t result=amoled_power_shutdown();
      if(result!=ESP_OK){
       amoled_ota_finish_power();pending_power=0;
-      snprintf(notice,sizeof(notice),"关机请求失败 0x%x",(unsigned)result);refresh=true;
+      power_notice_persistent=true;snprintf(notice,sizeof(notice),"关机请求失败 0x%x",(unsigned)result);refresh=true;
      }else{
       shutdown_sent=true;power_started=esp_timer_get_time();
       snprintf(notice,sizeof(notice),"已请求关机，正在等待电源关闭");refresh=true;
@@ -233,7 +234,7 @@ void app_main(void){
     }
    }else if(esp_timer_get_time()-power_started>10000000){
     amoled_ota_finish_power();pending_power=0;
-    snprintf(notice,sizeof(notice),shutdown_sent?"设备仍未关机，请检查供电或长按PWR":"停止升级写入超时，设备保持运行");
+    power_notice_persistent=true;snprintf(notice,sizeof(notice),shutdown_sent?"设备仍未关机，请检查供电或长按PWR":"停止升级写入超时，设备保持运行");
     refresh=true;
    }
   }
