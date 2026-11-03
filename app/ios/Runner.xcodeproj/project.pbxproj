@@ -25,7 +25,6 @@ CE78B79BDAC225281CE02445 = {isa = PBXBuildFile; fileRef = EBE4ECA53B5B9521033F66
 73A5F5DFD2BD0567A238AE45 = {isa = PBXBuildFile; fileRef = EBE4ECA53B5B9521033F6612; };
 0DE7E2D193D1AE0FBE16487D = {isa = PBXBuildFile; fileRef = 80470285ED2D5BC69F74BB8D; };
 7A2BE379DF0730865042A6B8 = {isa = PBXBuildFile; fileRef = 11D8EF42E5557D7FD1CA56AC; };
-F8EB66166F9B89FC5DB7069F = {isa = PBXBuildFile; fileRef = B9680D3F936C4B671D94C40F; settings = {ATTRIBUTES = (Weak, ); }; };
 BC6D57FA030FAC483B3DB045 = {isa = PBXBuildFile; fileRef = BD6E569C6E403A1078D910C6; };
 6421235B79D8046729871F90 = {isa = PBXBuildFile; fileRef = BD6E569C6E403A1078D910C6; };
 5D291FFEC18DC2A1E62D934F /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1717569E56F4F4280EDF9F4A; };
@@ -80,7 +79,6 @@ A300AB8D497C98F557F69A6E = {isa = PBXFileReference; lastKnownFileType = sourceco
 EBE4ECA53B5B9521033F6612 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shared/CapturePipeline.swift"; sourceTree = SOURCE_ROOT; };
 80470285ED2D5BC69F74BB8D = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Runner/ScreenCaptureSession.swift"; sourceTree = SOURCE_ROOT; };
 11D8EF42E5557D7FD1CA56AC = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Runner/SCKCaptureSession.swift"; sourceTree = SOURCE_ROOT; };
-B9680D3F936C4B671D94C40F = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ScreenCaptureKit.framework; path = System/Library/Frameworks/ScreenCaptureKit.framework; sourceTree = SDKROOT; };
 BD6E569C6E403A1078D910C6 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shared/CapturePreparationFence.swift"; sourceTree = SOURCE_ROOT; };
 1717569E56F4F4280EDF9F4A /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Runner/SceneDelegate.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
@@ -90,7 +88,6 @@ BD6E569C6E403A1078D910C6 = {isa = PBXFileReference; lastKnownFileType = sourceco
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-F8EB66166F9B89FC5DB7069F,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -127,7 +124,6 @@ E2AA269EB967A8853A258BFA = {isa = PBXFrameworksBuildPhase; buildActionMask = 214
 EBE4ECA53B5B9521033F6612,
 80470285ED2D5BC69F74BB8D,
 11D8EF42E5557D7FD1CA56AC,
-B9680D3F936C4B671D94C40F,
 BD6E569C6E403A1078D910C6,
 1717569E56F4F4280EDF9F4A /* SceneDelegate.swift */,
 9740EEB11CF90186004384FC /* Flutter */,
@@ -428,7 +424,8 @@ ALWAYS_SEARCH_USER_PATHS = NO;
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)";
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) -weak_framework ScreenCaptureKit";
+PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)";
 CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
@@ -620,7 +617,8 @@ ALWAYS_SEARCH_USER_PATHS = NO;
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)";
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) -weak_framework ScreenCaptureKit";
+PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)";
 CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
@@ -643,7 +641,8 @@ CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)";
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) -weak_framework ScreenCaptureKit";
+PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)";
 CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";

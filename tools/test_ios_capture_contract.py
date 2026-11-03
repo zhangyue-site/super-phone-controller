@@ -94,8 +94,10 @@ class IOSCaptureContract(unittest.TestCase):
         self.assertTrue(host['NSScreenCaptureUsageDescription'])
         self.assertIn('screen-capture', host['UIBackgroundModes'])
         source = (IOS / 'Runner.xcodeproj/project.pbxproj').read_text()
-        self.assertIn('System/Library/Frameworks/ScreenCaptureKit.framework', source)
-        self.assertRegex(source, r'ATTRIBUTES = \(Weak, \)')
+        # Simulator SDK has no SCK framework: link it only for actual iPhoneOS targets.
+        self.assertEqual(source.count('"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) -weak_framework ScreenCaptureKit";'), 3)
+        self.assertNotIn('path = System/Library/Frameworks/ScreenCaptureKit.framework;', source)
+        self.assertNotIn('name = ScreenCaptureKit.framework;', source)
         native = (IOS / 'Runner/NativeBridge.swift').read_text()
         self.assertIn('SCKCaptureSession()', native)
         self.assertIn('CaptureConsentController()', native)
