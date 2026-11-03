@@ -76,6 +76,7 @@ static void lv_draw_buf_destroy(lv_draw_buf_t *p){}
 /* OTA-priority: view deferencing inside process() needs these stubs. */
 static char notice[160];
 static int notice_ticks;
+static int amoled_wifi_runtime_error(void){return 0;}
 static unsigned amoled_wifi_ota_stage(void){return ota_busy?3u:0u;}
 '''
 code='#include "boot_recovery_policy.h"\n'+shim+'\n'+'\n'.join(re.findall(r'^#define MAX_(?:PLUGINS|JSON) .*$',source,re.M))+'\n'

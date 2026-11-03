@@ -13,3 +13,5 @@ bool amoled_wifi_transferring(void);
 bool amoled_wifi_console(struct cJSON *request);
 
 bool amoled_wifi_endpoint(char *,size_t);
+
+esp_err_t amoled_wifi_runtime_error(void);

@@ -44,6 +44,7 @@ static const char *field(cJSON *o,const char *name){
 }
 bool amoled_wifi_configured(void){return atomic_load(&configured);}
 bool amoled_wifi_connected(void){return atomic_load(&connected);}
+esp_err_t amoled_wifi_runtime_error(void){return runtime_attempted?runtime_error:ESP_OK;}
 unsigned amoled_wifi_ota_stage(void){return atomic_load(&stage);}
 bool amoled_wifi_transferring(void){return atomic_load(&transfer);}
 void amoled_wifi_cancel(void){
@@ -102,6 +103,7 @@ bool amoled_wifi_console(cJSON *o){
  cJSON_AddBoolToObject(response,"wifiConfigured",amoled_wifi_configured());
  cJSON_AddBoolToObject(response,"wifiConnected",amoled_wifi_connected());
  cJSON_AddBoolToObject(response,"autoUpdate",atomic_load(&auto_enabled));
+ cJSON_AddNumberToObject(response,"wifiRuntimeError",amoled_wifi_runtime_error());
  char *text=cJSON_PrintUnformatted(response);cJSON_Delete(response);
  if(text){amoled_usb_write(text);amoled_usb_write("\n");free(text);}
  return true;
