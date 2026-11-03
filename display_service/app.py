@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse,parse_qs
 from . import events,firmware,app_ota,app_screen
 from .conversation import CONVERSATION
-from . import remote_http,app_control,relay_http,local_vision
+from . import remote_http,app_control,relay_http,plugin_workflow,local_vision
 from .audio_stream import EarlyDisconnect,read_chunks,read_chunks_tolerant
 from .model import quota_rows
 from .voice import validate_pcm,recognize
@@ -65,6 +65,7 @@ class Handler(BaseHTTPRequestHandler):
         if remote_http.handle(self,CONFIG):return
         if relay_http.handle(self,CONFIG):return
         if app_control.handle(self,CONFIG):return
+        if plugin_workflow.handle(self,CONFIG):return
         if local_vision.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
@@ -99,6 +100,7 @@ class Handler(BaseHTTPRequestHandler):
         if remote_http.handle(self,CONFIG):return
         if relay_http.handle(self,CONFIG):return
         if app_control.handle(self,CONFIG):return
+        if plugin_workflow.handle(self,CONFIG):return
         if local_vision.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')

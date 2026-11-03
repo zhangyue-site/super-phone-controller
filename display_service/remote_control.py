@@ -4,7 +4,7 @@ from pathlib import Path
 from .wechat_nav import parse_task
 from .general_nav import parse_task as parse_general
 TERMINAL=frozenset(('done','error','stopped','expired','replaced'))
-CHANNELS=frozenset(('openclaw-weixin','telegram','android-app'))
+CHANNELS=frozenset(('openclaw-weixin','telegram','android-app','board-plugin'))
 class RemoteControl:
  def __init__(self,conversation,path=None,clock=time.monotonic,screen_ready=None):
   self.c=conversation;self.path=Path(path or os.environ.get('EPAPER_REMOTE_STATE','/var/lib/phone-controller/remote-state.json'));self.clock=clock
