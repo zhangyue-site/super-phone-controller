@@ -40,3 +40,19 @@ dependencies:
 ## 六、回滚
 
 - 服务端 manifest 改回 `button-v3`（v3 的 ONNX 仍在同目录，sha `f1a6c751…`）即可，无需发版。
+
+## 七、iOS
+
+同一份 `local_vision_client.dart` 在 iOS 直接可用：`onnxruntime_plus` 通过 `onnxruntime-objc`（iOS 11+）
+提供运行时，项目 Podfile 为 iOS 15.0，无需额外改动；构建时 `pod install` 会拉取 framework。
+
+### Core ML（可选，更低延迟）
+
+v5 已转出 Core ML 包（Linux 上 coremltools 9.0 转换成功）：
+
+- 下载：`https://jiujiu.zhangyue.site/models/zy-button-v5-coreml.tgz`（解包为 `best.mlpackage`，6.2MB）
+- ONNX 对照：`https://jiujiu.zhangyue.site/models/zy-button-v5.onnx`（12.6MB，与注册表同源）
+
+接入方式：把 `best.mlpackage` 加入 Runner target，用 Vision/CoreML 直接推理，输出为 320×320
+坐标系的框；后处理与本客户端的 `_nms` 相同（xywh-score → 归一化 → NMS 0.45）。
+如需保持单一实现，可先继续用 onnxruntime_plus，Core ML 作为后续优化项。
