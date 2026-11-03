@@ -16,16 +16,21 @@ code=r"""
 #include <stdatomic.h>
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 #define taskENTER_CRITICAL(p) ((void)(p))
 #define taskEXIT_CRITICAL(p) ((void)(p))
 #define BLE_HS_CONN_HANDLE_NONE 65535
 static int mux,connection=65535;
 static bool active,busy,direct_owner,audio_owner;
 static atomic_bool started=true,enabled,online;
-static atomic_uint generation=1;
+static atomic_uint generation=1,permit_epoch;
+typedef void *SemaphoreHandle_t;static _Atomic(SemaphoreHandle_t) enable_lock=(void *)1;static bool mutex_held;
+#define portMAX_DELAY 1
+static int xSemaphoreTake(void *lock,int wait){(void)lock;(void)wait;assert(!mutex_held);mutex_held=true;return 1;}
+static void xSemaphoreGive(void *lock){(void)lock;assert(mutex_held);mutex_held=false;}
 static atomic_llong action_until;
 static bool identity=true,wifi=true,armed,ota,ota_ready=true,usb=true;
-static int64_t now=1000000;
+static int64_t now=1000000;static char expected_task[33];
 static int64_t esp_timer_get_time(void){return now;}
 static bool amoled_identity_ready(void){return identity;}
 static bool amoled_wifi_connected(void){return wifi;}
@@ -36,7 +41,7 @@ static bool amoled_relay_connected(void){return active||connection!=65535;}
 static void amoled_usb_gate(bool value){armed=value&&usb&&!ota;}
 """
 code+="\n".join(fn(relay,n) for n in ["amoled_relay_direct_acquire","amoled_relay_direct_owned","amoled_relay_direct_release"])
-code+="\n"+"\n".join(fn(direct,n) for n in ["amoled_direct_cancel","live","amoled_direct_enable"])
+code+="\n"+"\n".join(fn(direct,n) for n in ["amoled_direct_cancel","live","enable_direct","amoled_direct_epoch","amoled_direct_enable","amoled_direct_enable_task","amoled_direct_enable_task_epoch","expected_claim"])
 code+=r"""
 int main(void){
  amoled_usb_gate(true);assert(armed&&!enabled); /* Manual ARM grants no network permit. */
@@ -58,6 +63,14 @@ int main(void){
  assert(amoled_direct_enable());assert(amoled_relay_direct_acquire());
  assert(live(atomic_load(&generation)));
  amoled_direct_cancel();amoled_relay_direct_release();
+ assert(!amoled_direct_enable_task("invalid"));
+ assert(amoled_direct_enable_task("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));assert(!strcmp(expected_task,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+ assert(expected_claim("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));assert(!expected_claim("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+ amoled_direct_cancel();amoled_relay_direct_release();
+ unsigned before_stop=amoled_direct_epoch();
+ amoled_direct_cancel(); /* Deterministic STOP just before permission installation. */
+ assert(!amoled_direct_enable_task_epoch("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",before_stop));
+ assert(!armed&&!enabled);
  puts("Production direct owner/consent: BLE/busy isolation, manual ARM separation, expiry and permanent STOP passed");
 }
 """

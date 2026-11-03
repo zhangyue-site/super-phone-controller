@@ -46,6 +46,9 @@ jobs:
           python3 tools/test_amoled_audio_recorder.py
           python3 tools/test_amoled_audio_transport.py --cjson-dir /tmp/amoled-registry-tests
           python3 tools/check_amoled_audio_syntax.py --cjson-dir /tmp/amoled-registry-tests
+          python3 tools/test_amoled_plugin.py --cjson-dir /tmp/amoled-registry-tests
+          python3 tools/test_amoled_plugin_transport.py --cjson-dir /tmp/amoled-registry-tests
+          python3 tools/check_amoled_plugin_syntax.py --cjson-dir /tmp/amoled-registry-tests
           python3 tools/test_amoled_direct_runtime.py --cjson-dir /tmp/amoled-registry-tests
           python3 tools/test_amoled_direct_transport.py --cjson-dir /tmp/amoled-registry-tests
           python3 tools/check_amoled_direct_syntax.py --cjson-dir /tmp/amoled-registry-tests

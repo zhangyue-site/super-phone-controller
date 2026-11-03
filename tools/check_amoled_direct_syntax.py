@@ -17,6 +17,10 @@ typedef int esp_err_t;
 #define pdPASS 1
 #define pdMS_TO_TICKS(n) (n)
 #define HTTP_METHOD_POST 1
+#define portMAX_DELAY 1
+typedef void *SemaphoreHandle_t;
+extern SemaphoreHandle_t xSemaphoreCreateMutex(void);
+extern int xSemaphoreTake(void *,unsigned),xSemaphoreGive(void *);
 typedef void *esp_http_client_handle_t;
 typedef struct {
  const char *url;int timeout_ms,buffer_size;void *crt_bundle_attach;
