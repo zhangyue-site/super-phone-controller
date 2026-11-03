@@ -28,6 +28,7 @@ typedef struct {
  void *crt_bundle_attach;bool disable_auto_redirect,keep_alive_enable;
 } esp_http_client_config_t;
 static atomic_uint generation=1,stage;
+static atomic_bool transfer; /* OTA-priority: live() may outrank relay-connection loss while transferring */
 static atomic_bool connected=true;
 static int status_code=200,content_mode,read_mode,queue_mode;
 static int opened,closed,auth_calls,begins,finishes,cancels,chunks,read_calls;
