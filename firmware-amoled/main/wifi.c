@@ -90,6 +90,7 @@ static bool configure(void *context){
  if(e==ESP_OK&&!clear)e=runtime_start();
  return e==ESP_OK;
 }
+bool amoled_wifi_ota_request(void){return request_ota(NULL);}
 static bool request_ota(void *unused){
  if(!allowed()||!amoled_identity_ready()||!atomic_load(&configured)||!atomic_load(&connected))return false;
  atomic_store(&requested_epoch,atomic_load(&generation));

@@ -20,6 +20,7 @@
 #include "bsp/display.h"
 #include "cJSON.h"
 #include "usb.h"
+#include "tcp_console.h"
 #include "identity.h"
 #include "relay.h"
 #include "ota_ble.h"
@@ -231,6 +232,7 @@ void app_main(void){
  esp_err_t relay_error=ESP_ERR_INVALID_STATE;
  if(amoled_identity_ready()){relay_error=amoled_relay_start();if(relay_error!=ESP_OK)ESP_LOGE("amoled","BLE startup failed: %s",esp_err_to_name(relay_error));}
  esp_err_t wifi_error=amoled_wifi_start();if(wifi_error!=ESP_OK)ESP_LOGE("amoled","Wi-Fi startup unavailable: %s",esp_err_to_name(wifi_error));
+ amoled_tcp_console_start();
  esp_ota_img_states_t image_state=ESP_OTA_IMG_UNDEFINED;esp_ota_get_state_partition(esp_ota_get_running_partition(),&image_state);
  bool boot_pending=image_state==ESP_OTA_IMG_PENDING_VERIFY;
  int64_t healthy_since=esp_timer_get_time();
