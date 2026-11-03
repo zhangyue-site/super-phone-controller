@@ -1,5 +1,7 @@
 name: Build AMOLED firmware
 on:
+  push:
+    branches: ["fix/amoled-ui-deferred-actions-20261103"]
   workflow_dispatch:
     inputs:
       version:
