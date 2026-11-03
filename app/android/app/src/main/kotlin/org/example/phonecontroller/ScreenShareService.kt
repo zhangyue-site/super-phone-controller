@@ -117,6 +117,8 @@ class ScreenShareService: Service() {
  private var initialHeight=0
  private var initialRotation=0
  private var displayManager: DisplayManager?=null
+ private var keepAwake: PowerManager.WakeLock?=null
+ private var originalTimeout: Int=-1
  @Synchronized private fun projectionValid(session: String): Boolean =
   current===this && active && running && projection!=null && usbOwnerSession==session &&
   UsbLaunchBridge.matches(session) && usbOwnerSerial==UsbLaunchBridge.serialFor(session)
@@ -336,6 +338,8 @@ class ScreenShareService: Service() {
   val old=projection;projection=null;old?.stop();worker?.quitSafely();worker=null
   handler?.removeCallbacksAndMessages(null);statusHandler?.removeCallbacksAndMessages(null);statusWorker?.quitSafely();statusWorker=null;statusHandler=null;displayManager?.unregisterDisplayListener(displayListener)
   taskStatus=""
+  keepAwake?.let{if(it.isHeld)it.release()};keepAwake=null
+  if(originalTimeout>=0){try{Settings.System.putInt(contentResolver,Settings.System.SCREEN_OFF_TIMEOUT,originalTimeout)}catch(_: Exception){};originalTimeout=-1}
   val capability=ticket;ticket="";revoke(capability)
   stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy()
  }
