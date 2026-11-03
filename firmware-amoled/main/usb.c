@@ -61,12 +61,12 @@ static bool touch(uint8_t down,uint16_t x,uint16_t y,bool release,bool (*live)(u
 static void release_all(void){uint8_t zero[8]={0};send_report(0,1,zero,5,true,NULL,0);send_report(0,2,zero,2,true,NULL,0);send_report(0,3,zero,8,true,NULL,0);touch(0,0,0,true,NULL,0);}
 bool amoled_usb_reserve_ota(bool (*reserve)(void)){
  if(!input_mutex||xSemaphoreTake(input_mutex,0)!=pdTRUE)return false;
- bool ok=!armed&&reserve();xSemaphoreGive(input_mutex);return ok;
+ bool ok=!armed&&!amoled_relay_audio_owned()&&reserve();xSemaphoreGive(input_mutex);return ok;
 }
 void amoled_usb_gate(bool enable){
  if(enable){
   if(!input_mutex||xSemaphoreTake(input_mutex,0)!=pdTRUE)return;
-  armed=!amoled_ota_busy()&&amoled_usb_ready();xSemaphoreGive(input_mutex);return;
+  armed=!amoled_relay_audio_owned()&&!amoled_ota_busy()&&amoled_usb_ready();xSemaphoreGive(input_mutex);return;
  }
  armed=false;
  if(input_mutex&&xSemaphoreTake(input_mutex,0)==pdTRUE){if(amoled_usb_ready())release_all();xSemaphoreGive(input_mutex);}
@@ -128,4 +128,10 @@ esp_err_t amoled_usb_enter_bootloader(void){
  usb_phy_handle_t download_phy;esp_err_t e=usb_new_phy(&config,&download_phy);if(e!=ESP_OK)return e;
  REG_SET_BIT(RTC_CNTL_OPTION1_REG,RTC_CNTL_FORCE_DOWNLOAD_BOOT);
  esp_restart();return ESP_FAIL;
+}
+
+bool amoled_usb_maintenance(bool (*operation)(void *),void *context){
+ if(!operation||!input_mutex||xSemaphoreTake(input_mutex,0)!=pdTRUE)return false;
+ bool ok=amoled_usb_ready()&&!armed&&!amoled_ota_busy()&&operation(context);
+ xSemaphoreGive(input_mutex);return ok;
 }

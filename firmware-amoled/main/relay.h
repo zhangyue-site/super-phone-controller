@@ -8,3 +8,11 @@ void amoled_relay_cancel(void);
 void amoled_relay_usb_detached(void);
 
 bool amoled_relay_ready(void);
+
+bool amoled_relay_direct_acquire(void);
+bool amoled_relay_direct_owned(void);
+void amoled_relay_direct_release(void);
+
+bool amoled_relay_audio_acquire(void);
+bool amoled_relay_audio_owned(void);
+void amoled_relay_audio_release(void);

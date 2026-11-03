@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from urllib.parse import urlparse,parse_qs
 from . import events,firmware,app_ota,app_screen
 from .conversation import CONVERSATION
-from . import remote_http,app_control,relay_http
+from . import remote_http,app_control,relay_http,plugin_workflow,local_vision
 from .audio_stream import EarlyDisconnect,read_chunks,read_chunks_tolerant
 from .model import quota_rows
 from .voice import validate_pcm,recognize
@@ -65,6 +65,8 @@ class Handler(BaseHTTPRequestHandler):
         if remote_http.handle(self,CONFIG):return
         if relay_http.handle(self,CONFIG):return
         if app_control.handle(self,CONFIG):return
+        if plugin_workflow.handle(self,CONFIG):return
+        if local_vision.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         parsed=urlparse(self.path)
@@ -98,6 +100,8 @@ class Handler(BaseHTTPRequestHandler):
         if remote_http.handle(self,CONFIG):return
         if relay_http.handle(self,CONFIG):return
         if app_control.handle(self,CONFIG):return
+        if plugin_workflow.handle(self,CONFIG):return
+        if local_vision.handle(self,CONFIG):return
         device=self.device()
         if device is None:return self.reply(401,b'{}')
         if self.path=='/firmware/report':
@@ -241,6 +245,9 @@ class Handler(BaseHTTPRequestHandler):
                     if generation!=VOICE_GENERATION.get(device,0):return self.reply(409,b'{}')
                     write_interaction(device,'thinking','语音已上传，正在云端识别')
                 text=recognize(raw)
+                text_result=self.headers.get('X-Voice-Result')=='text-v1' and self.headers.get('X-Voice-Dialogue')!='1'
+                if text_result and (not isinstance(text,str) or not 1<=len(text)<=120 or any(ord(c)<32 or ord(c)==127 for c in text)):
+                    raise ValueError('recognized text bounds')
                 print("VOICE recognized asr_ms=%d text=%s"%((time.monotonic()-received)*1000,json.dumps(text,ensure_ascii=False)),flush=True)
                 with LOCK:
                     if generation!=VOICE_GENERATION.get(device,0):return self.reply(409,b'{}')
@@ -248,6 +255,11 @@ class Handler(BaseHTTPRequestHandler):
                         if sequence<=VOICE_CANCELLED.get(device,{}).get(session,0):raise ValueError('cancelled turn')
                         CONVERSATION.start(device,session,sequence,text,ui_protocol=self.headers.get('X-Voice-UI',''))
                     else:write_interaction(device,'waiting',text+'（仅识别模式）')
+                if text_result:
+                    with LOCK:
+                        if generation!=VOICE_GENERATION.get(device,0) or sequence<=VOICE_CANCELLED.get(device,{}).get(session,0):
+                            return self.reply(409,b'{}')
+                        return self.reply(200,json.dumps(dict(recognized=True,actuatorConnected=False,recognizedText=text,session=session,sequence=sequence),ensure_ascii=False).encode())
                 return self.reply(200,b'{"recognized":true,"actuatorConnected":false}')
             except (ValueError,OSError,TimeoutError,KeyError,RuntimeError,subprocess.SubprocessError) as error:
                 if isinstance(error,(BrokenPipeError,ConnectionResetError)):

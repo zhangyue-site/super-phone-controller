@@ -80,6 +80,7 @@ class Job:
  reply:str=''
  video:bytes=b''
  video_source:str=''
+ video_platform:str=''
  video_barrier:str=field(default_factory=lambda:uuid.uuid4().hex)
  screen_session:str=''
  pointer_protocol:str=''
@@ -176,18 +177,22 @@ class Mailbox:
    j=self.jobs.get(device)
    if j and (session is None or (j.session==session and j.sequence<=sequence)):
     j.cancelled=True;j.audio=b'';j.video=b'';j.event.set()
- def ingest_video(self,device,session,seq,frame_sequence,payload,codec,decoder=None,expected_barrier=None,source='bridge_declared'):
+ def ingest_video(self,device,session,seq,frame_sequence,payload,codec,decoder=None,expected_barrier=None,source='bridge_declared',platform=None):
   from .bridge_video import decode
+  if platform is not None and platform not in ('android','ios'):raise ValueError('capture platform')
   if type(frame_sequence)!=int or not 1<=frame_sequence<=2147483647:raise ValueError('frame sequence')
   with self.lock:
    j=self._job(device,session,seq)
    if j.fenced and expected_barrier!=j.video_barrier:raise ValueError('capture barrier required')
    if expected_barrier is not None and expected_barrier!=j.video_barrier:raise ValueError('capture superseded')
    if j.done or frame_sequence<=j.video_sequence:raise ValueError('stale video')
+   if platform is not None and j.video_platform and j.video_platform!=platform:raise ValueError('capture platform changed')
    j.video_sequence=frame_sequence;j.video=b'';received=self.clock();barrier=j.video_barrier
   jpeg,width,height=(decoder or decode)(payload,codec)
   with self.lock:
    if self._job(device,session,seq) is not j or j.done or j.video_sequence!=frame_sequence or j.video_barrier!=barrier or self.clock()-received>8:raise ValueError('video superseded')
+   if platform is not None and j.video_platform and j.video_platform!=platform:raise ValueError('capture platform changed')
+   j.video_platform=platform or j.video_platform or 'android'
    j.video=jpeg;j.video_source=source;j.video_width=width;j.video_height=height;j.video_received=received;j.touched=self.clock()
    return dict(accepted=True,frame=frame_sequence,width=width,height=height,source='bridge_declared',phone_execution=False)
  def latest_video(self,j,max_age=2):

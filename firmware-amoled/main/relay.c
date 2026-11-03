@@ -2,6 +2,10 @@
 #include "identity.h"
 #include "usb.h"
 #include "ota_ble.h"
+#include "wifi.h"
+#include "direct.h"
+#include "audio.h"
+#include "plugin.h"
 #include "esp_ota_ops.h"
 #include <stdio.h>
 #include <string.h>
@@ -24,7 +28,7 @@ static portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
 static uint16_t connection=BLE_HS_CONN_HANDLE_NONE;
 static uint8_t addr_type,key[32],auth_proof[32];
 static char nonce[33];
-static bool auth_ready,active,started,busy;
+static bool auth_ready,active,started,busy,direct_owner,audio_owner;
 static atomic_bool synced;
 bool amoled_relay_ready(void){return started&&atomic_load(&synced)&&amoled_ota_ready();}
 static atomic_uint epoch=1;
@@ -35,7 +39,7 @@ typedef struct {uint8_t op;uint32_t sequence,epoch;uint16_t a[5];} Work;
 static bool live(uint32_t e){return atomic_load(&epoch)==e&&amoled_relay_connected();}
 bool amoled_relay_connected(void){taskENTER_CRITICAL(&mux);bool v=active&&connection!=BLE_HS_CONN_HANDLE_NONE;taskEXIT_CRITICAL(&mux);return v;}
 bool amoled_relay_online(void){return amoled_relay_connected()&&atomic_load(&relay_until)>esp_timer_get_time();}
-void amoled_relay_cancel(void){taskENTER_CRITICAL(&mux);atomic_fetch_add(&epoch,1);relay_until=0;result=5;taskEXIT_CRITICAL(&mux);amoled_usb_gate(false);amoled_ota_cancel();}
+void amoled_relay_cancel(void){amoled_plugin_cancel();amoled_audio_cancel();amoled_direct_cancel();amoled_wifi_cancel();taskENTER_CRITICAL(&mux);atomic_fetch_add(&epoch,1);relay_until=0;result=5;taskEXIT_CRITICAL(&mux);amoled_usb_gate(false);amoled_ota_cancel();}
 void amoled_relay_usb_detached(void){amoled_relay_cancel();}
 static bool parse(const uint8_t p[48],Work *w){
  if(p[0]!=1||p[1]<1||p[1]>14)return false;
@@ -111,10 +115,25 @@ static void advertise(void);
 static int gap_event(struct ble_gap_event *e,void *arg){
  if(e->type==BLE_GAP_EVENT_CONNECT){
   if(e->connect.status){advertise();return 0;}
+  taskENTER_CRITICAL(&mux);
+  bool occupied=direct_owner||audio_owner;
+  if(!occupied)connection=e->connect.conn_handle;
+  taskEXIT_CRITICAL(&mux);
+  if(occupied){ble_gap_terminate(e->connect.conn_handle,BLE_ERR_REM_USER_CONN_TERM);return 0;}
+  amoled_direct_cancel();amoled_usb_gate(false);
   amoled_ota_connect(e->connect.conn_handle);
   uint8_t random[16],derived[32];char text[33],message[128];esp_fill_random(random,16);amoled_hex(random,16,text);int n=snprintf(message,sizeof(message),"PCBLE1\n%s\n%s",amoled_identity_device(),text);bool ok=amoled_identity_hmac(message,n,derived);
   taskENTER_CRITICAL(&mux);epoch++;connection=e->connect.conn_handle;active=ok;relay_until=0;sequence=operation=result=0;memcpy(nonce,text,33);memcpy(key,derived,32);auth_ready=false;taskEXIT_CRITICAL(&mux);memset(derived,0,32);
- }else if(e->type==BLE_GAP_EVENT_DISCONNECT){amoled_ota_disconnect();taskENTER_CRITICAL(&mux);active=false;connection=BLE_HS_CONN_HANDLE_NONE;auth_ready=false;memset(key,0,32);memset(auth_proof,0,32);taskEXIT_CRITICAL(&mux);amoled_relay_cancel();advertise();}
+ }else if(e->type==BLE_GAP_EVENT_DISCONNECT){
+  /* Rejected or retired connections never own the BLE session. In particular,
+   * disconnecting a newcomer rejected by direct_owner must not revoke Wi-Fi. */
+  taskENTER_CRITICAL(&mux);
+  bool owner=connection!=BLE_HS_CONN_HANDLE_NONE&&connection==e->disconnect.conn.conn_handle;
+  if(owner){active=false;connection=BLE_HS_CONN_HANDLE_NONE;auth_ready=false;memset(key,0,32);memset(auth_proof,0,32);}
+  taskEXIT_CRITICAL(&mux);
+  if(owner){amoled_ota_disconnect();amoled_relay_cancel();}
+  advertise();
+ }
  return 0;
 }
 static void advertise(void){
@@ -137,4 +156,30 @@ esp_err_t amoled_relay_start(void){
  ble_svc_gap_device_name_set("PhoneCtl AMOLED");ble_att_set_preferred_mtu(517);
  if(xTaskCreate(worker,"amoled_relay",6144,NULL,4,NULL)!=pdPASS)return ESP_ERR_NO_MEM;
  started=true;nimble_port_freertos_init(host_task);return ESP_OK;
+}
+
+bool amoled_relay_direct_acquire(void){
+ taskENTER_CRITICAL(&mux);
+ bool allowed=!audio_owner&&!active&&connection==BLE_HS_CONN_HANDLE_NONE&&!busy;
+ if(allowed)direct_owner=true;
+ taskEXIT_CRITICAL(&mux);return allowed;
+}
+bool amoled_relay_direct_owned(void){
+ taskENTER_CRITICAL(&mux);bool owned=direct_owner;taskEXIT_CRITICAL(&mux);return owned;
+}
+void amoled_relay_direct_release(void){
+ taskENTER_CRITICAL(&mux);direct_owner=false;taskEXIT_CRITICAL(&mux);
+}
+
+bool amoled_relay_audio_acquire(void){
+ taskENTER_CRITICAL(&mux);
+ bool allowed=!audio_owner&&!direct_owner&&!active&&connection==BLE_HS_CONN_HANDLE_NONE&&!busy;
+ if(allowed)audio_owner=true;
+ taskEXIT_CRITICAL(&mux);return allowed;
+}
+bool amoled_relay_audio_owned(void){
+ taskENTER_CRITICAL(&mux);bool owned=audio_owner;taskEXIT_CRITICAL(&mux);return owned;
+}
+void amoled_relay_audio_release(void){
+ taskENTER_CRITICAL(&mux);audio_owner=false;taskEXIT_CRITICAL(&mux);
 }

@@ -4,7 +4,7 @@ from pathlib import Path
 from .wechat_nav import parse_task
 from .general_nav import parse_task as parse_general
 TERMINAL=frozenset(('done','error','stopped','expired','replaced'))
-CHANNELS=frozenset(('openclaw-weixin','telegram','android-app'))
+CHANNELS=frozenset(('openclaw-weixin','telegram','android-app','board-plugin'))
 class RemoteControl:
  def __init__(self,conversation,path=None,clock=time.monotonic,screen_ready=None):
   self.c=conversation;self.path=Path(path or os.environ.get('EPAPER_REMOTE_STATE','/var/lib/phone-controller/remote-state.json'));self.clock=clock
@@ -121,10 +121,16 @@ class RemoteControl:
     return {'op':'start','task_id':ident}
    return {'op':'wait'}
  def board_status(self,device,session,sequence):
+  # Capture authority is sampled before mailbox/remote locks, matching claim.
+  has_screen=self.screen_ready(device)
   with self.lock:
    self._sync()
    for ident,r in self.records.items():
     if r['owner'][3]==device and (r.get('session'),r.get('sequence'))==(session,sequence):
+     if r['state']=='running' and not has_screen:
+      self.c.mailbox.cancel(device,session,sequence)
+      r.update(state='error',reply='屏幕共享授权已结束，本次任务已取消。',verified=False)
+      self._save()
      return {'op':'wait' if r['state']=='running' else 'done' if r['state']=='done' else 'cancelled'}
    return {'op':'cancelled'}
  def status(self,owner,ident=None):

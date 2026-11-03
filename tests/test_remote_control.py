@@ -123,4 +123,13 @@ class RemoteTests(unittest.TestCase):
   self.assertEqual(self.r.status(self.wx,ident)['state'],'stopped')
  def test_idle_status_is_readable_on_both_origins(self):
   for owner in (self.wx,self.tg):self.assertEqual(self.r.status(owner)['state'],'idle')
-if __name__=='__main__':unittest.main()
+
+ def test_direct_status_revokes_running_turn_when_capture_expires(self):
+  ident=self.prepare();self.r.confirm(self.wx,ident);self.claim()
+  job=self.c.mailbox.jobs['board'];self.r.screen_ready=lambda _:False
+  self.assertEqual(self.r.board_status('board','a'*16,self.counter)['op'],'cancelled')
+  self.assertTrue(job.cancelled)
+  self.assertEqual(self.r.status(self.wx,ident)['state'],'error')
+
+
+if __name__=="__main__":unittest.main()

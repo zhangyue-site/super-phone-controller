@@ -1,4 +1,5 @@
 name: Build Flutter app
+run-name: ${{ inputs.release_id || 'Manual app build' }}
 
 on:
   workflow_dispatch:
@@ -9,6 +10,19 @@ on:
         default: android
         type: choice
         options: [android, ios, both]
+
+      build_name:
+        description: 'Optional marketing version'
+        type: string
+        default: ''
+      build_number:
+        description: 'Optional build number'
+        type: string
+        default: ''
+      release_id:
+        description: 'Private coordinator correlation ID (no secrets)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -95,49 +109,91 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: controller-private-build
+          retention-days: 7
           path: ${{ runner.temp }}/controller-private-build.7z
           if-no-files-found: error
 
   ios:
-    # macOS runner 按 10 倍计费：跑 1 分钟扣 10 分钟额度。
-    # 因此只在显式选择 ios 时构建，绝不挂在 push 上。
+    # Public repository + standard GitHub macOS runner: free build minutes.
+    # Dispatch remains explicit to avoid unnecessary builds.
     if: ${{ inputs.platform == 'ios' || inputs.platform == 'both' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: app
     steps:
       - uses: actions/checkout@v4
-
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.44.0'
           channel: stable
           cache: true
-
-      - name: Resolve dependencies
-        run: flutter pub get
-
-      - name: Pod install
+      - name: Resolve iOS dependencies
         run: |
-          cd ios
-          pod install --repo-update
-
-      - name: Build unsigned iOS app
+          flutter config --no-enable-swift-package-manager
+          flutter pub get
+      - name: Validate source and app
         run: |
-          # 不签名只出 .app，用于验证真机可编译。要装到手机需在本地
-          # 用开发者证书重签，或配好 provisioning profile 后改 --export-method。
-          flutter build ios --release --no-codesign
-
-      - name: Package
+          python3 ../tools/check_public_source.py
+          python3 -m unittest discover -s ../tools -p test_ios_capture_contract.py
+          flutter analyze
+          flutter test --dart-define=CONTROLLER_BASE_URL=https://controller.test
+      - name: Verify iOS 27 cold launch and native bridges
+        timeout-minutes: 15
         run: |
+          set -euo pipefail
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/ios-simulators.json"
+          SIMULATOR_ID=$(python3 -c 'import json,os; d=json.load(open(os.environ["RUNNER_TEMP"]+"/ios-simulators.json")); candidates=[x for runtime,items in d["devices"].items() if "iOS-27" in runtime for x in items if x.get("isAvailable") and "iPhone" in x["name"]]; assert candidates,"iOS27 simulator required"; print(candidates[0]["udid"])')
+          xcrun simctl boot "$SIMULATOR_ID"
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
+          flutter test integration_test/startup_test.dart -d "$SIMULATOR_ID" --no-pub --dart-define=CONTROLLER_BASE_URL=https://controller.test
+          xcrun simctl terminate "$SIMULATOR_ID" org.example.phonecontroller || true
+          xcrun simctl shutdown "$SIMULATOR_ID"
+      - name: Build unsigned device app
+        env:
+          CONTROLLER_BASE_URL: ${{ secrets.CONTROLLER_BASE_URL }}
+          PRIVATE_ARTIFACT_PASSWORD: ${{ secrets.PRIVATE_ARTIFACT_PASSWORD }}
+          BUILD_NAME: ${{ inputs.build_name }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_ARTIFACT_PASSWORD"
+          export CONTROLLER_APPLICATION_ID=org.example.phonecontroller
+          export CONTROLLER_RUNTIME_CONFIG="$RUNNER_TEMP/controller-ios-runtime.json"
+          trap 'rm -f "$CONTROLLER_RUNTIME_CONFIG"' EXIT
+          python3 ../tools/prepare_app_config.py --output "$CONTROLLER_RUNTIME_CONFIG"
+          args=(--release --no-codesign --dart-define-from-file="$CONTROLLER_RUNTIME_CONFIG")
+          if [[ -n "$BUILD_NAME" ]]; then
+            [[ "$BUILD_NAME" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]
+            args+=(--build-name="$BUILD_NAME")
+          fi
+          if [[ -n "$BUILD_NUMBER" ]]; then
+            [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]
+            args+=(--build-number="$BUILD_NUMBER")
+          fi
+          flutter build ios "${args[@]}"
+          if grep -q 'DKImagePickerController' ios/Podfile.lock; then
+            echo 'Unexpected photo-library dependency in firmware document picker' >&2
+            exit 1
+          fi
+          test -d build/ios/iphoneos/Runner.app/PlugIns/ScreenBroadcast.appex
+          xcrun nm -gjU build/ios/iphoneos/Runner.app/Runner | grep -Fx _OrtGetApiBase
+      - name: Package private unsigned IPA
+        env:
+          PRIVATE_ARTIFACT_PASSWORD: ${{ secrets.PRIVATE_ARTIFACT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          command -v 7zz >/dev/null || brew install sevenzip
           cd build/ios/iphoneos
           mkdir -p Payload
           cp -R Runner.app Payload/
-          zip -qry "$GITHUB_WORKSPACE/pcflash-ios.ipa" Payload
-
+          zip -qry "$RUNNER_TEMP/controller-unsigned.ipa" Payload
+          7zz a -t7z -mhe=on -p"$PRIVATE_ARTIFACT_PASSWORD" "$RUNNER_TEMP/controller-ios-private-build.7z" "$RUNNER_TEMP/controller-unsigned.ipa" >/dev/null
+          rm -f "$RUNNER_TEMP/controller-unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: pcflash-ios
-          path: pcflash-ios.ipa
+          name: controller-ios-private-build
+          path: ${{ runner.temp }}/controller-ios-private-build.7z
           if-no-files-found: error
+          retention-days: 7

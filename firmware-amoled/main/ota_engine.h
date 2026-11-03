@@ -10,6 +10,7 @@ typedef struct {
  bool (*commit)(void *);
  void (*abort)(void *);
  void (*restart)(void *);
+ bool (*commit_allowed)(void *); /* Optional absolute transfer budget, rechecked after verify. */
 } pc_ota_hooks;
 typedef struct {
  pc_ota_hooks hooks;void *ctx;
