@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
-set(PROJECT_VER 0.6.5-amoled)
+if(NOT DEFINED PROJECT_VER)
+set(PROJECT_VER 0.6.6-amoled)
+endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(phone_controller_amoled)

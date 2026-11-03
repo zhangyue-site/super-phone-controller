@@ -1,0 +1,95 @@
+name: Build AMOLED firmware
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '固件版本号（留空则用 0.6.6-amoled-ci+run号）'
+        required: false
+        type: string
+concurrency:
+  group: esp-amoled-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  # firmware-amoled 的 idf_component.yml 声明 idf>=5.5；sdkconfig.defaults 生成于 5.4 时代，5.5 兼容
+  IDF_IMAGE: espressif/idf:v5.5
+  FIRMWARE_DIR: firmware-amoled
+  PROJECT_NAME: phone_controller_amoled
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute firmware version
+        id: ver
+        run: |
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then V="0.6.6-amoled-ci${{ github.run_number }}"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Firmware version: $V"
+
+      - name: Build in official image
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          docker run --rm \
+            -v "$PWD/$FIRMWARE_DIR:/project" \
+            -e VERSION \
+            -w /project \
+            "$IDF_IMAGE" \
+            bash -c '
+              set -e
+              . $IDF_PATH/export.sh
+              idf.py -DIDF_TARGET=esp32s3 -DPROJECT_VER="$VERSION" -B build build
+            '
+
+      - name: Verify version is embedded
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          ACTUAL=$(python3 - "$FIRMWARE_DIR/build/$PROJECT_NAME.bin" "$VERSION" <<'PY'
+          import sys
+          blob = open(sys.argv[1], "rb").read(65536)
+          want = sys.argv[2].encode()
+          idx = blob.find(want)
+          if idx < 0:
+              print("NOT_FOUND")
+          else:
+              end = blob.find(b"\x00", idx)
+              print(blob[idx:end].decode("utf-8", "replace"))
+          PY
+          )
+          echo "embedded version: $ACTUAL (expected: $VERSION)"
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "::error::firmware version mismatch: got '$ACTUAL', expected '$VERSION'. OTA will never trigger."
+            exit 1
+          fi
+
+      - name: Collect artifacts
+        run: |
+          set -e
+          D="$FIRMWARE_DIR/build"
+          mkdir -p out
+          cp "$D/$PROJECT_NAME.bin"     out/app.bin
+          cp "$D/bootloader/bootloader.bin" out/bootloader.bin
+          cp "$D/partition_table/partition-table.bin" out/partition-table.bin
+          cp "$D/ota_data_initial.bin"  out/ota_data_initial.bin 2>/dev/null || true
+          cd out && sha256sum *.bin | tee SHA256SUMS
+          ls -la
+
+      - name: Verify OTA slot capacity
+        run: |
+          # AMOLED 分区表 ota_0/ota_1 各 0x600000 = 6291456 字节
+          SZ=$(stat -c%s out/app.bin)
+          echo "app.bin = $SZ bytes, OTA slot limit = 6291456"
+          test "$SZ" -lt 6291456 || { echo "::error::firmware exceeds OTA slot size"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amoled-firmware-${{ github.run_number }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
