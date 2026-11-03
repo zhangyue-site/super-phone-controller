@@ -24,6 +24,7 @@
 #include "relay.h"
 #include "ota_ble.h"
 #include "wifi.h"
+#include "keys.h"
 #include "direct.h"
 #include "power.h"
 #include "audio.h"
@@ -222,6 +223,7 @@ void app_main(void){
  }
  boot_recovery.stage=4;
  power_error=amoled_power_init();if(power_error!=ESP_OK)ESP_LOGW("power","PMIC initialization failed: %s",esp_err_to_name(power_error));
+ amoled_keys_start();
  bsp_display_lock(-1);root=lv_screen_active();lv_indev_t *in=NULL;while((in=lv_indev_get_next(in)))lv_indev_set_long_press_time(in,2000);render();bsp_display_unlock();
  snprintf(notice,sizeof(notice),"正在启动USB");bsp_display_lock(-1);render();bsp_display_unlock();
  boot_recovery.stage=5;
@@ -295,6 +297,16 @@ void app_main(void){
    ota_prev=ota_stage;}
   if(notice_ticks>0&&--notice_ticks==0){notice[0]=0;refresh=true;}
   if(boot_recovery.crashes&&amoled_boot_healthy((uint64_t)esp_timer_get_time()/1000))boot_recovery.crashes=0;
+  {int key_event=amoled_keys_poll();
+   if(key_event){bsp_display_lock(-1);
+    if(key_event==1){page=(page+1)%7;notice[0]=0;refresh=true;}
+    else if(key_event==2){page=0;notice[0]=0;refresh=true;}
+    else if(key_event==3){
+     if(amoled_wifi_ota_request_now())snprintf(notice,sizeof(notice),"正在检查固件更新…");
+     else snprintf(notice,sizeof(notice),"Wi-Fi 未连接，无法升级");
+     notice_ticks=120;refresh=true;}
+    else if(key_event==4){snprintf(notice,sizeof(notice),"正在重启…");refresh=true;bsp_display_unlock();vTaskDelay(pdMS_TO_TICKS(150));esp_restart();}
+    bsp_display_unlock();}}
   if(++tick%500==0)ESP_LOGI("amoled","HEALTH heap=%u plugins=%d",(unsigned)esp_get_free_heap_size(),cJSON_GetArraySize(plugins));
   vTaskDelay(pdMS_TO_TICKS(20));
  }

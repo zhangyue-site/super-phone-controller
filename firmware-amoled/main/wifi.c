@@ -239,6 +239,15 @@ static void worker(void *unused){
   vTaskDelay(pdMS_TO_TICKS(100));
  }
 }
+
+/* 手动触发一次升级检查（物理按键用）。已配置且在线才排队，否则返回 false。 */
+bool amoled_wifi_ota_request_now(void){
+ if(!atomic_load(&configured)||!atomic_load(&connected)||atomic_load(&transfer)||atomic_load(&requested))return false;
+ atomic_store(&requested_epoch,atomic_load(&generation));
+ atomic_store(&requested,true);
+ return true;
+}
+
 esp_err_t amoled_wifi_start(void){
  mutex=xSemaphoreCreateMutex();if(!mutex)return ESP_ERR_NO_MEM;
  nvs_handle_t storage;size_t size=sizeof(config);

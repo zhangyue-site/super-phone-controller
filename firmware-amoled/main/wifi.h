@@ -19,3 +19,4 @@ esp_err_t amoled_wifi_runtime_error(void);
 unsigned amoled_wifi_received(void);
 unsigned amoled_wifi_total(void);
 bool amoled_wifi_auto_update(void);
+bool amoled_wifi_ota_request_now(void);
