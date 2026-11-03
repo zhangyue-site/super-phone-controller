@@ -14,6 +14,7 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
+import android.provider.Settings
 import java.io.ByteArrayOutputStream
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
@@ -292,6 +293,9 @@ class ScreenShareService: Service() {
    displayManager!!.registerDisplayListener(displayListener,handler)
    reader=ImageReader.newInstance(width,height,PixelFormat.RGBA_8888,2)
    until=SystemClock.elapsedRealtime()+270000L;recovery.start();running=true;current=this;taskStatus="";statusHandler!!.post(poll);status="共享中，等待语音任务"
+   keepAwake=(getSystemService(POWER_SERVICE) as PowerManager).newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ON_AFTER_RELEASE,"pcflash:ScreenShareKeepAwake")
+   keepAwake!!.setReferenceCounted(false);keepAwake!!.acquire()
+   if(Settings.System.canWrite(this)){try{originalTimeout=Settings.System.getInt(contentResolver,Settings.System.SCREEN_OFF_TIMEOUT);Settings.System.putInt(contentResolver,Settings.System.SCREEN_OFF_TIMEOUT,maxOf(originalTimeout,1800000))}catch(_: Exception){originalTimeout=-1}}
    reader!!.setOnImageAvailableListener({ source ->
     val image=source.acquireLatestImage() ?: return@setOnImageAvailableListener
     var bitmap: Bitmap?=null
