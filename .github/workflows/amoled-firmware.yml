@@ -36,6 +36,7 @@ jobs:
           python3 tools/test_amoled_power.py
           python3 tools/test_amoled_version_policy.py
           python3 tools/test_amoled_interlock.py
+          python3 tools/test_amoled_wifi_nvs.py
           python3 tools/test_amoled_wifi_worker.py
           python3 tools/test_amoled_wifi.py
           python3 tools/test_amoled_wifi_transport.py

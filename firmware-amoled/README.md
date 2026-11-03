@@ -142,3 +142,9 @@ and real status/STOP. Missing private configuration refuses to run. It does not
 implement phone BLE import, arbitrary scripts or financial/message workflows.
 See [candidate evidence and remaining acceptance](../docs/amoled/2026-11-03-plugin-execution-candidate.md).
 No successful physical operation or deployed firmware is implied by this source.
+
+## Opt-in automatic Wi-Fi updates
+
+Private USB provisioning accepts a primary SSID/password and backupSsid/backupPassword, an HTTPS endpoint and an explicit autoUpdate boolean. Credentials stay in device NVS and must never be committed or printed. Existing single-network NVS configurations remain supported. Disconnected boards rotate between the two saved networks.
+
+When enabled, idle boards check after one minute at startup, then at five-minute intervals. Only a higher valid AMOLED version is installed automatically; explicit maintenance can reinstall. Active HID, BLE, audio and direct-control sessions defer automatic checks. Transfers retain TLS, device authentication, digest/project/slot verification, a ten-minute overall budget and existing stalled-writer protection. Retry cooldown begins after an attempt finishes. USB, BLE and display startup health plus configured Wi-Fi initialization must pass before confirming a new slot.
