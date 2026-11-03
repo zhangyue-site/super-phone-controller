@@ -175,7 +175,7 @@ static void download(const char *endpoint,unsigned epoch){
  if(!ok){if(begun)amoled_ota_cancel();atomic_store(&stage,4);}
 }
 static void worker(void *unused){
- unsigned seen=0,profile=0;int64_t retry=0,auto_check=esp_timer_get_time()+30000000;
+ unsigned seen=0,profile=0;int64_t retry=0,auto_check=esp_timer_get_time()+60000000;
  for(;;){
   unsigned next=atomic_load(&config_generation);
   if(seen!=next){
@@ -219,7 +219,7 @@ static void worker(void *unused){
      esp_timer_get_time()>=auto_check&&!amoled_usb_armed()&&!amoled_ota_busy()&&
      !amoled_relay_connected()&&!amoled_relay_direct_owned()&&amoled_identity_ready()){
    char endpoint[191];xSemaphoreTake(mutex,portMAX_DELAY);memcpy(endpoint,config.endpoint,sizeof(endpoint));xSemaphoreGive(mutex);
-   auto_check=esp_timer_get_time()+300000000; /* At most once per five minutes, including failures/STOP. */
+   auto_check=esp_timer_get_time()+600000000; /* At most once per five minutes, including failures/STOP. */
    atomic_store(&transfer,true);atomic_store(&stage,1);automatic_download=true;
    download(endpoint,atomic_load(&generation));
    automatic_download=false;atomic_store(&transfer,false);memset(endpoint,0,sizeof(endpoint));
