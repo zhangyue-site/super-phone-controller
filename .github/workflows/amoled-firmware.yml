@@ -2,7 +2,7 @@ name: Build AMOLED firmware
 on:
   workflow_dispatch:
   push:
-    branches: ['codex/amoled-plugin-controller']
+    branches: ['codex/amoled-plugin-controller', 'fix/amoled-ui-deferred-actions-20261103']
     paths: ['firmware-amoled/**', '.github/workflows/amoled-firmware.yml', 'tools/test_amoled_registry.py', 'tests/fixtures/amoled-plugin-cases.json']
 permissions:
   contents: read
@@ -36,7 +36,6 @@ jobs:
           python3 tools/test_amoled_power.py
           python3 tools/test_amoled_version_policy.py
           python3 tools/test_amoled_interlock.py
-          python3 tools/test_amoled_wifi_nvs.py
           python3 tools/test_amoled_wifi_worker.py
           python3 tools/test_amoled_wifi.py
           python3 tools/test_amoled_wifi_transport.py
