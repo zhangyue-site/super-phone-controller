@@ -44,6 +44,9 @@ static bool command_transport_broken=false;
 static AdbCommand queued_command;
 static uint32_t command_ticket;
 static char *command_expected,*command_output;
+// command_output holds 786433 bytes of SPIRAM; screencap needs ~533 KB of that
+// for a 393216 byte PNG (base64 + header), text injection never comes close.
+static constexpr unsigned command_capacity=786432;
 static bool execute_queued(unsigned char *data);
 
 static unsigned active_epoch;
@@ -137,7 +140,11 @@ static bool shell_probe(unsigned char *data){
  }
  return false;
 }
-// ADB is restricted to the approved ADB Keyboard text injection. It cannot observe UI, capture screenshots, launch apps, or synthesize touch input.
+// Allowed ADB ops stay inside the single gated tunnel (AdbGate ticket + one
+// in-flight command). type_text injects through ADB Keyboard; screencap reads a
+// screenshot into this reply buffer; tap/swipe synthesize touch; exec only runs
+// the adb_command.h whitelist (screencap/input/wm/settings get/dumpsys window).
+// Nothing here can launch apps, install packages, push files or start a server.
 static bool shell_command(const char *command,char *out,unsigned capacity,unsigned char *data){
  char service[4096];int n=snprintf(service,sizeof(service),"shell:%s; echo __PC_EXIT_$?__",command);
  if(n<=0||n>=(int)sizeof(service))return false;
@@ -170,9 +177,19 @@ static bool execute_queued(unsigned char *data){
  command_transport_broken=false;
  if(!live()||!command_output){command_error="adb_unavailable";return false;}
  command_output[0]=0;
- if(queued_command.op!=AdbOp::TYPE_TEXT){command_error="invalid_command";return false;}
+ // adb_command() is the only place that renders a shell line; it validates the
+ // op payload first, so an unknown or malformed op never reaches adbd.
  char command[4096];if(!adb_command(queued_command,command,sizeof(command))){command_error="invalid_command";return false;}
- bool ok=shell_command(command,command_output,48001,data);if(!ok)command_error="input_failed";return ok;
+ bool ok=shell_command(command,command_output,command_capacity,data);
+ if(!ok){
+  command_error="input_failed";
+  // screencap signals its own failures so the caller can report them verbatim.
+  if(queued_command.op==AdbOp::SCREENCAP){
+   if(strstr(command_output,"__PC_SHOT_TOO_LARGE__")||strstr(command_output,"__PC_EXIT_52__"))command_error="screenshot_too_large";
+   else if(strstr(command_output,"__PC_EXIT_50__")||strstr(command_output,"__PC_EXIT_51__"))command_error="screencap_failed";
+  }
+ }
+ return ok;
 }
 bool controller_adb_execute(const AdbCommand &command,const char *expected,char *out,unsigned capacity,uint32_t ticket,const char **error){
  auto fail=[&](const char *reason){if(error)*error=reason;return false;};
@@ -181,7 +198,12 @@ bool controller_adb_execute(const AdbCommand &command,const char *expected,char 
  if(xSemaphoreTake(command_mutex,pdMS_TO_TICKS(100))!=pdTRUE)return fail("busy");
  if(command_state!=0||controller_adb_stage()!=3){xSemaphoreGive(command_mutex);return fail("adb_unavailable");}
  size_t size=expected?strlen(expected):0;
- if(command.op!=AdbOp::TYPE_TEXT||size!=0){xSemaphoreGive(command_mutex);return fail("invalid_command");}
+ // Every op replies with free form stdout; a non-empty expected marker is only
+ // meaningful for the legacy type_text path and is rejected everywhere else.
+ if(size!=0){xSemaphoreGive(command_mutex);return fail("invalid_command");}
+ // Refuse a screenshot before touching the tunnel when the caller buffer cannot
+ // hold the worst case base64 payload.
+ if(command.op==AdbOp::SCREENCAP&&capacity<adb_screencap_capacity){xSemaphoreGive(command_mutex);return fail("buffer_too_small");}
  command_expected[0]=0;command_output[0]=0;queued_command=command;command_ticket=ticket;command_ok=false;command_error="";command_state=1;
  // The storage belongs to this module, so cancellation cannot leave a stack pointer queued.
  while(command_state==1&&gate.active(ticket))vTaskDelay(pdMS_TO_TICKS(20));

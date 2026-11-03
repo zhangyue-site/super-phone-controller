@@ -207,21 +207,42 @@ bool controller_dialogue_run(unsigned sequence){
    if(!sent||!ok)break;
    continue;
   }
-  controller::AdbCommand cmd{};bool valid=!strcmp(op,"type_text");
-  if(valid){const char *v=str(j,"text_b64");valid=strlen(v)>0&&strlen(v)<sizeof(cmd.text_b64);if(valid)strcpy(cmd.text_b64,v);}
+  // ADB ops share the one gated tunnel: type_text (ADB Keyboard), screencap
+  // (PNG size header + base64), tap/swipe (touch) and exec (adb_command.h
+  // whitelist only). Fields are validated here and again in adb_command().
+  controller::AdbCommand cmd{};bool valid=controller::adb_op_parse(op,cmd.op);
+  auto number=[j](const char *name,int &out,int max,bool allow_zero){
+   cJSON *v=cJSON_GetObjectItemCaseSensitive(j,name);
+   if(!cJSON_IsNumber(v)||!std::isfinite(v->valuedouble)||std::floor(v->valuedouble)!=v->valuedouble)return false;
+   if(v->valuedouble<(allow_zero?0:1)||v->valuedouble>max)return false;
+   out=(int)v->valuedouble;return true;
+  };
+  if(valid&&cmd.op==controller::AdbOp::TYPE_TEXT){const char *v=str(j,"text_b64");valid=strlen(v)>0&&strlen(v)<sizeof(cmd.text_b64);if(valid)strcpy(cmd.text_b64,v);}
+  if(valid&&cmd.op==controller::AdbOp::TAP)valid=number("x",cmd.x,32767,true)&&number("y",cmd.y,32767,true);
+  if(valid&&cmd.op==controller::AdbOp::SWIPE)valid=number("x",cmd.x,32767,true)&&number("y",cmd.y,32767,true)&&number("x2",cmd.x2,32767,true)&&number("y2",cmd.y2,32767,true)&&number("duration_ms",cmd.duration_ms,10000,false);
+  if(valid&&cmd.op==controller::AdbOp::EXEC){const char *v=str(j,"command");valid=strlen(v)<sizeof(cmd.exec_cmd);if(valid)strcpy(cmd.exec_cmd,v);}
   const char *id=str(j,"id");if(strlen(id)!=32)valid=false;
   const char *error=valid?"cancelled":"invalid_command";
+  // A screenshot needs a PSRAM buffer sized for the base64 payload; the other
+  // ops reuse the 48 KB text reply buffer.
+  char *capture=nullptr;char *reply=output;unsigned capacity=48001;
+  if(valid&&cmd.op==controller::AdbOp::SCREENCAP){
+   capture=(char*)heap_caps_malloc(controller::adb_screencap_capacity,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+   if(capture){reply=capture;capacity=controller::adb_screencap_capacity;}else{valid=false;error="out_of_memory";}
+  }
   ESP_LOGI("dialogue","Command received op=%s id=%.8s valid=%d",op,id,valid);
 #if CONFIG_CONTROLLER_USB_LOCAL && CONFIG_CONTROLLER_ADB_MAINTENANCE
-  bool ok=valid&&remote_status_live(sequence)&&controller_adb_execute(cmd,nullptr,output,48001,ticket,&error);
+  bool ok=valid&&remote_status_live(sequence)&&controller_adb_execute(cmd,nullptr,reply,capacity,ticket,&error);
 #else
   // Legacy type_text is never a production fallback for USB keyboard commands.
   bool ok=false;if(valid)error="invalid_command";
   (void)ticket;
 #endif
-  if(!ok)output[0]=0;
-  cJSON *ack=cJSON_CreateObject();cJSON_AddStringToObject(ack,"id",id);cJSON_AddBoolToObject(ack,"ok",ok);cJSON_AddStringToObject(ack,"output",output);if(!ok)cJSON_AddStringToObject(ack,"error",error);
+  if(!ok)reply[0]=0;
+  cJSON *ack=cJSON_CreateObject();cJSON_AddStringToObject(ack,"id",id);cJSON_AddBoolToObject(ack,"ok",ok);cJSON_AddStringToObject(ack,"output",reply);if(!ok)cJSON_AddStringToObject(ack,"error",error);
   char *body=cJSON_PrintUnformatted(ack);cJSON_Delete(ack);cJSON_Delete(j);
+  // cJSON owns its own copy of the payload, so the screenshot buffer can go now.
+  free(capture);
   char result[128];bool sent=body&&post("/dialogue/result",sequence,body,(unsigned char*)result,sizeof(result))>=0;free(body);
   ESP_LOGI("dialogue","Command result ok=%d error=%s ack=%d",ok,ok?"":error,sent);
   if(!sent)break;
