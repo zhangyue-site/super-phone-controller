@@ -32,6 +32,7 @@ typedef struct {uint32_t schema;char ssid[33],password[64],endpoint[191];char ba
 static MultiConfig config;
 static bool automatic_download;
 static atomic_bool auto_enabled;
+static atomic_uint received_bytes,image_bytes;
 static SemaphoreHandle_t mutex;
 static atomic_bool configured,connected,requested,transfer,ready;
 static bool runtime_started,runtime_attempted;
@@ -42,6 +43,9 @@ static const char *field(cJSON *o,const char *name){
  cJSON *v=cJSON_GetObjectItemCaseSensitive(o,name);
  return cJSON_IsString(v)?v->valuestring:"";
 }
+unsigned amoled_wifi_received(void){return atomic_load(&received_bytes);}
+unsigned amoled_wifi_total(void){return atomic_load(&image_bytes);}
+bool amoled_wifi_auto_update(void){return atomic_load(&auto_enabled);}
 bool amoled_wifi_configured(void){return atomic_load(&configured);}
 bool amoled_wifi_connected(void){return atomic_load(&connected);}
 esp_err_t amoled_wifi_runtime_error(void){return runtime_attempted?runtime_error:ESP_OK;}
@@ -138,7 +142,8 @@ static esp_http_client_handle_t open_http(const char *endpoint,const char *path,
 static void download(const char *endpoint,unsigned epoch){
  char manifest[193]={0},sha[65],version[32];uint8_t digest[32],block[511];
  int length=0;uint32_t total=0,received=0;unsigned ota_epoch=0;bool begun=false,ok=false;
- int64_t deadline=esp_timer_get_time()+120000000;
+ int64_t deadline=esp_timer_get_time()+600000000;
+ atomic_store(&received_bytes,0);atomic_store(&image_bytes,0);
  esp_http_client_handle_t client=open_http(endpoint,"/firmware/manifest",epoch,&length);
  if(!client||length>192)goto done;
  int used=0;
@@ -149,7 +154,7 @@ static void download(const char *endpoint,unsigned epoch){
  }
  if(used!=length||!esp_http_client_is_complete_data_received(client)||
     !pc_wifi_manifest(manifest,length,&total,sha,version)||!amoled_unhex(sha,32,digest))goto done;
- close_http(client);client=NULL;
+ close_http(client);client=NULL;atomic_store(&image_bytes,total);
  if(automatic_download&&!amoled_release_newer(version,esp_app_get_description()->version)){
   atomic_store(&stage,0);ok=true;goto done;
  }
@@ -164,7 +169,7 @@ static void download(const char *endpoint,unsigned epoch){
   if(count<=0||!live(epoch)||!amoled_ota_wifi_live(ota_epoch)||esp_timer_get_time()>=deadline)goto done;
   /* Queue congestion fails closed. Chunks are never retried or resumed. */
   if(!amoled_ota_wifi_chunk(ota_epoch,block,count,false))goto done;
-  received+=count;
+  received+=count;atomic_store(&received_bytes,received);
  }
  if(received!=total||!live(epoch)||esp_timer_get_time()>=deadline||!esp_http_client_is_complete_data_received(client))goto done;
  close_http(client);client=NULL;
@@ -228,6 +233,7 @@ static void worker(void *unused){
    auto_check=esp_timer_get_time()+600000000; /* At most once per five minutes, including failures/STOP. */
    atomic_store(&transfer,true);atomic_store(&stage,1);automatic_download=true;
    download(endpoint,atomic_load(&generation));
+   auto_check=esp_timer_get_time()+300000000;
    automatic_download=false;atomic_store(&transfer,false);memset(endpoint,0,sizeof(endpoint));
   }
   vTaskDelay(pdMS_TO_TICKS(100));

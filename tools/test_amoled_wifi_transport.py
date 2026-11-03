@@ -31,7 +31,7 @@ typedef struct {
  const char *url;int timeout_ms,buffer_size;
  void *crt_bundle_attach;bool disable_auto_redirect,keep_alive_enable;
 } esp_http_client_config_t;
-static atomic_uint generation=1,stage;
+static atomic_uint generation=1,stage,received_bytes,image_bytes;
 static atomic_bool connected=true,transfer=true;
 static int status_code=200,content_mode,read_mode,queue_mode;
 static int opened,closed,auth_calls,begins,finishes,cancels,chunks,read_calls;
@@ -75,7 +75,7 @@ static int esp_http_client_read(esp_http_client_handle_t c,char *out,int n){
  if(read_mode==2&&c->kind==1)return 0;
  if(read_mode==3&&c->kind==1)atomic_fetch_add(&generation,1);
  if(read_mode==4&&c->kind==1)atomic_store(&connected,false);
- if(read_mode==5&&c->kind==1)clock_us+=121000000;
+ if(read_mode==5&&c->kind==1)clock_us+=601000000;
  if(read_mode==6&&c->kind==1)ble=true;
  const uint8_t *data=c->kind?image:(const uint8_t*)manifest;
  int size=c->kind?(int)sizeof(image):(int)strlen(manifest),left=size-c->used;
@@ -91,13 +91,13 @@ static bool amoled_unhex(const char *s,size_t n,uint8_t *out){
  memset(out,0,n);return true;
 }
 static bool amoled_ota_wifi_begin(const char *v,uint32_t n,const uint8_t digest[32],uint64_t deadline,unsigned *epoch){
- assert(deadline==120001);assert(!strcmp(v,"0.3.1-amoled")&&n==4096&&digest);begins++;*epoch=1;return true;
+ assert(deadline==600001);assert(!strcmp(v,"0.3.1-amoled")&&n==4096&&digest);begins++;*epoch=1;return true;
 }
 static bool amoled_ota_wifi_live(unsigned epoch){return epoch==1&&ota_valid&&!finalized;}
 static bool amoled_ota_wifi_chunk(unsigned epoch,const uint8_t *data,size_t n,bool final){
  assert(epoch==1);if(queue_mode==1)return false;
  if(final){assert(!data&&!n);finishes++;finalized=true;}
- else {assert(data&&n&&n<=511);chunks++;bytes+=n;if(queue_mode==2&&bytes==4096)clock_us+=121000000;}
+ else {assert(data&&n&&n<=511);chunks++;bytes+=n;if(queue_mode==2&&bytes==4096)clock_us+=601000000;}
  return true;
 }
 static void amoled_ota_status(uint8_t out[4]){memset(out,0,4);out[0]=finalized?3:1;}
