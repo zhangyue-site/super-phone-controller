@@ -154,6 +154,7 @@ class BleOtaService {
   bool _busy = false;
   TransferSession? _transfer;
   int _connectionEpoch = 0;
+  StreamSubscription<BluetoothConnectionState>? _authConnectionSub;
 
   bool get busy => _busy;
   BluetoothDevice? get device => _device;
@@ -172,6 +173,8 @@ class BleOtaService {
   Future<int> connect(BluetoothDevice device) async {
     _clearConfirmation();
     final epoch = ++_connectionEpoch;
+    await _authConnectionSub?.cancel();
+    _authConnectionSub = null;
     _device = device;
     try {
       // 插件要求显式声明许可，否则拒绝连接——这是防止商业滥用的一道门。
@@ -243,6 +246,14 @@ class BleOtaService {
       // Enable status notifications before creating any transfer session.
       await _stat?.setNotifyValue(true);
       if (epoch != _connectionEpoch) throw StateError('连接已取消');
+      _authConnectionSub = device.connectionState.listen((state) {
+        if (state == BluetoothConnectionState.disconnected &&
+            epoch == _connectionEpoch) {
+          ++_connectionEpoch;
+          _auth = null;
+          _clearConfirmation();
+        }
+      });
       return chunk;
     } catch (_) {
       // A newer connect to the same board owns the shared native link.
@@ -278,21 +289,55 @@ class BleOtaService {
 
   Future<List<int>> signDownloadChallenge(List<int> nonce) =>
       _signDownloadChallenge(nonce);
+  static final Map<String, Future<void>> _signingTails = {};
   Future<List<int>> _signDownloadChallenge(List<int> nonce,
       {TransferSession? transfer}) async {
     final auth = _auth;
-    if (auth == null ||
-        nonce.length != 32 ||
-        (_busy &&
-            (transfer == null ||
-                !identical(_transfer, transfer) ||
-                transfer.cancelled))) {
-      throw StateError('控制板暂不支持下载授权或正在升级');
+    final device = _device;
+    final epoch = _connectionEpoch;
+    final challenge = Uint8List.fromList(nonce);
+    final queuedFor = Stopwatch()..start();
+    void checkCurrent() {
+      if (auth == null ||
+          device == null ||
+          challenge.length != 32 ||
+          epoch != _connectionEpoch ||
+          !identical(auth, _auth) ||
+          !identical(device, _device) ||
+          !device.isConnected ||
+          (transfer != null &&
+              (!identical(_transfer, transfer) || transfer.cancelled)) ||
+          (_busy && transfer == null)) {
+        throw StateError('下载授权签名已失效或控制板正在升级，请手动重试');
+      }
     }
-    await auth
-        .write(nonce, withoutResponse: false)
-        .timeout(const Duration(seconds: 5));
-    return auth.read().timeout(const Duration(seconds: 5));
+
+    checkCurrent();
+    final key =
+        '${device!.remoteId.str}/${auth!.serviceUuid.str}/${auth.uuid.str}';
+    final previous = _signingTails[key] ?? Future<void>.value();
+    final released = Completer<void>();
+    _signingTails[key] = released.future;
+    try {
+      await previous;
+      checkCurrent();
+      if (queuedFor.elapsed >= const Duration(seconds: 10)) {
+        throw StateError('下载授权签名等待超时，请手动重试');
+      }
+      // AUTH stores one global proof. Keep write(nonce) + read(proof) atomic.
+      await auth
+          .write(challenge, withoutResponse: false)
+          .timeout(const Duration(seconds: 5));
+      checkCurrent();
+      final proof = await auth.read().timeout(const Duration(seconds: 5));
+      checkCurrent();
+      return proof;
+    } finally {
+      released.complete();
+      if (identical(_signingTails[key], released.future)) {
+        _signingTails.remove(key);
+      }
+    }
   }
 
   Future<BoardInfo> _confirmReboot(
@@ -589,6 +634,8 @@ class BleOtaService {
     final device = _device;
     _localControl = null;
     _device = null;
+    await _authConnectionSub?.cancel();
+    _authConnectionSub = null;
     await cancelPush();
     _ctrl = null;
     _stat = null;
