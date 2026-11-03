@@ -230,6 +230,47 @@ static void worker(void*){
  if(!ok)report("failed");else if(completed_stage==4)report("current");
  vTaskDelete(nullptr);
 }
+// ---- 自动检查：WiFi/隧道可用时静默比对云端版本，有新版本才触发下载 ----
+static std::atomic<int64_t> auto_last_check(0);
+static std::atomic<bool> auto_running(false);
+static void auto_check_task(void*){
+ const char *running=esp_app_get_description()->version;
+ esp_ota_handle_t unused=0;(void)unused;
+ auto c=open_url("/firmware/manifest");
+ if(!c){auto_running=false;vTaskDelete(nullptr);return;}
+ char manifest[256]={};unsigned size=0;char expected[65]={},version[32]={};bool ok=false;
+ do{
+  int length=esp_http_client_fetch_headers(c);
+  if(length<1||length>=(int)sizeof(manifest))break;
+  int got=esp_http_client_read_response(c,manifest,length);
+  if(got!=length)break;
+  manifest[length]=0;
+  if(sscanf(manifest,"PCOTA1\n%u\n%64[0-9a-f]\n%31s",&size,expected,version)!=3)break;
+  if(strlen(expected)!=64)break;
+  ok=true;
+ }while(false);
+ close_url(c);
+ bool busy_now=busy.load();
+ if(ok&&!busy_now&&strcmp(version,running)!=0){
+  ESP_LOGI("ota","auto: cloud=%s running=%s -> start",version,running);
+  controller_ota_start();
+ }else if(ok){
+  ESP_LOGI("ota","auto: up to date (%s)",running);
+ }
+ auto_last_check=esp_timer_get_time();
+ auto_running=false;
+ vTaskDelete(nullptr);
+}
+void controller_ota_auto_check(){
+ if(busy.load()||auto_running.exchange(true)){
+  if(auto_running.load()&&busy.load())auto_running=false;
+  return;
+ }
+ int64_t now=esp_timer_get_time();
+ if(auto_last_check.load()!=0&&now-auto_last_check.load()<6LL*3600*1000000LL){auto_running=false;return;}
+ if(xTaskCreate(auto_check_task,"ota_auto",8192,nullptr,2,nullptr)!=pdPASS)auto_running=false;
+}
+
 void controller_ota_start(){
  // Acquiring the shared state publishes the job; never reset cancellation afterward.
  if(!ota_guard_acquire(OTA_WIFI))return;

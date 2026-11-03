@@ -404,6 +404,7 @@ static void telemetry_task(void*){
     }
    }
    upload_events();
+   if(online && wifi_connected.load())controller_ota_auto_check();  // 云端有新版本时静默升级
    controller_voice_background_http_end();
   }
   vTaskDelay(pdMS_TO_TICKS(5000));
