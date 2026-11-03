@@ -10,6 +10,11 @@ int main(void){
  const char *invalid[]={"","invalid","0.4.1","00.4.1-amoled","+0.4.1-amoled","0.4.1-epaper","100000.1.2-amoled","0.4.1-amoledx","0.4.-1-amoled"};
  for(unsigned i=0;i<sizeof(invalid)/sizeof(*invalid);i++)assert(!amoled_release_version_valid(invalid[i]));
  assert(!amoled_release_version_valid(0));
+ assert(amoled_release_newer("0.4.3-amoled","0.4.2-amoled"));
+ assert(amoled_release_newer("0.10.0-amoled","0.9.99-amoled"));
+ assert(!amoled_release_newer("0.4.3-amoled","0.4.3-amoled"));
+ assert(!amoled_release_newer("0.4.2-amoled","0.4.3-amoled"));
+ assert(!amoled_release_newer("invalid","0.4.3-amoled"));
 }
 '''
 with tempfile.TemporaryDirectory() as d:

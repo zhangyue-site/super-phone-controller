@@ -19,6 +19,10 @@ code=r"""
 #include <stdio.h>
 #include <time.h>
 #include "wifi_policy.h"
+#include "version_policy.h"
+static bool automatic_download;
+typedef struct {char version[32];} App;
+static const App *esp_app_get_description(void){static App app={"0.3.0-amoled"};return &app;}
 #define ESP_OK 0
 #define pdMS_TO_TICKS(n) (n)
 typedef struct Client {int kind,used;} Client;
@@ -110,6 +114,12 @@ static void reset(void){
  strcpy(manifest,"PCOTA1\n4096\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n0.3.1-amoled\n");
 }
 int main(void){
+ reset();automatic_download=true;
+ strcpy(manifest,"PCOTA1\n4096\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n0.3.0-amoled\n");
+ download("https://controller.test",1);assert(!begins&&opened==1&&closed==1&&atomic_load(&stage)==0);
+ reset();strcpy(manifest,"PCOTA1\n4096\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n0.2.9-amoled\n");
+ download("https://controller.test",1);assert(!begins&&atomic_load(&stage)==0);
+ automatic_download=false;
  reset();download("https://controller.test",1);
  assert(bytes==4096&&begins==1&&finishes==1&&!cancels&&opened==2&&closed==2&&auth_calls==2);
  for(int mode=1;mode<=5;mode++){
