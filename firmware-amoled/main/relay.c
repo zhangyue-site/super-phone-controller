@@ -42,7 +42,7 @@ bool amoled_relay_online(void){return amoled_relay_connected()&&atomic_load(&rel
 void amoled_relay_cancel(void){amoled_plugin_cancel();amoled_audio_cancel();amoled_direct_cancel();
  /* OTA has top priority: STOP/disconnect/USB-detach suspend the control session
   * but never cancel a running Wi-Fi upgrade. */
- if(!amoled_wifi_transferring())amoled_wifi_cancel();taskENTER_CRITICAL(&mux);atomic_fetch_add(&epoch,1);relay_until=0;result=5;taskEXIT_CRITICAL(&mux);amoled_usb_gate(false);if(!amoled_wifi_transferring())amoled_ota_cancel();}void amoled_relay_usb_detached(void){amoled_relay_cancel();}
+ if(!amoled_wifi_transferring()){amoled_wifi_cancel();}taskENTER_CRITICAL(&mux);atomic_fetch_add(&epoch,1);relay_until=0;result=5;taskEXIT_CRITICAL(&mux);amoled_usb_gate(false);if(!amoled_wifi_transferring()){amoled_ota_cancel();}}void amoled_relay_usb_detached(void){amoled_relay_cancel();}
 static bool parse(const uint8_t p[48],Work *w){
  if(p[0]!=1||p[1]<1||p[1]>14)return false;
  w->op=p[1];w->sequence=(uint32_t)p[2]|((uint32_t)p[3]<<8)|((uint32_t)p[4]<<16)|((uint32_t)p[5]<<24);if(!w->sequence)return false;
