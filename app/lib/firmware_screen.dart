@@ -17,7 +17,10 @@ import 'push_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-/// 屏幕 2：选固件。
+/// 屏幕 2：选固件（PRD v2 F3 统一 OTA 的蓝牙中转升级页）。
+///
+/// 头部统一为「当前版本 -> 目标版本 + 通道选择（Wi-Fi 直连推荐 / 手机蓝牙中转）
+/// + 开始升级按钮 + 安全说明」；目标版本来自升级清单（已选固件），清单无新版本不显示。
 ///
 /// 核心考量：BLE 传 1.3MB 要一两分钟，推错板子/推错文件的代价很大。
 /// 所以在"开始推送"之前，把版本、大小、sha256 和板子当前版本摆在一起对比。
@@ -332,29 +335,25 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
               icon: const Icon(Icons.phone_android),
               label: const Text('手机控制'))
         ],
-        bottom: PreferredSize(
-          preferredSize: Size.fromHeight(
-              MediaQuery.textScalerOf(context).scale(12) * 1.5 + 10),
-          child: Padding(
-            padding: const EdgeInsets.only(left: 16, bottom: 10),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                _deviceVersion.isEmpty
-                    ? '目标设备 · 版本待核实'
-                    : '目标设备 · 当前 $_deviceVersion',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppTheme.mono.copyWith(
-                    color: AppTheme.colors(context).textDim, fontSize: 12),
-              ),
-            ),
-          ),
-        ),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _UpgradeHeader(
+            currentVersion: _deviceVersion,
+            target: _info,
+            buttonLabel: _busy
+                ? '正在准备…'
+                : !_connected
+                    ? '请先连接控制板'
+                    : _info == null
+                        ? '先选择一个固件'
+                        : '开始升级',
+            onStart: (_info != null && _connected && !_busy && _error == null)
+                ? _start
+                : null,
+          ),
+          const SizedBox(height: 12),
           if (widget.usbAttachment != null)
             const Padding(
               padding: EdgeInsets.only(bottom: 12),
@@ -410,10 +409,6 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
                               },
                               child: const Text('停止共享')),
                         ]))),
-          const SizedBox(height: 12),
-          const InfoBanner(
-              icon: Icons.info_outline,
-              text: '先检查当前版本，再选择官方固件。维护会中断操作，传输时请靠近控制板并保持供电。'),
           const SizedBox(height: 16),
           _SourceCard(
             icon: Icons.cloud_download_outlined,
@@ -460,23 +455,116 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
           ],
         ],
       ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: FilledButton(
-            onPressed: (_info != null && _connected && !_busy && _error == null)
-                ? _start
-                : null,
-            child: Text(_busy
-                ? '正在准备…'
-                : !_connected
-                    ? '请先连接控制板'
-                    : _info == null
-                        ? '先选择一个固件'
-                        : '下一步：传输固件'),
+    );
+  }
+}
+
+/// 升级页头部（PRD v2 F3 / FR3-2、FR3-5）：版本对照、通道选择、开始升级与安全说明。
+///
+/// 项目纪律：目标版本来自升级清单（已选固件），清单无新版本时不显示目标版本；
+/// 没有电量数据源，不显示电量；没有更新说明与预计耗时数据源，同样不显示。
+class _UpgradeHeader extends StatelessWidget {
+  final String currentVersion;
+  final FirmwareInfo? target;
+  final String buttonLabel;
+  final VoidCallback? onStart;
+
+  const _UpgradeHeader({
+    required this.currentVersion,
+    required this.target,
+    required this.buttonLabel,
+    this.onStart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = AppTheme.colors(context);
+    final hasCurrent = currentVersion.isNotEmpty;
+    final versionLine = !hasCurrent
+        ? (target == null
+            ? '当前版本待核实'
+            : '当前版本待核实 -> 目标 ${target!.version}')
+        : (target == null
+            ? '当前 $currentVersion'
+            : '当前 $currentVersion -> 目标 ${target!.version}');
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(versionLine,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTheme.mono.copyWith(
+                  color: target == null ? colors.textDim : colors.text,
+                  fontSize: 15)),
+          const SizedBox(height: 12),
+          Text('通道选择',
+              style: TextStyle(
+                  color: colors.textDim,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.6)),
+          const SizedBox(height: 8),
+          _channel(context, Icons.wifi, 'Wi-Fi 直连（推荐）',
+              '控制板自行联网下载升级，入口在设置页「控制板 Wi-Fi 升级」',
+              active: false),
+          const SizedBox(height: 8),
+          _channel(context, Icons.bluetooth, '手机蓝牙中转（本页）',
+              '下载官方固件后经蓝牙推送到控制板',
+              active: true),
+          const SizedBox(height: 14),
+          FilledButton(onPressed: onStart, child: Text(buttonLabel)),
+          const SizedBox(height: 10),
+          Text('升级会中断当前任务，需板端空闲；传输时请靠近控制板并保持供电。',
+              style: TextStyle(color: colors.textDim, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  Widget _channel(BuildContext context, IconData icon, String title,
+      String subtitle,
+      {required bool active}) {
+    final colors = AppTheme.colors(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: active ? colors.accent : colors.textDim),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title,
+                  style: TextStyle(
+                      color: active ? colors.text : colors.textDim,
+                      fontSize: 14,
+                      fontWeight: active ? FontWeight.w600 : FontWeight.w400)),
+              const SizedBox(height: 2),
+              Text(subtitle,
+                  style: TextStyle(color: colors.textDim, fontSize: 12)),
+            ],
           ),
         ),
-      ),
+        if (active) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: colors.accent.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child:
+                Text('当前通道', style: TextStyle(color: colors.accent, fontSize: 11)),
+          ),
+        ],
+      ],
     );
   }
 }
