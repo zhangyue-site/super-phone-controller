@@ -266,7 +266,9 @@ void app_main(void){
  boot_recovery.stage=7;
  esp_err_t relay_error=ESP_ERR_INVALID_STATE;
  if(amoled_identity_ready()){relay_error=amoled_relay_start();if(relay_error!=ESP_OK)ESP_LOGE("amoled","BLE startup failed: %s",esp_err_to_name(relay_error));}
- esp_err_t wifi_error=amoled_wifi_start();if(wifi_error!=ESP_OK)ESP_LOGE("amoled","Wi-Fi startup unavailable: %s",esp_err_to_name(wifi_error));
+ /* Wi-Fi start deferred to the main loop: it raced LVGL/BSP init for internal RAM (0.6.15 NO_MEM burst at 3-5s).
+  * Up to 3 attempts, 5s apart, so a transient failure no longer leaves the board offline. */
+ esp_err_t wifi_error=ESP_ERR_INVALID_STATE;unsigned wifi_attempts=0;int wifi_last=0;
  amoled_tcp_console_start();
  esp_ota_img_states_t image_state=ESP_OTA_IMG_UNDEFINED;esp_ota_get_state_partition(esp_ota_get_running_partition(),&image_state);
  bool boot_pending=image_state==ESP_OTA_IMG_PENDING_VERIFY;
@@ -292,6 +294,11 @@ void app_main(void){
     if(ok)page=7;else snprintf(notice,sizeof(notice),"插件计划未开启，请检查连接或先停止当前任务");
     refresh=true;}
    else if(ua==42){if(!amoled_plugin_confirm())snprintf(notice,sizeof(notice),"本次确认不可用，请重新预览");refresh=true;}}
+  if(wifi_error!=ESP_OK&&wifi_attempts<3&&(wifi_attempts==0||tick-wifi_last>=1000)){
+   wifi_attempts++;wifi_last=tick;wifi_error=amoled_wifi_start();
+   if(wifi_error==ESP_OK)ESP_LOGI("amoled","Wi-Fi started on attempt %u",wifi_attempts);
+   else ESP_LOGW("amoled","Wi-Fi startup attempt %u failed: %s",wifi_attempts,esp_err_to_name(wifi_error));
+  }
   if(pending_power){
    if(!shutdown_sent&&amoled_ota_power_idle()){
     if(pending_power==1){esp_restart();}

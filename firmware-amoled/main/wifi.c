@@ -241,7 +241,7 @@ static void worker(void *unused){
  }
 }
 esp_err_t amoled_wifi_start(void){
- mutex=xSemaphoreCreateMutex();if(!mutex)return ESP_ERR_NO_MEM;
+ if(!mutex){mutex=xSemaphoreCreateMutex();if(!mutex)return ESP_ERR_NO_MEM;}
  nvs_handle_t storage;size_t size=sizeof(config);
  if(nvs_open("controller-wifi",NVS_READONLY,&storage)==ESP_OK){
   esp_err_t loaded=nvs_get_blob(storage,"config",&config,&size);
@@ -261,26 +261,31 @@ esp_err_t amoled_wifi_start(void){
 }
 
 static esp_err_t runtime_initialize(void){
- esp_err_t err=esp_netif_init();if(err!=ESP_OK)return err;
- err=esp_event_loop_create_default();if(err!=ESP_OK&&err!=ESP_ERR_INVALID_STATE)return err;
- if(!esp_netif_create_default_wifi_sta())return ESP_ERR_NO_MEM;
- wifi_init_config_t cfg=WIFI_INIT_CONFIG_DEFAULT();
- err=esp_wifi_init(&cfg);if(err!=ESP_OK)return err;
+ static bool netif_done,loop_done,wifi_done,handlers_done,sntp_done,worker_done;static esp_netif_t *sta_netif;
+ esp_err_t err=ESP_OK;
+ if(!netif_done){if((err=esp_netif_init())!=ESP_OK)return err;netif_done=true;}
+ if(!loop_done){err=esp_event_loop_create_default();if(err!=ESP_OK&&err!=ESP_ERR_INVALID_STATE)return err;loop_done=true;}
+ if(!sta_netif){sta_netif=esp_netif_create_default_wifi_sta();if(!sta_netif)return ESP_ERR_NO_MEM;}
+ if(!wifi_done){wifi_init_config_t cfg=WIFI_INIT_CONFIG_DEFAULT();if((err=esp_wifi_init(&cfg))!=ESP_OK)return err;wifi_done=true;}
  if((err=esp_wifi_set_storage(WIFI_STORAGE_RAM))!=ESP_OK)return err;
  if((err=esp_wifi_set_mode(WIFI_MODE_STA))!=ESP_OK)return err;
- if((err=esp_event_handler_register(WIFI_EVENT,ESP_EVENT_ANY_ID,wifi_event,NULL))!=ESP_OK)return err;
- if((err=esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,wifi_event,NULL))!=ESP_OK)return err;
- esp_sntp_config_t sntp=ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
- if((err=esp_netif_sntp_init(&sntp))!=ESP_OK)return err;
- if(xTaskCreate(worker,"amoled_wifi",8192,NULL,3,NULL)!=pdPASS)return ESP_ERR_NO_MEM;
+ if(!handlers_done){
+  if((err=esp_event_handler_register(WIFI_EVENT,ESP_EVENT_ANY_ID,wifi_event,NULL))!=ESP_OK)return err;
+  if((err=esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,wifi_event,NULL))!=ESP_OK)return err;
+  handlers_done=true;
+ }
+ if(!sntp_done){esp_sntp_config_t sntp=ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");if((err=esp_netif_sntp_init(&sntp))!=ESP_OK)return err;sntp_done=true;}
+ if(!worker_done){if(xTaskCreate(worker,"amoled_wifi",8192,NULL,3,NULL)!=pdPASS)return ESP_ERR_NO_MEM;worker_done=true;}
  runtime_started=true;return ESP_OK;
 }
 
-/* A partial IDF startup is not repeated into duplicate netifs/event handlers.
- * A saved configuration remains private; maintenance restart can retry startup. */
+/* Each step above is guarded so a retry resumes at the failed step instead of
+ * duplicating netifs/event handlers. Only NO_MEM unlocks retry (boot memory peak
+ * is transient); other errors stay latched. A saved configuration remains private;
+ * maintenance restart can still retry everything. */
 static esp_err_t runtime_start(void){
  if(runtime_started)return ESP_OK;
- if(runtime_attempted)return runtime_error;
+ if(runtime_attempted&&runtime_error!=ESP_ERR_NO_MEM)return runtime_error;
  runtime_attempted=true;runtime_error=runtime_initialize();return runtime_error;
 }
 
