@@ -73,10 +73,11 @@ static esp_err_t power_error=ESP_ERR_INVALID_STATE;
 
 static lv_obj_t *root,*link_label,*voice_status_label,*plugin_status_label,*plugin_confirm_button;
 static int last_page=-1;static lv_obj_t *state_label,*chip_label[3],*detail_label,*notice_box;
+static bool pending_link_refresh;static int64_t last_full_render;
 static char voice_prev[640],plugin_prev[1024];
 static const char *str(cJSON *o,const char *key){cJSON *v=cJSON_GetObjectItemCaseSensitive(o,key);return cJSON_IsString(v)?v->valuestring:"";}
 static cJSON *current(void){return cJSON_GetArrayItem(plugins,selected);}
-static void render(void);
+static void render(int64_t lock_wait_us);
 static void reply(cJSON *o){char *s=cJSON_PrintUnformatted(o);if(s){amoled_usb_write(s);amoled_usb_write("\n");free(s);}cJSON_Delete(o);}
 static void status(const char *result){cJSON *o=cJSON_CreateObject();cJSON_AddStringToObject(o,"result",result);cJSON_AddStringToObject(o,"serial",amoled_usb_serial());cJSON_AddStringToObject(o,"version",esp_app_get_description()->version);cJSON_AddBoolToObject(o,"powerReady",power_error==ESP_OK);cJSON_AddNumberToObject(o,"powerPending",pending_power);cJSON_AddNumberToObject(o,"page",page);cJSON_AddNumberToObject(o,"uptimeMs",esp_timer_get_time()/1000.0);cJSON_AddNumberToObject(o,"resetReason",esp_reset_reason());cJSON_AddNumberToObject(o,"earlyCrashes",boot_recovery.crashes);cJSON_AddBoolToObject(o,"usb",amoled_usb_ready());cJSON_AddBoolToObject(o,"armed",amoled_usb_armed());cJSON_AddBoolToObject(o,"runnerConnected",amoled_relay_online());cJSON_AddBoolToObject(o,"bluetooth",amoled_relay_connected());cJSON_AddBoolToObject(o,"wifiConfigured",amoled_wifi_configured());cJSON_AddBoolToObject(o,"wifiConnected",amoled_wifi_connected());cJSON_AddNumberToObject(o,"wifiOtaStage",amoled_wifi_ota_stage());cJSON_AddNumberToObject(o,"wifiRuntimeError",amoled_wifi_runtime_error());cJSON_AddBoolToObject(o,"autoUpdate",amoled_wifi_auto_update());cJSON_AddNumberToObject(o,"wifiOtaReceived",amoled_wifi_received());cJSON_AddNumberToObject(o,"wifiOtaTotal",amoled_wifi_total());cJSON_AddBoolToObject(o,"wifiControlSupported",false);cJSON_AddBoolToObject(o,"wifiDirectConnected",amoled_direct_online());cJSON_AddStringToObject(o,"sharingState","check-phone");cJSON_AddNumberToObject(o,"freeHeap",esp_get_free_heap_size());cJSON_AddNumberToObject(o,"freeInternalHeap",heap_caps_get_free_size(MALLOC_CAP_INTERNAL));cJSON_AddNumberToObject(o,"minFreeInternalHeap",heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));cJSON_AddNumberToObject(o,"largestInternalBlock",heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));cJSON_AddNumberToObject(o,"mainStackHighWater",uxTaskGetStackHighWaterMark(NULL));cJSON_AddItemToObject(o,"plugins",cJSON_Duplicate(plugins,true));reply(o);}
 static bool version(const char *s,unsigned v[3]){int end=0;for(const char *c=s;*c;c++)if((*c<'0'||*c>'9')&&*c!='.')return false;if(sscanf(s,"%5u.%5u.%5u%n",v,v+1,v+2,&end)!=3||s[end])return false;for(int i=0;i<3;i++)if(v[i]>65535)return false;return true;}
@@ -104,14 +105,23 @@ static void process(char *line){
   unsigned ota_stage=amoled_wifi_ota_stage();
   if(ota_stage==2||ota_stage==3){snprintf(notice,sizeof(notice),"固件升级中，请勿断开电源");refresh=true;status("view-deferred");}
   else if(cJSON_IsNumber(p)&&p->valueint>=0&&p->valueint<=10){page=p->valueint;refresh=true;status("view-changed");}else status("invalid-page");}
- else if(!strcmp(op,"snapshot")){if(refresh){render();refresh=false;}lv_draw_buf_t *buf=lv_snapshot_take(root,LV_COLOR_FORMAT_RGB565);if(!buf){status("snapshot-failed");goto done;}cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","snapshot");cJSON_AddNumberToObject(meta,"width",buf->header.w);cJSON_AddNumberToObject(meta,"height",buf->header.h);cJSON_AddNumberToObject(meta,"stride",buf->header.stride);cJSON_AddNumberToObject(meta,"bytes",buf->header.stride*buf->header.h);reply(meta);amoled_usb_write_bytes(buf->data,buf->header.stride*buf->header.h);lv_draw_buf_destroy(buf);amoled_usb_write("\n");}
+ else if(!strcmp(op,"snapshot")){if(refresh){render(0);refresh=false;}lv_draw_buf_t *buf=lv_snapshot_take(root,LV_COLOR_FORMAT_RGB565);if(!buf){status("snapshot-failed");goto done;}cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","snapshot");cJSON_AddNumberToObject(meta,"width",buf->header.w);cJSON_AddNumberToObject(meta,"height",buf->header.h);cJSON_AddNumberToObject(meta,"stride",buf->header.stride);cJSON_AddNumberToObject(meta,"bytes",buf->header.stride*buf->header.h);reply(meta);amoled_usb_write_bytes(buf->data,buf->header.stride*buf->header.h);lv_draw_buf_destroy(buf);amoled_usb_write("\n");}
+ else if(!strcmp(op,"logs")){
+  static char log_out[sizeof(boot_recovery.log)];
+  uint32_t total=boot_recovery.log_size,count=total>sizeof(boot_recovery.log)?sizeof(boot_recovery.log):total;
+  if(boot_recovery.magic!=AMOLED_RECOVERY_MAGIC)count=0;
+  uint32_t start=total>=sizeof(boot_recovery.log)?(total%sizeof(boot_recovery.log)):0;
+  for(uint32_t i=0;i<count;i++)log_out[i]=boot_recovery.log[(start+i)%sizeof(boot_recovery.log)];
+  cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","logs");cJSON_AddNumberToObject(meta,"bytes",count);cJSON_AddNumberToObject(meta,"total",total);reply(meta);
+  if(count)amoled_usb_write_bytes((const uint8_t*)log_out,count);
+  amoled_usb_write("\n");}
  else if(!strcmp(op,"maintenance.restart")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("restarting");vTaskDelay(pdMS_TO_TICKS(100));esp_restart();}
  else if(!strcmp(op,"maintenance.bootloader")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("entering-bootloader");vTaskDelay(pdMS_TO_TICKS(100));if(amoled_usb_enter_bootloader()!=ESP_OK)status("bootloader-failed");}
  else status("unsupported-operation");
  done:cJSON_Delete(o);
 }
 static lv_obj_t *label(lv_obj_t *parent,const char *text,int x,int y,int w,lv_color_t color){lv_obj_t *o=lv_label_create(parent);lv_label_set_text(o,text);lv_obj_set_pos(o,x,y);lv_obj_set_width(o,w);lv_obj_set_style_text_font(o,&ui_font,0);lv_obj_set_style_text_color(o,color,0);lv_label_set_long_mode(o,LV_LABEL_LONG_WRAP);return o;}
-static void action(lv_event_t *e){if(page==5)amoled_audio_cancel();int a=(int)(intptr_t)lv_event_get_user_data(e);notice[0]=0;power_notice_persistent=false;if((pending_power||atomic_load(&power_request))&&a!=20){snprintf(notice,sizeof(notice),"正在处理电源请求，请稍候");refresh=true;return;}
+static void action(lv_event_t *e){if(page==5)amoled_audio_cancel();int a=(int)(intptr_t)lv_event_get_user_data(e);ESP_LOGI("ui","action a=%d page=%d",a,page);notice[0]=0;power_notice_persistent=false;if((pending_power||atomic_load(&power_request))&&a!=20){snprintf(notice,sizeof(notice),"正在处理电源请求，请稍候");refresh=true;return;}
  if(atomic_load(&deferred_action)&&(a==23||a==40||a==42)){snprintf(notice,sizeof(notice),"上一操作仍在处理，请稍候");refresh=true;return;}
  if(a>=100&&a<104){selected=a-100;page=2;}
  else if(a==10){page=0;}
@@ -159,7 +169,7 @@ static const char *link_status(void){
 static const char *primary_state(void){if(!amoled_usb_ready())return "待连接";unsigned stage=amoled_plugin_stage();if(stage>=1&&stage<=4)return "任务进行中";return amoled_usb_armed()||amoled_relay_online()||amoled_direct_online()?"可操作":"待连接";}
 static lv_obj_t *status_chip(lv_obj_t *parent,const char *name,bool ok,int x,int y){lv_obj_t *chip=lv_obj_create(parent);lv_obj_set_pos(chip,x,y);lv_obj_set_size(chip,140,56);lv_obj_set_style_radius(chip,22,0);lv_obj_set_style_bg_color(chip,lv_color_hex(0x1c1c1c),0);lv_obj_set_style_border_width(chip,0,0);lv_obj_set_style_shadow_width(chip,0,0);lv_obj_set_style_pad_all(chip,0,0);char text[64];snprintf(text,sizeof(text),"%s%s",name,ok?"通":"断");lv_obj_t *l=label(chip,text,0,0,132,lv_color_hex(ok?0x7fd99a:0xaaaaaa));lv_obj_center(l);return chip;}
 static void stop_bar(void){lv_obj_t *b=lv_button_create(root);lv_obj_set_pos(b,24,352);lv_obj_set_size(b,432,68);if(pending_power||atomic_load(&power_request))lv_obj_add_state(b,LV_STATE_DISABLED);lv_obj_set_style_radius(b,22,0);lv_obj_set_style_bg_color(b,lv_color_hex(0x3B1210),0);lv_obj_set_style_border_width(b,0,0);lv_obj_set_style_shadow_width(b,0,0);lv_obj_set_style_pad_all(b,6,0);lv_obj_add_event_cb(b,action,LV_EVENT_CLICKED,(void*)(intptr_t)20);lv_obj_t *l=label(b,"停止手机操作",0,0,420,lv_color_hex(0xF2B8B5));lv_obj_set_height(l,46);lv_obj_set_style_text_align(l,LV_TEXT_ALIGN_CENTER,0);lv_obj_center(l);}
-static void render(void){
+static void render(int64_t lock_wait_us){
  if(page==last_page&&!notice[0]&&!notice_box){
   if(page==0&&state_label){
    int64_t t0=esp_timer_get_time();char text[64];bool ok;
@@ -167,10 +177,10 @@ static void render(void){
    ok=amoled_wifi_connected();snprintf(text,sizeof(text),"Wi-Fi%s",ok?"通":"断");lv_label_set_text(chip_label[0],text);lv_obj_set_style_text_color(chip_label[0],lv_color_hex(ok?0x7fd99a:0xaaaaaa),0);
    ok=amoled_relay_online();snprintf(text,sizeof(text),"云端%s",ok?"通":"断");lv_label_set_text(chip_label[1],text);lv_obj_set_style_text_color(chip_label[1],lv_color_hex(ok?0x7fd99a:0xaaaaaa),0);
    ok=amoled_usb_armed();snprintf(text,sizeof(text),"HID%s",ok?"通":"断");lv_label_set_text(chip_label[2],text);lv_obj_set_style_text_color(chip_label[2],lv_color_hex(ok?0x7fd99a:0xaaaaaa),0);
-   ESP_LOGI("ui","render_inplace_us=%lld",(long long)(esp_timer_get_time()-t0));return;}
+   ESP_LOGI("ui","render_inplace_us=%lld lock_wait_us=%lld",(long long)(esp_timer_get_time()-t0),(long long)lock_wait_us);return;}
   if(page==6&&detail_label){
    int64_t t0=esp_timer_get_time();char text[256];snprintf(text,sizeof(text),"Wi-Fi %s · 蓝牙%s\n云端%s · 输入%s",amoled_wifi_connected()?"通":"未连",amoled_relay_connected()?"通":"未连",amoled_relay_online()?"通":"未连",amoled_usb_armed()?"开启":"未开启");lv_label_set_text(detail_label,text);
-   ESP_LOGI("ui","render_inplace_us=%lld",(long long)(esp_timer_get_time()-t0));return;}
+   ESP_LOGI("ui","render_inplace_us=%lld lock_wait_us=%lld",(long long)(esp_timer_get_time()-t0),(long long)lock_wait_us);return;}
  }
  int64_t t0=esp_timer_get_time();
  voice_status_label=NULL;plugin_status_label=NULL;plugin_confirm_button=NULL;notice_box=NULL;state_label=NULL;detail_label=NULL;chip_label[0]=NULL;chip_label[1]=NULL;chip_label[2]=NULL;voice_prev[0]=0;plugin_prev[0]=0;lv_obj_clean(root);lv_obj_set_style_bg_color(root,lv_color_black(),0);lv_obj_set_style_pad_all(root,0,0);lv_obj_remove_flag(root,LV_OBJ_FLAG_SCROLLABLE);
@@ -212,8 +222,13 @@ static void render(void){
  }
 
  if(notice[0]){notice_ticks=(pending_power||power_notice_persistent)?0:400;lv_obj_t *box=lv_obj_create(root);notice_box=box;lv_obj_set_pos(box,72,180);lv_obj_set_size(box,336,120);lv_obj_set_style_bg_color(box,lv_color_hex(0x21332f),0);lv_obj_set_style_border_width(box,0,0);label(box,notice,0,0,288,lv_color_hex(0xf5f5f5));}
- ESP_LOGI("ui","page=%d plugins=%d usb=%d armed=%d render_full_us=%lld",page,cJSON_GetArraySize(plugins),amoled_usb_ready(),amoled_usb_armed(),(long long)(esp_timer_get_time()-t0));
- last_page=page;
+ ESP_LOGI("ui","page=%d plugins=%d usb=%d armed=%d render_full_us=%lld lock_wait_us=%lld",page,cJSON_GetArraySize(plugins),amoled_usb_ready(),amoled_usb_armed(),(long long)(esp_timer_get_time()-t0),(long long)lock_wait_us);
+ last_page=page;pending_link_refresh=false;last_full_render=esp_timer_get_time();
+}
+static void update_inplace_status(void){
+ if(page!=last_page){pending_link_refresh=true;return;}
+ if(!link_label)return;
+ bsp_display_lock(-1);lv_label_set_text(link_label,link_status());bsp_display_unlock();
 }
 void app_main(void){
  esp_reset_reason_t reset=esp_reset_reason();
@@ -240,11 +255,11 @@ void app_main(void){
  }
  boot_recovery.stage=4;
  power_error=amoled_power_init();if(power_error!=ESP_OK)ESP_LOGW("power","PMIC initialization failed: %s",esp_err_to_name(power_error));
- bsp_display_lock(-1);root=lv_screen_active();lv_indev_t *in=NULL;while((in=lv_indev_get_next(in)))lv_indev_set_long_press_time(in,2000);render();bsp_display_unlock();
- snprintf(notice,sizeof(notice),"正在启动USB");bsp_display_lock(-1);render();bsp_display_unlock();
+ bsp_display_lock(-1);root=lv_screen_active();lv_indev_t *in=NULL;while((in=lv_indev_get_next(in)))lv_indev_set_long_press_time(in,2000);render(0);bsp_display_unlock();
+ snprintf(notice,sizeof(notice),"正在启动USB");bsp_display_lock(-1);render(0);bsp_display_unlock();
  boot_recovery.stage=5;
  esp_err_t amoled_usb_error=amoled_usb_start();if(amoled_usb_error!=ESP_OK){page=6;snprintf(notice,sizeof(notice),"USB启动失败 0x%x",(unsigned)amoled_usb_error);}else{notice[0]=0;}
- bsp_display_lock(-1);render();bsp_display_unlock();
+ bsp_display_lock(-1);render(0);bsp_display_unlock();
  boot_recovery.stage=6;
  ESP_LOGI("amoled","READY display=480x480 touch=enabled usb=CDC+HID persistentPlugins=%d psramFree=%u",cJSON_GetArraySize(plugins),(unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
  static char line[MAX_JSON+128];size_t pos=0;bool overflow=false;int tick=0;bool last_usb=false,last_ble=false,last_relay=false,last_direct=false;
@@ -296,14 +311,15 @@ void app_main(void){
     refresh=true;
    }
   }
+  if(boot_pending){static int64_t last_health_log;if(esp_timer_get_time()-last_health_log>=5000000){last_health_log=esp_timer_get_time();ESP_LOGI("ota","health usb_ok=%d relay_ready=%d wifi=%d heap=%d pending=%d",amoled_usb_error==ESP_OK,amoled_relay_ready(),amoled_wifi_connected(),heap_caps_get_free_size(MALLOC_CAP_INTERNAL),boot_pending);}}
   if(boot_pending&&esp_timer_get_time()-healthy_since>=30000000){
-   if(amoled_usb_error==ESP_OK&&relay_error==ESP_OK&&(!amoled_wifi_configured()||wifi_error==ESP_OK)&&amoled_relay_ready()&&heap_caps_get_free_size(MALLOC_CAP_INTERNAL)>=32768){
+   if(amoled_usb_error==ESP_OK&&(!amoled_wifi_configured()||wifi_error==ESP_OK)&&(amoled_relay_ready()||amoled_wifi_connected())&&heap_caps_get_free_size(MALLOC_CAP_INTERNAL)>=32768){
     esp_err_t health=esp_ota_mark_app_valid_cancel_rollback();if(health==ESP_OK)boot_pending=false;else ESP_LOGE("amoled","boot confirmation failed: %s",esp_err_to_name(health));
    }else{ESP_LOGE("amoled","pending image failed startup health; rolling back");esp_ota_mark_app_invalid_rollback_and_reboot();}
   }
   char buf[128];size_t count=amoled_usb_read(buf,sizeof(buf));for(size_t i=0;i<count;i++){char c=buf[i];if(c=='\n'){if(!overflow){line[pos]=0;if(!amoled_control_console(line)){bsp_display_lock(-1);process(line);bsp_display_unlock();}memset(line,0,sizeof(line));}else status("request-too-large");pos=0;overflow=false;}else if(c!='\r'){if(pos+1<sizeof(line))line[pos++]=c;else overflow=true;}}
-  if(amoled_usb_ready()!=last_usb||amoled_relay_connected()!=last_ble||amoled_relay_online()!=last_relay||amoled_direct_online()!=last_direct){last_direct=amoled_direct_online();last_usb=amoled_usb_ready();last_ble=amoled_relay_connected();last_relay=amoled_relay_online();refresh=true;}
-  if(refresh){bsp_display_lock(-1);render();refresh=false;bsp_display_unlock();}
+  if(amoled_usb_ready()!=last_usb||amoled_relay_connected()!=last_ble||amoled_relay_online()!=last_relay||amoled_direct_online()!=last_direct){last_direct=amoled_direct_online();last_usb=amoled_usb_ready();last_ble=amoled_relay_connected();last_relay=amoled_relay_online();update_inplace_status();}
+  if(refresh&&esp_timer_get_time()-last_full_render>=200000){int64_t lock_t0=esp_timer_get_time();bsp_display_lock(-1);int64_t lock_wait=esp_timer_get_time()-lock_t0;render(lock_wait);refresh=false;bsp_display_unlock();vTaskDelay(pdMS_TO_TICKS(10));}
   if(plugin_status_label){
    char text[1024];
    if(amoled_plugin_text(text,sizeof(text))){bsp_display_lock(-1);if(plugin_status_label&&strcmp(text,plugin_prev)){lv_label_set_text(plugin_status_label,text);strcpy(plugin_prev,text);}if(plugin_confirm_button){if(amoled_plugin_stage()==1)lv_obj_remove_state(plugin_confirm_button,LV_STATE_DISABLED);else lv_obj_add_state(plugin_confirm_button,LV_STATE_DISABLED);}bsp_display_unlock();}
@@ -322,7 +338,7 @@ void app_main(void){
    ota_prev=ota_stage;}
   if(notice_ticks>0&&--notice_ticks==0){notice[0]=0;refresh=true;}
   if(boot_recovery.crashes&&amoled_boot_healthy((uint64_t)esp_timer_get_time()/1000))boot_recovery.crashes=0;
-  if(++tick%2000==0)ESP_LOGI("amoled","HEALTH heap=%u plugins=%d",(unsigned)esp_get_free_heap_size(),cJSON_GetArraySize(plugins));
+  if(++tick%2000==0)ESP_LOGI("amoled","HEALTH heap=%u internal=%u min=%u plugins=%d",(unsigned)esp_get_free_heap_size(),(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),(unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),cJSON_GetArraySize(plugins));
   vTaskDelay(pdMS_TO_TICKS(5));
  }
 }
