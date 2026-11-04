@@ -12,7 +12,8 @@ import 'product_widgets.dart';
 /// 屏幕 3：推送进度。
 ///
 /// 用户在这种等待场景下最关心两件事：还剩多久、卡在哪。所以进度环 + 步骤
-/// 清单是主体，日志折叠在下面给需要排查的人。
+/// 清单是主体，静态状态链说明卡放在前面设定预期（安全提交阶段不可取消），
+/// 日志折叠在下面给需要排查的人。
 class PushScreen extends StatefulWidget {
   final BleOtaService service;
   final BluetoothDevice device;
@@ -50,7 +51,25 @@ class _PushScreenState extends State<PushScreen> {
   int _lastSentAt = 0;
   Duration _lastSentAtWall = Duration.zero;
 
-  static const _steps = ['连接控制板', '准备传输', '传输固件', '校验完整性', '重启后核对版本'];
+  /// PRD v2 F3 状态机 → 界面文案映射（实际状态来自 BleOtaService.push 的 step
+  /// 字符串，服务层逻辑不改，只统一文案）：
+  ///   checking    = 检查更新中   （固件页：请求升级清单并校验兼容性）
+  ///   downloading = 正在下载镜像 （固件页：从官方服务器下载）
+  ///   传输固件    = 正在传输固件 （本页：BLE 写入板端备用槽，可取消）
+  ///   verifying   = 正在校验镜像 （板端 sha256 校验，对应 '校验 sha256'）
+  ///   committing  = 正在安全写入 （板端提交切换启动槽，不可取消）
+  ///   rebooting / confirming = 正在重启并回读（对应 '等待重启确认'）
+  ///   succeeded   = 升级完成
+  ///   failed      = 升级失败，可重试
+  ///   cancelled   = 已取消（中断推送即退出，板端丢弃待写入镜像）
+  static const _steps = [
+    '连接控制板',
+    '准备传输',
+    '传输固件',
+    '校验镜像',
+    '安全提交',
+    '重启并回读',
+  ];
 
   @override
   void initState() {
@@ -90,14 +109,14 @@ class _PushScreenState extends State<PushScreen> {
           _sent = p.sent;
         }
         if (p.step == '校验 sha256') _step = 3;
-        if (p.step == '等待重启确认') _step = 4;
+        if (p.step == '等待重启确认') _step = 5;
         if (p.log != null) _logs.add(p.log!);
         if (p.done) {
           _done = true;
           _success = p.success;
           if (p.success) {
             _percent = 100;
-            _step = 5;
+            _step = _steps.length;
           } else {
             _failMsg = p.log;
           }
@@ -181,7 +200,7 @@ class _PushScreenState extends State<PushScreen> {
       child: Scaffold(
         appBar: AppBar(
           automaticallyImplyLeading: false,
-          title: Text(_done ? (_success ? '升级完成' : '更新未完成') : '正在更新控制板'),
+          title: Text(_done ? (_success ? '升级完成' : '升级失败') : '正在更新控制板'),
           actions: [
             if (!_done)
               TextButton(
@@ -226,7 +245,13 @@ class _PushScreenState extends State<PushScreen> {
                 text: '已重新连接同一控制板，确认新版本启动且自检通过。',
               ),
             ],
-            const SizedBox(height: 26),
+            const SizedBox(height: 18),
+            const InfoBanner(
+              icon: Icons.info_outline,
+              text: '状态链：检查 -> 下载 -> 校验 -> 安全提交 -> 重启 -> 回读 -> 完成；'
+                  '安全提交阶段不可取消。',
+            ),
+            const SizedBox(height: 14),
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(

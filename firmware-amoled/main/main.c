@@ -154,29 +154,33 @@ static const char *link_status(void){
  if(amoled_relay_connected())return "USB已连 · 蓝牙已连";
  return amoled_identity_ready()?"USB已连 · 等待手机":"USB已连 · 等待配置";
 }
+static const char *primary_state(void){if(!amoled_usb_ready())return "待连接";unsigned stage=amoled_plugin_stage();if(stage>=1&&stage<=4)return "任务进行中";return amoled_usb_armed()||amoled_relay_online()||amoled_direct_online()?"可操作":"待连接";}
+static lv_obj_t *status_chip(lv_obj_t *parent,const char *name,bool ok,int x,int y){lv_obj_t *chip=lv_obj_create(parent);lv_obj_set_pos(chip,x,y);lv_obj_set_size(chip,140,56);lv_obj_set_style_radius(chip,22,0);lv_obj_set_style_bg_color(chip,lv_color_hex(0x1c1c1c),0);lv_obj_set_style_border_width(chip,0,0);lv_obj_set_style_shadow_width(chip,0,0);lv_obj_set_style_pad_all(chip,0,0);char text[64];snprintf(text,sizeof(text),"%s%s",name,ok?"通":"断");lv_obj_t *l=label(chip,text,0,0,132,lv_color_hex(ok?0x7fd99a:0xaaaaaa));lv_obj_center(l);return chip;}
+static void stop_bar(void){lv_obj_t *b=lv_button_create(root);lv_obj_set_pos(b,24,352);lv_obj_set_size(b,432,68);if(pending_power||atomic_load(&power_request))lv_obj_add_state(b,LV_STATE_DISABLED);lv_obj_set_style_radius(b,22,0);lv_obj_set_style_bg_color(b,lv_color_hex(0x3B1210),0);lv_obj_set_style_border_width(b,0,0);lv_obj_set_style_shadow_width(b,0,0);lv_obj_set_style_pad_all(b,6,0);lv_obj_add_event_cb(b,action,LV_EVENT_CLICKED,(void*)(intptr_t)20);lv_obj_t *l=label(b,"停止手机操作",0,0,420,lv_color_hex(0xF2B8B5));lv_obj_set_height(l,46);lv_obj_set_style_text_align(l,LV_TEXT_ALIGN_CENTER,0);lv_obj_center(l);}
 static void render(void){
  voice_status_label=NULL;plugin_status_label=NULL;plugin_confirm_button=NULL;lv_obj_clean(root);lv_obj_set_style_bg_color(root,lv_color_black(),0);lv_obj_set_style_pad_all(root,0,0);lv_obj_remove_flag(root,LV_OBJ_FLAG_SCROLLABLE);
  link_label=label(root,link_status(),80,36,320,lv_color_hex(0x17baf1));lv_obj_set_style_text_align(link_label,LV_TEXT_ALIGN_CENTER,0);
- const char *titles[]={"手机控制器","我的插件","插件详情","导入插件","手动控制","语音任务","设置","插件任务","电源","确认重启","确认关机"};lv_obj_t *title=label(root,titles[page],72,88,336,lv_color_hex(0xf5f5f5));lv_obj_set_style_text_align(title,LV_TEXT_ALIGN_CENTER,0);
- if(page==0){button("语音任务",56,144,176,96,14,false);button("插件",248,144,176,96,11,true);button("手动控制",56,260,176,96,13,false);button("设置",248,260,176,96,15,false);}
+ const char *titles[]={"手机控制器","我的插件","插件详情","导入插件","手动控制","语音任务","设备状态","插件任务","电源","确认重启","确认关机"};if(page){lv_obj_t *title=label(root,titles[page],72,88,336,lv_color_hex(0xf5f5f5));lv_obj_set_style_text_align(title,LV_TEXT_ALIGN_CENTER,0);}
+ if(page==0){lv_obj_t *state=label(root,primary_state(),80,88,320,lv_color_hex(0xf5f5f5));lv_obj_set_style_text_align(state,LV_TEXT_ALIGN_CENTER,0);status_chip(root,"Wi-Fi",amoled_wifi_connected(),24,148);status_chip(root,"云端",amoled_relay_online(),170,148);status_chip(root,"HID",amoled_usb_armed(),316,148);button("语音任务",56,216,176,56,14,false);button("插件",248,216,176,56,11,true);button("手动控制",56,282,176,56,13,false);button("设置",248,282,176,56,15,false);stop_bar();}
  else if(page==1){int n=cJSON_GetArraySize(plugins);if(!n){label(root,"尚未导入插件",88,168,304,lv_color_hex(0xf5f5f5));label(root,"业务随插件扩展\n保留通用控制能力",88,224,304,lv_color_hex(0xaaaaaa));}if(n){lv_obj_t *list=lv_obj_create(root);lv_obj_set_pos(list,64,136);lv_obj_set_size(list,352,232);lv_obj_set_style_bg_opa(list,0,0);lv_obj_set_style_border_width(list,0,0);lv_obj_set_style_pad_all(list,0,0);lv_obj_t *saved=root;root=list;for(int i=0;i<n;i++)button(str(cJSON_GetArrayItem(plugins,i),"name"),0,i*76,352,64,100+i,false);root=saved;}button("导入说明",112,386,120,56,12,true);button("首页",248,386,120,56,10,false);}
  else if(page==2){cJSON *p=current();label(root,p?str(p,"name"):"未选择插件",80,140,320,lv_color_hex(0xf5f5f5));label(root,p?str(p,"version"):"",80,186,320,lv_color_hex(0x17baf1));label(root,"描述文件已保存\n执行须私有工作流允许及本地确认",80,232,320,lv_color_hex(0xaaaaaa));button("预览任务计划",80,318,320,56,40,true);button("移除插件",112,386,120,56,41,false);button("插件列表",248,386,120,56,11,false);}
  else if(page==3){label(root,"通过USB导入JSON插件\n支持独立更新与移除\n手机导入待接入",80,144,320,lv_color_hex(0xaaaaaa));label(root,"API 1 · 最多4个插件\n导入后不会自动运行",80,288,320,lv_color_hex(0x17baf1));button("返回插件",112,386,256,56,11,true);}
  else if(page==4){if(!amoled_usb_armed()){label(root,"控制当前USB主机\n长按开启输入\n停止后连接保留",80,154,320,lv_color_hex(0xaaaaaa));button("长按2秒开启输入",72,310,336,56,21,true);}else{button("左",60,144,104,64,30,false);button("上",188,144,104,64,32,false);button("右",316,144,104,64,31,false);button("返回",60,220,104,64,35,false);button("点击",188,220,104,64,34,false);button("下",316,220,104,64,33,false);button("音量+",60,296,104,64,37,false);button("主页",188,296,104,64,36,false);button("音量-",316,296,104,64,38,false);}button("停止输入",112,386,120,56,20,false);button("首页",248,386,120,56,10,false);}
  else if(page==5){lv_obj_t *voice_box=lv_obj_create(root);lv_obj_set_pos(voice_box,80,136);lv_obj_set_size(voice_box,320,120);lv_obj_set_style_pad_all(voice_box,0,0);lv_obj_set_style_border_width(voice_box,0,0);voice_status_label=label(voice_box,"仅按住时录音，最长10秒\n本次仅识别，不执行手机任务",0,0,300,lv_color_hex(0xaaaaaa));voice_button();button("回到首页",112,386,256,56,10,true);}
  else if(page==6){
-  char version_text[64];snprintf(version_text,sizeof(version_text),"固件 %s",esp_app_get_description()->version);
-  label(root,version_text,80,138,320,lv_color_hex(0x17baf1));
-  label(root,amoled_wifi_connected()?"蓝牙手机中转 · Wi-Fi已连接":amoled_wifi_configured()?"Wi-Fi尚未连接":"蓝牙手机中转 · Wi-Fi未配置",80,184,320,lv_color_hex(0xaaaaaa));
-  button("停止输入",64,250,168,56,20,false);button("长按直连",248,250,168,56,23,true);
-  button("长按维护",64,318,168,56,22,false);button("电源",248,318,168,56,50,false);
-  button("回到首页",112,386,256,56,10,true);
+  char text[256];snprintf(text,sizeof(text),"Wi-Fi %s · 蓝牙%s\n云端%s · 输入%s",amoled_wifi_connected()?"通":"未连",amoled_relay_connected()?"通":"未连",amoled_relay_online()?"通":"未连",amoled_usb_armed()?"开启":"未开启");
+  label(root,text,48,136,384,lv_color_hex(0xaaaaaa));
+  lv_obj_t *v=lv_label_create(root);lv_label_set_text(v,esp_app_get_description()->version);lv_obj_set_pos(v,368,100);lv_obj_set_width(v,88);lv_obj_set_height(v,24);lv_obj_set_style_text_font(v,&lv_font_montserrat_16,0);lv_obj_set_style_text_color(v,lv_color_hex(0xaaaaaa),0);lv_obj_set_style_text_align(v,LV_TEXT_ALIGN_CENTER,0);
+  button("停止输入",80,238,152,56,20,false);button("长按直连",248,238,152,56,23,true);
+  button("长按2秒进入维护",80,302,320,56,22,false);
+  button("回到首页",80,366,152,56,10,true);button("电源",248,366,152,56,50,false);
  }
  else if(page==7){
   lv_obj_t *box=lv_obj_create(root);lv_obj_set_pos(box,64,136);lv_obj_set_size(box,352,172);
   plugin_status_label=label(box,"正在读取真实插件状态",0,0,308,lv_color_hex(0xf5f5f5));
-  plugin_confirm_button=button("确认执行本次计划",72,318,336,56,42,true);
-  button("停止任务",80,386,152,56,43,false);button("返回详情",248,386,152,56,44,false);
+  plugin_confirm_button=button("确认执行本次计划",24,318,296,56,42,true);
+  button("返回详情",328,318,128,56,44,false);
+  lv_obj_t *stop=lv_button_create(root);lv_obj_set_pos(stop,24,382);lv_obj_set_size(stop,432,64);if(pending_power||atomic_load(&power_request))lv_obj_add_state(stop,LV_STATE_DISABLED);lv_obj_set_style_radius(stop,22,0);lv_obj_set_style_bg_color(stop,lv_color_hex(0x3B1210),0);lv_obj_set_style_border_width(stop,0,0);lv_obj_set_style_shadow_width(stop,0,0);lv_obj_set_style_pad_all(stop,6,0);lv_obj_add_event_cb(stop,action,LV_EVENT_CLICKED,(void*)(intptr_t)43);lv_obj_t *stop_label=label(stop,"停止任务",0,0,420,lv_color_hex(0xF2B8B5));lv_obj_set_height(stop_label,46);lv_obj_set_style_text_align(stop_label,LV_TEXT_ALIGN_CENTER,0);lv_obj_center(stop_label);
  }
  else if(page==8){
   char version_text[64];snprintf(version_text,sizeof(version_text),"固件 %s",esp_app_get_description()->version);
