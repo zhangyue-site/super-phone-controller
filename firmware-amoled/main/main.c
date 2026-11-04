@@ -328,6 +328,7 @@ void app_main(void){
   }
   char buf[128];size_t count=amoled_usb_read(buf,sizeof(buf));for(size_t i=0;i<count;i++){char c=buf[i];if(c=='\n'){if(!overflow){line[pos]=0;if(!amoled_control_console(line)){bsp_display_lock(-1);process(line);bsp_display_unlock();}memset(line,0,sizeof(line));}else status("request-too-large");pos=0;overflow=false;}else if(c!='\r'){if(pos+1<sizeof(line))line[pos++]=c;else overflow=true;}}
   if(amoled_usb_ready()!=last_usb||amoled_relay_connected()!=last_ble||amoled_relay_online()!=last_relay||amoled_direct_online()!=last_direct){last_direct=amoled_direct_online();last_usb=amoled_usb_ready();last_ble=amoled_relay_connected();last_relay=amoled_relay_online();update_inplace_status();}
+  if(tick%6000==0){last_page=-1;refresh=true;}
   if(refresh&&esp_timer_get_time()-last_full_render>=200000){int64_t lock_t0=esp_timer_get_time();bsp_display_lock(-1);int64_t lock_wait=esp_timer_get_time()-lock_t0;render(lock_wait);refresh=false;bsp_display_unlock();vTaskDelay(pdMS_TO_TICKS(10));}
   if(plugin_status_label){
    char text[1024];
