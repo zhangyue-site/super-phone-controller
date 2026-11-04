@@ -58,7 +58,7 @@ static void status(const char *r){snprintf(last,sizeof(last),"%s",r);}
 static void reply(cJSON *o){cJSON_Delete(o);}
 static int nvs_set_str(int h,const char *k,const char *v){if(fail_set)return -1;free(saved);saved=strdup(v);return 0;}
 static int nvs_commit(int h){return fail_commit?-1:0;}
-static void render(void){}
+static void render(long long lock_wait_us){(void)lock_wait_us;}
 static bool amoled_usb_armed(void){return false;}
 /* Registry tests keep unrelated Wi-Fi maintenance in its separately exercised adapter. */
 static bool amoled_wifi_console(cJSON *request){return false;}
@@ -69,6 +69,8 @@ static void amoled_usb_write(const char *s){}
 static void amoled_usb_write_bytes(const void *p,size_t n){}
 static void vTaskDelay(int n){}
 static void esp_restart(void){restarts++;}
+/* Logs op reads the retained ring buffer; stub mirrors the exact field layout process() touches. */
+static struct {uint32_t magic,crashes,stage,log_size;char log[4096];} boot_recovery;
 static int amoled_usb_enter_bootloader(void){bootloader_calls++;return 0;}
 typedef struct {struct {int w,h,stride;} header;void *data;} lv_draw_buf_t;
 static lv_draw_buf_t *lv_snapshot_take(void *p,int fmt){return NULL;}
