@@ -230,6 +230,32 @@ static void update_inplace_status(void){
  if(!link_label)return;
  bsp_display_lock(-1);lv_label_set_text(link_label,link_status());bsp_display_unlock();
 }
+/* BSP-internal touch init, linked from the BSP library. */
+esp_err_t bsp_touch_new(const bsp_display_cfg_t *cfg,esp_lcd_touch_handle_t *ret_touch);
+static void amoled_rounder_cb(lv_event_t *e){lv_area_t *area=lv_event_get_param(e);area->x1=(area->x1>>1)<<1;area->y1=(area->y1>>1)<<1;area->x2=((area->x2>>1)<<1)+1;area->y2=((area->y2>>1)<<1)+1;}
+/* Display init with small flush chunks: the BSP default flushes 50 rows at once, which needs a 48KB
+ * internal DMA bounce that can never allocate once Wi-Fi is up (draws die with ESP_ERR_NO_MEM and the
+ * panel freezes on a stale frame). Ten rows keep the bounce at 9.6KB and everything fits. */
+static lv_display_t *amoled_display_start(void){
+ bsp_display_cfg_t cfg={.lv_adapter_cfg=ESP_LV_ADAPTER_DEFAULT_CONFIG()};
+ if(esp_lv_adapter_init(&cfg.lv_adapter_cfg)!=ESP_OK)return NULL;
+ const bsp_display_config_t disp_config={.max_transfer_sz=BSP_LCD_H_RES*10*2};
+ esp_lcd_panel_handle_t panel_handle=NULL;esp_lcd_panel_io_handle_t io_handle=NULL;
+ if(bsp_display_new(&disp_config,&panel_handle,&io_handle)!=ESP_OK)return NULL;
+ esp_lv_adapter_display_config_t disp_cfg={.panel=panel_handle,.panel_io=io_handle,
+  .profile={.interface=ESP_LV_ADAPTER_PANEL_IF_OTHER,.rotation=cfg.rotation,.hor_res=BSP_LCD_H_RES,.ver_res=BSP_LCD_V_RES,
+   .buffer_height=10,.use_psram=true,.enable_ppa_accel=false,.require_double_buffer=true},
+  .tear_avoid_mode=cfg.tear_avoid_mode};
+ lv_display_t *disp=esp_lv_adapter_register_display(&disp_cfg);if(!disp)return NULL;
+ lv_display_add_event_cb(disp,amoled_rounder_cb,LV_EVENT_INVALIDATE_AREA,NULL);
+ esp_lcd_touch_handle_t tp=NULL;
+ if(bsp_touch_new(&cfg,&tp)!=ESP_OK)return NULL;
+ esp_lv_adapter_touch_config_t touch_cfg=ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(disp,tp);
+ if(!esp_lv_adapter_register_touch(&touch_cfg))return NULL;
+ if(bsp_display_brightness_init()!=ESP_OK)return NULL;
+ if(esp_lv_adapter_start()!=ESP_OK)return NULL;
+ return disp;
+}
 void app_main(void){
  esp_reset_reason_t reset=esp_reset_reason();
  bool crash=reset==ESP_RST_PANIC||reset==ESP_RST_TASK_WDT||reset==ESP_RST_INT_WDT||reset==ESP_RST_WDT;
@@ -247,7 +273,7 @@ void app_main(void){
  size_t n=0;if(nvs_get_str(storage,"plugins",NULL,&n)==ESP_OK&&n<=MAX_JSON){char *s=malloc(n);if(s){if(nvs_get_str(storage,"plugins",s,&n)==ESP_OK)plugins=cJSON_Parse(s);free(s);}}
  if(!cJSON_IsArray(plugins)){cJSON_Delete(plugins);plugins=cJSON_CreateArray();}
  boot_recovery.stage=3;
- if(!bsp_display_start()){
+ if(!amoled_display_start()){
   ESP_LOGE("amoled","display initialization failed");
   esp_ota_img_states_t failed_state=ESP_OTA_IMG_UNDEFINED;esp_ota_get_state_partition(esp_ota_get_running_partition(),&failed_state);
   if(failed_state==ESP_OTA_IMG_PENDING_VERIFY){esp_ota_mark_app_invalid_rollback_and_reboot();esp_restart();}
