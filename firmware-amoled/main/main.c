@@ -267,9 +267,10 @@ void app_main(void){
  esp_err_t relay_error=ESP_ERR_INVALID_STATE;
  if(amoled_identity_ready()){relay_error=amoled_relay_start();if(relay_error!=ESP_OK)ESP_LOGE("amoled","BLE startup failed: %s",esp_err_to_name(relay_error));}
  /* Wi-Fi start deferred to the main loop: it raced LVGL/BSP init for internal RAM (0.6.15 NO_MEM burst at 3-5s).
-  * Up to 3 attempts, 5s apart, so a transient failure no longer leaves the board offline. */
- esp_err_t wifi_error=ESP_ERR_INVALID_STATE;unsigned wifi_attempts=0;int wifi_last=0;
- amoled_tcp_console_start();
+  * Up to 3 attempts, 5s apart, so a transient failure no longer leaves the board offline.
+  * The TCP console must start only after the first Wi-Fi attempt: its socket() needs the lwip
+  * core that esp_netif_init brings up, and starting it earlier deadlocks the whole system. */
+ esp_err_t wifi_error=ESP_ERR_INVALID_STATE;unsigned wifi_attempts=0;int wifi_last=0;static bool console_started=false;
  esp_ota_img_states_t image_state=ESP_OTA_IMG_UNDEFINED;esp_ota_get_state_partition(esp_ota_get_running_partition(),&image_state);
  bool boot_pending=image_state==ESP_OTA_IMG_PENDING_VERIFY;
  int64_t healthy_since=esp_timer_get_time();
@@ -299,6 +300,7 @@ void app_main(void){
    if(wifi_error==ESP_OK)ESP_LOGI("amoled","Wi-Fi started on attempt %u",wifi_attempts);
    else ESP_LOGW("amoled","Wi-Fi startup attempt %u failed: %s",wifi_attempts,esp_err_to_name(wifi_error));
   }
+  if(!console_started&&wifi_attempts>0){console_started=true;amoled_tcp_console_start();}
   if(pending_power){
    if(!shutdown_sent&&amoled_ota_power_idle()){
     if(pending_power==1){esp_restart();}
