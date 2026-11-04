@@ -25,6 +25,9 @@ typedef struct {char version[32];} App;
 static const App *esp_app_get_description(void){static App app={"0.3.0-amoled"};return &app;}
 #define ESP_OK 0
 #define pdMS_TO_TICKS(n) (n)
+#define WIFI_PS_NONE 0
+#define WIFI_PS_MIN_MODEM 1
+static int esp_wifi_set_ps(int ps){(void)ps;return 0;}
 typedef struct Client {int kind,used;} Client;
 typedef Client *esp_http_client_handle_t;
 typedef struct {
