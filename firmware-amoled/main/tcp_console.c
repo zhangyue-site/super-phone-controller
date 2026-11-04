@@ -23,7 +23,7 @@
  * "AUTH <hex hmac-sha256(challenge)>\n" using the provisioning secret. */
 
 #define CONSOLE_PORT 10006
-#define LINE_MAX 512
+#define LINE_MAX 1024
 
 static int send_all(int fd,const char *buf,size_t n){
  size_t sent=0;
@@ -119,6 +119,11 @@ static void serve(int fd){
   else if(!strcmp(line,"OTA")){
    if(amoled_wifi_ota_request())send_text(fd,"OTA-REQUESTED\n");
    else send_text(fd,"OTA-REJECTED\n");
+  }
+  else if(!strncmp(line,"WIFI ",5)){
+   cJSON *o=cJSON_ParseWithOpts(line+5,NULL,true);bool ok=false;
+   if(o){if(!cJSON_GetObjectItem(o,"op"))cJSON_AddStringToObject(o,"op","maintenance.wifi.configure");ok=amoled_wifi_console(o);cJSON_Delete(o);}
+   send_text(fd,ok?"WIFI-OK\n":"WIFI-REJECTED\n");
   }
   else if(!strcmp(line,"RESTART")){send_text(fd,"BYE\n");shutdown(fd,SHUT_WR);vTaskDelay(pdMS_TO_TICKS(300));esp_restart();}
   else if(!strcmp(line,"QUIT")){send_text(fd,"BYE\n");return;}
