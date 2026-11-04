@@ -369,8 +369,14 @@ void app_main(void){
    if(strcmp(text,voice_prev)){bsp_display_lock(-1);if(voice_status_label)lv_label_set_text(voice_status_label,text);bsp_display_unlock();strcpy(voice_prev,text);}
   }
   {static unsigned ota_prev=0;unsigned ota_stage=amoled_wifi_ota_stage();
-   if((ota_stage==2||ota_stage==3)&&strcmp(notice,"固件升级中，请勿断开电源")){snprintf(notice,sizeof(notice),"固件升级中，请勿断开电源");notice_ticks=0;refresh=true;}
-   if(ota_prev&&ota_prev<=3&&ota_stage==4){snprintf(notice,sizeof(notice),"升级失败，已恢复原固件，可继续控制");notice_ticks=1000;refresh=true;}
+   char ota_text[160];ota_text[0]=0;
+   if(ota_stage==2){unsigned got=amoled_wifi_received(),total=amoled_wifi_total();
+    if(total)snprintf(ota_text,sizeof(ota_text),"固件升级中 %u%%，请勿断开电源",got*100/total);
+    else snprintf(ota_text,sizeof(ota_text),"固件升级中，请勿断开电源");}
+   else if(ota_stage==3)snprintf(ota_text,sizeof(ota_text),"固件已写入，即将重启");
+   if(ota_text[0]&&strcmp(notice,ota_text)){snprintf(notice,sizeof(notice),"%s",ota_text);notice_ticks=0;refresh=true;}
+   if(ota_prev&&ota_prev<=3&&ota_stage==4){snprintf(notice,sizeof(notice),"升级失败，可重试");notice_ticks=1000;refresh=true;}
+   if((ota_stage==0||ota_stage==1)&&ota_prev>=2&&!notice_ticks){notice[0]=0;refresh=true;}
    ota_prev=ota_stage;}
   if(notice_ticks>0&&--notice_ticks==0){notice[0]=0;refresh=true;}
   if(boot_recovery.crashes&&amoled_boot_healthy((uint64_t)esp_timer_get_time()/1000))boot_recovery.crashes=0;
