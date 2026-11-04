@@ -143,6 +143,9 @@ static esp_http_client_handle_t open_http(const char *endpoint,const char *path,
 static void download(const char *endpoint,unsigned epoch){
  char manifest[193]={0},sha[65],version[32];uint8_t digest[32],block[511];
  int length=0;uint32_t total=0,received=0;unsigned ota_epoch=0;bool begun=false,ok=false;
+ /* Modem sleep throttles throughput to a few KB/s which always hits the deadline mid-image;
+  * full power for the transfer window, restored in done. */
+ esp_wifi_set_ps(WIFI_PS_NONE);
  int64_t deadline=esp_timer_get_time()+600000000;
  atomic_store(&received_bytes,0);atomic_store(&image_bytes,0);
  esp_http_client_handle_t client=open_http(endpoint,"/firmware/manifest",epoch,&length);
@@ -184,6 +187,7 @@ static void download(const char *endpoint,unsigned epoch){
  }
  done:
  close_http(client);memset(block,0,sizeof(block));memset(digest,0,sizeof(digest));
+ esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
  if(!ok){if(begun)amoled_ota_cancel();atomic_store(&stage,4);}
 }
 static void worker(void *unused){
