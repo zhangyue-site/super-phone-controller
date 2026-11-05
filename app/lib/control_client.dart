@@ -270,6 +270,14 @@ class ControlClient implements LocalVisionSource {
           phase: path.startsWith('relay:') ? path.substring(6) : path,
           reason: 'http_error',
           httpStatus: response.statusCode);
+      // Only an authenticated lease expiry before delivery may recover.
+      // Generic 403 and uncertain action ACKs remain terminal.
+      if (response.statusCode == 409 &&
+          (path == 'relay:poll' || path == 'relay:maintenance') &&
+          decoded['code'] == 'relay_lease_expired') {
+        throw ControlHttpFailure(409, '中转连接过期，停止旧任务后重新连接',
+            relayLeaseExpired: true);
+      }
       if (response.statusCode == 403 && path != 'relay:detach') {
         _ticket = null;
         _expires = null;
