@@ -170,7 +170,7 @@ static const char *link_status(void){
 }
 static const char *link_full(void){
  char ip[16];
- if(amoled_wifi_ip(ip,sizeof ip)){snprintf(link_text_buf,sizeof link_text_buf,"%s · %s",link_status(),ip);return link_text_buf;}
+ if(amoled_wifi_ip(ip,sizeof ip)){snprintf(link_text_buf,sizeof link_text_buf,"Wi-Fi通 · %s",ip);return link_text_buf;}
  return link_status();
 }
 static const char *primary_state(void){if(!amoled_usb_ready())return "待连接";unsigned stage=amoled_plugin_stage();if(stage>=1&&stage<=4)return "任务进行中";return amoled_usb_armed()||amoled_relay_online()||amoled_direct_online()?"可操作":"待连接";}
