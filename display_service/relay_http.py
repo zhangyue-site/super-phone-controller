@@ -184,6 +184,7 @@ def _audit_failure(path,error):
 
 def handle(handler,config):
  if not handler.path.startswith("/app-relay/"):return False
+ parent_authenticated=False
  try:
   if handler.command!="POST" or os.environ.get("EPAPER_RELAY_CONTROL")!="1":handler.reply(503,b"{}");return True
   header=handler.headers.get("Authorization","")
@@ -196,6 +197,7 @@ def handle(handler,config):
    result=gateway(config).usb_window(device,capture_principal(header[7:]),obj)
    handler.reply(200,json.dumps(result).encode());return True
   identity=app_control.owner(header[7:]);device=identity[3];principal=identity[1]
+  parent_authenticated=True
   obj=remote_http.body(handler,4096);g=gateway(config);op=handler.path.rsplit("/",1)[1]
   fields={"attach":{"receipt"},"poll":{"nonce"},"ack":{"nonce","id","receipt"},"detach":{"nonce"},"maintenance":{"nonce","op"}}
   if op not in fields or set(obj)!=fields[op]:raise ValueError("relay fields")
@@ -206,7 +208,13 @@ def handle(handler,config):
   else:result=g.detach(device,principal,obj["nonce"])
   handler.reply(200,json.dumps(result).encode())
  except PermissionError as error:
-  _audit_failure(handler.path,error);handler.reply(403,b"{\"reply\":\"Relay authorization expired; reconnect safely\"}")
+  _audit_failure(handler.path,error)
+  # app_control.owner has already authenticated the parent capability when
+  # Relay._session reports this exact timeout. Never classify bad tickets,
+  # owner/nonce mismatches or pending ACKs as recoverable authorization.
+  if parent_authenticated and str(error)=='relay expired; reconcile first' and handler.path in ('/app-relay/poll','/app-relay/maintenance'):
+   handler.reply(409,b'{"code":"relay_lease_expired","reply":"Relay lease expired; stop old task and reconnect"}')
+  else:handler.reply(403,b'{"reply":"Relay authorization expired; reconnect safely"}')
  except (ValueError,TypeError,KeyError) as error:
   _audit_failure(handler.path,error);handler.reply(409,b"{\"reply\":\"Relay stopped; reconcile before reconnect\"}")
  except OSError as error:
