@@ -1,4 +1,5 @@
 #include "usb.h"
+#include "power.h"
 #include "ota_ble.h"
 #include "relay.h"
 #include "touch_descriptor.h"
@@ -45,7 +46,7 @@ esp_err_t amoled_usb_start(void){
  tinyusb_config_t cfg=TINYUSB_DEFAULT_CONFIG();cfg.event_cb=event;cfg.descriptor.device=&device;cfg.descriptor.full_speed_config=config;cfg.descriptor.string=strings;cfg.descriptor.string_count=6;
  result=tinyusb_driver_install(&cfg);if(result!=ESP_OK)return result;installed=true;tinyusb_config_cdcacm_t cdc={0};result=tinyusb_cdcacm_init(&cdc);started=result==ESP_OK;return result;
 }
-bool amoled_usb_ready(void){return started&&tud_mounted();}
+bool amoled_usb_ready(void){int known=0,vbus=amoled_power_vbus_present(&known);return started&&tud_mounted()&&(!known||vbus);}
 bool amoled_usb_armed(void){return armed&&amoled_usb_ready();}
 static bool permitted(bool release,bool (*live)(uint32_t),uint32_t epoch){return amoled_usb_ready()&&(release||(!amoled_ota_busy()&&armed&&(!live||live(epoch))));}
 // One input owner at a time. Acknowledgement waits for the actual USB completion.

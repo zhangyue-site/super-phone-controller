@@ -34,7 +34,7 @@ static bool automatic_download;
 static atomic_bool auto_enabled;
 static atomic_uint received_bytes,image_bytes;
 static SemaphoreHandle_t mutex;
-static atomic_bool configured,connected,requested,transfer,ready;
+static atomic_bool configured,connected,requested,transfer,ready,user_check;
 static bool runtime_started,runtime_attempted;
 static esp_err_t runtime_error=ESP_ERR_INVALID_STATE;
 static esp_err_t runtime_start(void);
@@ -48,6 +48,19 @@ unsigned amoled_wifi_total(void){return atomic_load(&image_bytes);}
 bool amoled_wifi_auto_update(void){return atomic_load(&auto_enabled);}
 bool amoled_wifi_configured(void){return atomic_load(&configured);}
 bool amoled_wifi_connected(void){return atomic_load(&connected);}
+/* STA IPv4 for the on-screen status line; false when not connected. */
+bool amoled_wifi_ip(char *buf,size_t len){
+ if(!buf||!len)return false;
+ buf[0]=0;
+ esp_netif_t *netif=esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+ if(!netif)return false;
+ esp_netif_ip_info_t info;
+ if(esp_netif_get_ip_info(netif,&info)!=ESP_OK)return false;
+ if(info.ip.addr==0)return false;
+ unsigned ip=info.ip.addr;
+ snprintf(buf,len,"%u.%u.%u.%u",ip&0xff,(ip>>8)&0xff,(ip>>16)&0xff,(ip>>24)&0xff);
+ return true;
+}
 esp_err_t amoled_wifi_runtime_error(void){return runtime_attempted?runtime_error:ESP_OK;}
 unsigned amoled_wifi_ota_stage(void){return atomic_load(&stage);}
 bool amoled_wifi_transferring(void){return atomic_load(&transfer);}
@@ -92,10 +105,17 @@ static bool configure(void *context){
 }
 static bool request_ota(void *unused){
  if(!allowed()||!amoled_identity_ready()||!atomic_load(&configured)||!atomic_load(&connected))return false;
+ atomic_store(&user_check,false);
  atomic_store(&requested_epoch,atomic_load(&generation));
  atomic_store(&requested,true);atomic_store(&stage,1);return true;
 }
 bool amoled_wifi_ota_request(void){return request_ota(NULL);}
+bool amoled_wifi_ota_check(void){
+ if(!allowed()||!amoled_identity_ready()||!atomic_load(&configured)||!atomic_load(&connected))return false;
+ atomic_store(&user_check,true);
+ atomic_store(&requested_epoch,atomic_load(&generation));
+ atomic_store(&requested,true);atomic_store(&stage,1);return true;
+}
 bool amoled_wifi_console(cJSON *o){
  const char *op=field(o,"op");
  bool setup=!strcmp(op,"maintenance.wifi.configure"),clear=!strcmp(op,"maintenance.wifi.clear"),ota=!strcmp(op,"maintenance.wifi.ota");
@@ -140,7 +160,7 @@ static esp_http_client_handle_t open_http(const char *endpoint,const char *path,
     esp_http_client_is_chunked_response(client)||!live(epoch)){close_http(client);return NULL;}
  *length=(int)bytes;return client;
 }
-static void download(const char *endpoint,unsigned epoch){
+static void download(const char *endpoint,unsigned epoch,bool check_only){
  char manifest[193]={0},sha[65],version[32];uint8_t digest[32],block[511];
  int length=0;uint32_t total=0,received=0;unsigned ota_epoch=0;bool begun=false,ok=false;
  /* Modem sleep throttles throughput to a few KB/s which always hits the deadline mid-image;
@@ -159,8 +179,8 @@ static void download(const char *endpoint,unsigned epoch){
  if(used!=length||!esp_http_client_is_complete_data_received(client)||
     !pc_wifi_manifest(manifest,length,&total,sha,version)||!amoled_unhex(sha,32,digest))goto done;
  close_http(client);client=NULL;atomic_store(&image_bytes,total);
- if(automatic_download&&!amoled_release_newer(version,esp_app_get_description()->version)){
-  atomic_store(&stage,0);ok=true;goto done;
+ if((check_only||automatic_download)&&!amoled_release_newer(version,esp_app_get_description()->version)){
+  atomic_store(&stage,check_only?5:0);ok=true;goto done;
  }
  if(!live(epoch)||esp_timer_get_time()>=deadline||!amoled_ota_wifi_begin(version,total,digest,(uint64_t)deadline/1000,&ota_epoch))goto done;
  begun=true;atomic_store(&stage,2);
@@ -226,9 +246,10 @@ static void worker(void *unused){
   if(atomic_load(&requested)){
    atomic_store(&transfer,true);
    bool perform=atomic_exchange(&requested,false);
+   bool check=atomic_exchange(&user_check,false);
    char endpoint[191];xSemaphoreTake(mutex,portMAX_DELAY);memcpy(endpoint,config.endpoint,sizeof(endpoint));xSemaphoreGive(mutex);
    automatic_download=false;
-   if(perform)download(endpoint,atomic_load(&requested_epoch));
+   if(perform)download(endpoint,atomic_load(&requested_epoch),check);
    memset(endpoint,0,sizeof(endpoint));atomic_store(&transfer,false);
   }
   if(atomic_load(&auto_enabled)&&atomic_load(&connected)&&time(NULL)>=1700000000&&
@@ -237,7 +258,7 @@ static void worker(void *unused){
    char endpoint[191];xSemaphoreTake(mutex,portMAX_DELAY);memcpy(endpoint,config.endpoint,sizeof(endpoint));xSemaphoreGive(mutex);
    auto_check=esp_timer_get_time()+600000000; /* At most once per five minutes, including failures/STOP. */
    atomic_store(&transfer,true);atomic_store(&stage,1);automatic_download=true;
-   download(endpoint,atomic_load(&generation));
+   download(endpoint,atomic_load(&generation),false);
    auto_check=esp_timer_get_time()+300000000;
    automatic_download=false;atomic_store(&transfer,false);memset(endpoint,0,sizeof(endpoint));
   }

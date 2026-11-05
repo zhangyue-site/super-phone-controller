@@ -14,7 +14,10 @@
  * Do not construct XPowersLib: its init also changes TS measurement settings. */
 enum {
     AXP_ADDRESS = 0x34, AXP_IC_TYPE = 0x03, AXP_CHIP_ID = 0x4a,
+    AXP_STATUS1 = 0x00, AXP_VBUS_IN = 1u << 5,
     AXP_COMMON_CONFIG = 0x10, AXP_PWROFF_EN = 0x22,
+    AXP_INTEN2 = 0x41, AXP_INTSTS2 = 0x49,
+    AXP_PKEY_SHORT = 1u << 3, AXP_PKEY_LONG = 1u << 2,
     AXP_LONG_PRESS_ENABLE = 1u << 1, AXP_LONG_PRESS_RESTART = 1u << 0,
     AXP_SHUTDOWN = 1u << 0, I2C_TIMEOUT_MS = 200,
 };
@@ -66,6 +69,38 @@ esp_err_t amoled_power_init(void)
     ready = true;
     ESP_LOGI(TAG, "AXP2101 verified; PWR long press power-off enabled (0x%02x -> 0x%02x); duration preserved", before, after);
     return ESP_OK;
+}
+
+esp_err_t amoled_power_arm_key(void)
+{
+    if (!ready) return ESP_ERR_INVALID_STATE;
+    uint8_t enable = 0;
+    esp_err_t err = read_reg(AXP_INTEN2, &enable);
+    if (err == ESP_OK) err = write_reg(AXP_INTEN2, enable | AXP_PKEY_SHORT);
+    if (err == ESP_OK) err = write_reg(AXP_INTSTS2, 0xFF);
+    if (err != ESP_OK) ESP_LOGW(TAG, "PWR short-press arm failed: %s", esp_err_to_name(err));
+    return err;
+}
+
+int amoled_power_vbus_present(int *known)
+{
+    if (known) *known = 0;
+    if (!ready) return 0;
+    uint8_t status = 0;
+    if (read_reg(AXP_STATUS1, &status) != ESP_OK) return 0;
+    if (known) *known = 1;
+    return (status & AXP_VBUS_IN) ? 1 : 0;
+}
+
+int amoled_power_take_short_press(void)
+{
+    if (!ready) return 0;
+    uint8_t status = 0;
+    if (read_reg(AXP_INTSTS2, &status) != ESP_OK) return 0;
+    if (status & AXP_PKEY_LONG) write_reg(AXP_INTSTS2, AXP_PKEY_LONG);
+    if (!(status & AXP_PKEY_SHORT)) return 0;
+    write_reg(AXP_INTSTS2, AXP_PKEY_SHORT);
+    return 1;
 }
 
 esp_err_t amoled_power_shutdown(void)
