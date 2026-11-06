@@ -3,9 +3,11 @@ No phone actions, device bearer keys, screenshots on disk, or ADB access.
 """
 import json,re,threading,os,hashlib,hmac,secrets
 from .app_ota import Authority
+from .screen_state import ScreenStates
 from .conversation import CONVERSATION
 from .wechat_nav import STORE
 AUTHORITY=Authority()
+SCREEN_STATES=ScreenStates()
 LOCK=threading.Lock()
 SEQUENCES={}
 USB_AUTHORITY=Authority()
@@ -97,6 +99,7 @@ def handle(handler,config):
     with AUTHORITY.lock:
      for old,item in list(AUTHORITY.tickets.items()):
       if item[1]==obj['device'] and old!=result['ticket']:AUTHORITY.tickets.pop(old,None)
+     SCREEN_STATES.prune(AUTHORITY.tickets,AUTHORITY.clock())
      CONVERSATION.mailbox.cancel(obj['device'])
    elif path.endswith('/challenge'):
     if set(obj)!={'device'}:raise ValueError('fields')
@@ -108,6 +111,7 @@ def handle(handler,config):
      extend_diagnostic_ticket(obj['device'],grant)
      for old,item in list(AUTHORITY.tickets.items()):
       if item[1]==obj['device'] and old!=grant['ticket']:AUTHORITY.tickets.pop(old,None)
+     SCREEN_STATES.prune(AUTHORITY.tickets,AUTHORITY.clock())
      CONVERSATION.mailbox.cancel(obj['device'])
     result={'ticket':grant['ticket'],'expiresIn':grant['expiresIn'],'scope':'screen-frames'}
    handler.reply(200,json.dumps(result).encode());return True
@@ -122,9 +126,12 @@ def handle(handler,config):
    with AUTHORITY.lock:
     AUTHORITY._prune(AUTHORITY.clock());item=AUTHORITY.tickets.get(ticket)
     if item is None or item[1]!=device:raise ValueError('revoked')
+    SCREEN_STATES.record(ticket,device,handler.headers,AUTHORITY.clock(),AUTHORITY.tickets)
     with mailbox.lock:
      j=mailbox.jobs.get(device)
      if j and (j.cancelled or (j.done and getattr(j,'screen_session','')!=ticket)):j=None
+     if j and mailbox.jobs.get(device) is j and j.device==device and not j.done and not j.cancelled:
+      SCREEN_STATES.bind_job(j,ticket,device,AUTHORITY.clock(),AUTHORITY.tickets)
      result={'state':j.state if j else 'idle','reply':j.reply if j else '',
       'frame':j.video_sequence if j else 0,'pointerReady':bool(j and j.pointer_protocol=='absolute-v1'),
       'skills':STORE.catalog(device),'barrier':j.video_barrier if j else '',
@@ -136,6 +143,7 @@ def handle(handler,config):
    with AUTHORITY.lock:
     if ticket not in AUTHORITY.tickets:raise ValueError('revoked')
     AUTHORITY.tickets.pop(ticket,None)
+    SCREEN_STATES.discard(ticket)
     with LOCK:SEQUENCES.pop(ticket,None)
     mailbox.cancel(device);STORE.invalidate(device)
    handler.reply(200,b'{}');return True

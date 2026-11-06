@@ -52,7 +52,8 @@ class StaticFrameWait(unittest.TestCase):
   for order in ('receipt-first','frame-first'):
    ops,result,j=self.run_task(order)
    self.assertIsInstance(result,ValueError,order);self.assertFalse(j.navigation_verified)
-   self.assertIn('屏幕共享仍有效',str(result));self.assertNotIn('请在App中共享',str(result))
+   self.assertIn('共享授权仍有效',str(result));self.assertNotIn('请在App中共享',str(result))
+   self.assertIn('原因尚未确认',str(result));self.assertNotIn('开启“静态页面',str(result))
    self.assertIn('未重复任何操作',str(result))
    # Waiting never adds or replays an actuator command.
    self.assertEqual(ops,['hid_home','hid_pointer'] if order=='receipt-first' else ['hid_home'])

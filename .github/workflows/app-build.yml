@@ -65,7 +65,7 @@ jobs:
       - name: Backend frame and navigation regressions
         run: |
           python3 -m pip install "Pillow>=12.0.0" -r ../requirements-keyboard.txt
-          python3 ../tools/run_offline_tests.py test_accessibility_frames test_bill_navigation_scope test_general_ocr_target_match test_usb_preparation_queue
+          python3 ../tools/run_offline_tests.py test_accessibility_frames test_bill_navigation_scope test_general_ocr_target_match test_usb_preparation_queue test_static_frame_wait test_screen_state_diagnostics
 
       - name: Analyze
         run: flutter analyze
@@ -76,11 +76,12 @@ jobs:
       - name: Native capture and USB session regressions
         run: |
           mkdir -p "$RUNNER_TEMP/capture-jvm"
-          javac -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/{CaptureRecoveryGuard,AccessibilityFrameGuard,CaptureFrameGate,CaptureSamplingGuard,UsbSessionLease,UsbModeWindow,DiagnosticSchema,UsbInterfaceClaim,UsbControllerProfile}.java android/app/src/test/java/org/example/phonecontroller/{CaptureRecoveryGuardTest,AccessibilityFrameGuardTest,CaptureFrameGateTest,CaptureSamplingGuardTest,UsbModeWindowTest,DiagnosticSchemaTest,UsbInterfaceClaimTest,UsbControllerProfileTest}.java
+          javac -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/{CaptureRecoveryGuard,AccessibilityFrameGuard,CaptureFrameGate,CaptureSamplingGuard,CaptureStateHeaders,UsbSessionLease,UsbModeWindow,DiagnosticSchema,UsbInterfaceClaim,UsbControllerProfile}.java android/app/src/test/java/org/example/phonecontroller/{CaptureRecoveryGuardTest,AccessibilityFrameGuardTest,CaptureFrameGateTest,CaptureSamplingGuardTest,CaptureStateHeadersTest,UsbModeWindowTest,DiagnosticSchemaTest,UsbInterfaceClaimTest,UsbControllerProfileTest}.java
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.CaptureRecoveryGuardTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.AccessibilityFrameGuardTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.CaptureFrameGateTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.CaptureSamplingGuardTest
+          java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.CaptureStateHeadersTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.UsbModeWindowTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.DiagnosticSchemaTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.UsbInterfaceClaimTest

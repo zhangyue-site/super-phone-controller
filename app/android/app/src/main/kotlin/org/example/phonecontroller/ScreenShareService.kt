@@ -124,6 +124,13 @@ class ScreenShareService: Service() {
  }
  private fun interactive()=(getSystemService(POWER_SERVICE) as PowerManager).isInteractive
  private fun locked()=(getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
+ private fun captureStateHeadersReader(): CaptureStateHeaders.Reader {
+  val service=this
+  return object: CaptureStateHeaders.Reader {
+   override fun interactive()=service.interactive()
+   override fun keyguardLocked()=service.locked()
+  }
+ }
  private fun recordSnapshot(){val now=SystemClock.elapsedRealtime();frameStats(now,CaptureSamplingSettings.enabled(this),hasDemand(now),true)}
  private var captureGeneration=0L
  private val sourceFrames=AtomicLong();private val eligibleFrames=AtomicLong();private val oldFrames=AtomicLong()
@@ -294,8 +301,9 @@ class ScreenShareService: Service() {
    var c: HttpsURLConnection?=null
    try {
     c=URL("$BASE/status").openConnection() as HttpsURLConnection;statusConnection=c
-    c.requestMethod="POST";c.connectTimeout=3000;c.readTimeout=3000;c.doOutput=true
-    c.setRequestProperty("Authorization","Bearer $requestTicket");c.setFixedLengthStreamingMode(0);c.outputStream.close()
+    c.connectTimeout=3000;c.readTimeout=3000
+    c.setRequestProperty("Authorization","Bearer $requestTicket")
+    CaptureStateHeaders.send(c,captureStateHeadersReader())
     statusHttp=c.responseCode
     if(statusHttp==200) {
      val body=c.inputStream.use { readBounded(it,16385) }
