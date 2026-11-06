@@ -127,17 +127,34 @@ class RemoteControl:
     if r['owner'][3]==device and (r.get('session'),r.get('sequence'))==(session,sequence):
      return {'op':'wait' if r['state']=='running' else 'done' if r['state']=='done' else 'cancelled'}
    return {'op':'cancelled'}
+ def _queued_diagnostics(self,device):
+  # Separate lock scopes: AUTHORITY and Gateway must never nest under REMOTE.
+  from . import app_screen,relay_http
+  with app_screen.AUTHORITY.lock:
+   now=app_screen.AUTHORITY.clock()
+   authorized=any(item[0]>now and item[1]==device for item in app_screen.AUTHORITY.tickets.values())
+  out=dict(deviceShareAuthorized=authorized,relayState='unknown',relayActivityAgeMs=None,boardDirectState='unknown')
+  gateway=relay_http.GATEWAY
+  if gateway is not None and gateway.remote is self:out.update(gateway.diagnostic_snapshot(device))
+  return out
  def status(self,owner,ident=None):
+  requested=ident
   with self.lock:
-   self._sync();owner=self._owner(owner)
+   owner=self._owner(owner);self._sync()
    if ident is None and not any(r['owner']==owner for r in self.records.values()):
     return dict(state='idle',reply='当前没有手机控制任务。发送 /phone 打开微信找到李洋 可先查看计划。',terminal=True,verified=False)
-   ident,r=self._get(owner,ident);out=self._reply(ident,r)
-   if r['state']=='queued':
-    from . import events
-    code=events.latest_exec(r['owner'][3])
-    labels={0:'板端心跳：可以执行。',1:'板端心跳：未插入USB。',2:'板端心跳：未连上服务器。',3:'板端心跳：键鼠未开启。',4:'板端心跳：上一次任务失败。'}
-    out['reply']=out['reply']+' '+(labels[code] if code in labels else '还没有板端心跳。')
+   ident,r=self._get(owner,ident)
+   if r['state']!='queued':return self._reply(ident,r)
+   device=r['owner'][3]
+  diagnostics=self._queued_diagnostics(device)
+  with self.lock:
+   self._sync();current_id,current=self._get(owner,requested)
+   out=self._reply(current_id,current)
+   if current_id!=ident or current is not r or current['state']!='queued':return out
+   out['diagnostics']=diagnostics
+   share='云端检测到该设备有有效的共享授权。' if diagnostics['deviceShareAuthorized'] else '云端尚未检测到该设备有有效的共享授权。'
+   relay={'recent':'手机中转最近有活动，任务尚未领取。','stale':'手机中转记录已过期，当前连接待确认。','unknown':'执行端尚未领取任务，当前连接状态待确认。'}[diagnostics['relayState']]
+   out['reply']+=' '+share+relay
    return out
  def stop_device(self,device):
   with self.lock,self.runtime_lock:

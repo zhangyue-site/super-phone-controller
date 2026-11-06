@@ -45,6 +45,7 @@ class ScreenStateDiagnosticsTests(unittest.TestCase):
   self.assertEqual(log.get('reason'),'screen_locked');self.assertIn('系统解锁',message)
   self.assertIn('共享授权仍有效',message);self.assertNotIn('共享仍有效，',message)
   self.assertNotIn(self.ticket,json.dumps(log));self.assertTrue(log['share_authorized'])
+  self.assertTrue(log['device_share_authorized'])
  def test_fresh_screen_off_is_distinct_from_locked(self):
   self.status('0','0');message,log=self.diagnosis()
   self.assertEqual(log.get('reason'),'screen_off');self.assertIn('息屏',message)
@@ -162,10 +163,12 @@ class ScreenStateDiagnosticsTests(unittest.TestCase):
     message,log=self.diagnosis()
     self.assertEqual(log.get('reason'),'unknown');self.assertFalse(log['share_authorized'])
     self.assertIn('无法确认本次任务的共享状态',message);self.assertNotIn('请在App中共享',message)
+    self.assertTrue(log['device_share_authorized'])
  def test_no_valid_device_grant_keeps_existing_share_prompt(self):
   self.j.screen_session='';self.auth.tickets.clear()
   message,log=self.diagnosis();self.assertEqual(log.get('reason'),'unknown')
   self.assertIn('请在App中共享整个屏幕',message)
+  self.assertFalse(log['share_authorized']);self.assertFalse(log['device_share_authorized'])
  def test_status_protocol_over_real_http_accepts_optional_headers_and_legacy(self):
   self.j.screen_session=''
   import http.client,threading

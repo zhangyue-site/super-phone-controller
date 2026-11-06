@@ -10,6 +10,15 @@ class Gateway:
  def __init__(self,relay,remote,capture_for=lambda device:None):
   self.relay=relay;self.remote=remote;self.turns={};self.lock=threading.RLock()
   self.capture_for=capture_for;self.windows=Windows(clock=relay.clock);relay.mode_gate=self._mode_gate
+ def diagnostic_snapshot(self,device):
+  """Observe existing relay activity only; never reconcile or renew a lease."""
+  with self.lock,self.relay.lock:
+   t=self.turns.get(device);s=self.relay.sessions.get(device)
+   unknown=dict(relayState='unknown',relayActivityAgeMs=None)
+   if not t or not s or (t['owner'],t['nonce'],t['session'])!=(s['owner'],s['nonce'],s['nonce'][:16]):return unknown
+   age=self.relay.clock()-s['touched']
+   if age<0:return unknown
+   return dict(relayState='recent' if age<=15 else 'stale',relayActivityAgeMs=round(age*1000))
  def _mode_gate(self,device,session,action):
   try:return self.windows.permit(device,self.capture_for(device),session['nonce'],(action['id'],action['seq'],action['op']))
   except WindowExpired:
