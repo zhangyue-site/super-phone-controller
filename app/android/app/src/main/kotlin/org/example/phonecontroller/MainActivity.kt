@@ -59,10 +59,36 @@ class MainActivity: FlutterActivity() {
     else -> result.notImplemented()
    }
   }
+  MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/capture-sampling").setMethodCallHandler { call,result ->
+   when(call.method) {
+    "status" -> result.success(mapOf("enabled" to CaptureSamplingSettings.enabled(this)))
+    "setEnabled" -> {
+     val enabled=call.argument<Boolean>("enabled")
+     if(enabled==null || !CaptureSamplingSettings.setEnabled(this,enabled))result.error("storage_failed","取样设置未保存",null)
+     else result.success(mapOf("enabled" to CaptureSamplingSettings.enabled(this)))
+    }
+    else -> result.notImplemented()
+   }
+  }
+  MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/accessibility").setMethodCallHandler { call,result ->
+   when(call.method) {
+    "status" -> result.success(AccessibilityAssistService.status(this))
+    "setEnabled" -> {
+     val enabled=call.argument<Boolean>("enabled")
+     if(enabled==null || !AccessibilityAssistService.setEnabled(this,enabled))result.error("storage_failed","辅助设置未保存",null)
+     else result.success(AccessibilityAssistService.status(this))
+    }
+    "openSettings" -> {
+     try {startActivity(AccessibilityAssistService.settingsIntent());result.success(null)}
+     catch(_: Exception) {result.error("settings_unavailable","无法打开无障碍设置，请从系统设置进入",null)}
+    }
+    else -> result.notImplemented()
+   }
+  }
   MethodChannel(engine.dartExecutor.binaryMessenger, "pcflash/app").setMethodCallHandler { call, result ->
    when(call.method) {
     "diagnosticEvent" -> { SafeDiagnostics.record(call.arguments as? Map<*,*> ?: emptyMap<Any,Any>());result.success(null) }
-    "diagnostics" -> result.success(SafeDiagnostics.read())
+    "diagnostics" -> { ScreenShareService.recordDiagnosticSnapshot();result.success(SafeDiagnostics.read()) }
     "appearance" -> result.success(getSharedPreferences("appearance",MODE_PRIVATE).getString("mode","system"))
     "setAppearance" -> {
      val mode=call.argument<String>("mode")

@@ -128,6 +128,7 @@ def handle(handler,config):
      result={'state':j.state if j else 'idle','reply':j.reply if j else '',
       'frame':j.video_sequence if j else 0,'pointerReady':bool(j and j.pointer_protocol=='absolute-v1'),
       'skills':STORE.catalog(device),'barrier':j.video_barrier if j else '',
+      'accessibilityProtocol':1,
       'verified':bool(j and j.done and j.state=='done' and getattr(j,'navigation_verified',False) is True)}
    handler.reply(200,json.dumps(result,ensure_ascii=False).encode());return True
   if path.endswith('/stop'):
@@ -138,13 +139,17 @@ def handle(handler,config):
     with LOCK:SEQUENCES.pop(ticket,None)
     mailbox.cancel(device);STORE.invalidate(device)
    handler.reply(200,b'{}');return True
-  if handler.headers.get('Content-Type')!='image/jpeg' or not 1<=size<=524288:raise ValueError('size')
+  from . import accessibility
+  kind=handler.headers.get('Content-Type')
+  if kind not in ('image/jpeg',accessibility.CONTENT_TYPE) or not 1<=size<=(524288 if kind=='image/jpeg' else accessibility.MAX_ENVELOPE):raise ValueError('size')
   platform=handler.headers.get('X-Screen-Platform','android')
   if platform not in ('android','ios'):raise ValueError('capture platform')
   sequence=int(handler.headers.get('X-Screen-Sequence','0'))
   if not 1<=sequence<=2147483647:raise ValueError('sequence')
   payload=handler.rfile.read(size)
   if len(payload)!=size:raise ValueError('truncated')
+  payload,ui_tree=accessibility.decode_frame(kind,payload,int(handler.headers.get('X-Screen-Native-Width','0')),int(handler.headers.get('X-Screen-Native-Height','0')))
+  if platform!='android':ui_tree=None
   with AUTHORITY.lock:
    AUTHORITY._prune(AUTHORITY.clock())
    if ticket not in AUTHORITY.tickets:raise ValueError('revoked')
@@ -180,6 +185,8 @@ def handle(handler,config):
     if mailbox._job(device,voice_session,voice_sequence) is not j or j.done or j.video_barrier!=capture_barrier:raise ValueError('superseded')
     if getattr(j,'video_platform','') and j.video_platform!=platform:raise ValueError('capture platform changed')
     j.video_source='user-consented-app-screen'
+    if ui_tree and (ui_tree['width'],ui_tree['height'])!=(j.video_width,j.video_height):ui_tree=None
+    accessibility.bind(j,ui_tree,j.video,capture_barrier,frame_sequence)
     result['barrier']=j.video_barrier
   result['source']='user-consented-app-screen'
   if frame_sequence==1 or frame_sequence%10==0:print('APP_SCREEN frame device=%s turn=%d frame=%d width=%d height=%d'%(device,voice_sequence,frame_sequence,result['width'],result['height']),flush=True)

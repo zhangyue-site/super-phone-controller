@@ -28,7 +28,7 @@ class Windows:
    return False
   if capture is None:return True
   self.generation+=1
-  self.windows[device]=dict(capture=capture,binding=binding,action=action,nonce=secrets.token_hex(16),mode='hid' if action[2]==6 else 'normal',generation=self.generation,deadline=self.clock()+5,ready=False)
+  self.windows[device]=dict(capture=capture,binding=binding,action=action,nonce=secrets.token_hex(16),mode='hid' if action[2]==6 else 'normal',generation=self.generation,deadline=self.clock()+30,offered=False,ready=False)
   return False
  def request(self,device,capture,obj):
   operation=obj.get('operation')
@@ -41,7 +41,12 @@ class Windows:
    return {'state':'idle'}
   if w['capture']!=capture:raise PermissionError('USB capture owner')
   if self.clock()>=w['deadline']:raise PermissionError('USB window expired')
+  # Queueing and the phone's actual USB preparation have different clocks.
+  # Keep the original five-second confirmation once the phone sees prepare.
+  if operation=='poll' and not w['offered']:
+   w['offered']=True;w['deadline']=self.clock()+5
   if operation=='ready':
+   if not w['offered']:raise PermissionError('USB window not prepared')
    if type(obj['generation']) is not int or (obj['nonce'],obj['mode'],obj['generation'])!=(w['nonce'],w['mode'],w['generation']) or w['ready']:raise PermissionError('USB window mismatch or replay')
    w['ready']=True;return {'state':'ready'}
   if w['ready']:return {'state':'ready'}

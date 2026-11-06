@@ -43,9 +43,12 @@ class WechatNavigator:
   from .keyboard_input import observation_context
   input_plan=getattr(j,'keyboard_input',None)
   from .general_vision import button_geometry_context,phone_platform_context
+  from .accessibility import frame_hint
+  from .general_vision import accessibility_context
+  ui_hint=None if verify else frame_hint(self.m,j,raw)
   from .local_vision import planner_hints
   hint=None if verify else planner_hints(j,raw)
-  with button_geometry_context(hint),phone_platform_context(platform):
+  with accessibility_context(ui_hint),button_geometry_context(hint),phone_platform_context(platform):
    if input_plan:
     with observation_context(input_plan):result=self.vision(raw,query,verify)
    else:result=self.vision(raw,query,verify)

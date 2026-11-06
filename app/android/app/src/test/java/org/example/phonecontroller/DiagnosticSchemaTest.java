@@ -12,6 +12,8 @@ public final class DiagnosticSchemaTest {
   raw.put("event","arbitrary-user-text");check(DiagnosticSchema.sanitize(raw).isEmpty());
   raw.clear();raw.put("event","capture_task_removed");raw.put("phase","capture");raw.put("reason","task_removed");raw.put("active",true);raw.put("running",true);raw.put("intent","SENSITIVE-INTENT");
   safe=DiagnosticSchema.sanitize(raw);check(safe.size()==5);check(safe.get("reason").equals("task_removed"));check(!safe.toString().contains("SENSITIVE"));
+  raw.clear();raw.put("event","capture_frame_stats");raw.put("source_frames",12L);raw.put("eligible_frames",7L);raw.put("old_frames",5L);raw.put("upload_ok",3L);raw.put("upload_wait",2L);raw.put("upload_error",1L);raw.put("source_age_ms",1200L);raw.put("eligible_age_ms",-1L);raw.put("upload_ms",210L);raw.put("refresh_begin",2L);raw.put("refresh_ok",1L);raw.put("refresh_cancel",1L);raw.put("refresh_error",0L);raw.put("sampling_enabled",false);raw.put("demand",true);raw.put("node_text","SENSITIVE");
+  safe=DiagnosticSchema.sanitize(raw);check(safe.size()==16);check(safe.get("source_frames").equals(12L));check(!safe.toString().contains("SENSITIVE"));
   System.out.println("Diagnostic schema rejects secrets and arbitrary text: passed");
  }
 }

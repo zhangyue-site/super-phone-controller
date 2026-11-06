@@ -200,9 +200,13 @@ class CloudRelay {
       if (op == 5) await close(reason: 'opcode_stop');
     } catch (error) {
       if (_closed) return; // Late completions belong to the closed session.
-      recoverableNetworkFailure = _activeSeq == null &&
-          (_phase == 'poll' || _phase == 'maintenance') &&
-          GatewayRecoveryGate.transportError(error);
+      // A lost heartbeat ACK may reconnect only through the existing STOP,
+      // detach and fresh-nonce handshake. Never replay its issued packet.
+      // Input or USB-mode ACK uncertainty still cannot opt into recovery.
+      recoverableNetworkFailure = GatewayRecoveryGate.transportError(error) &&
+          ((_activeSeq == null &&
+                  (_phase == 'poll' || _phase == 'maintenance')) ||
+              (_activeOp == 12 && _phase == 'ack'));
       await close(reason: 'error', error: error);
       onError(error);
     } finally {

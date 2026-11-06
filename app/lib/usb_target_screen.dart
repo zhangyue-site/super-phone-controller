@@ -1,3 +1,4 @@
+import 'accessibility_assist.dart';
 import 'target_check_errors.dart';
 import 'diagnostics.dart';
 import 'dart:async';
@@ -486,6 +487,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
           error: _error,
         ),
         for (final message in _checkErrors.messages) ProductError(message),
+        const AccessibilityAssistCard(),
         Card(
             child: Padding(
                 padding: const EdgeInsets.all(16),
