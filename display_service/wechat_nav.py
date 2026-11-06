@@ -48,7 +48,7 @@ class WechatNavigator:
    state=app_screen.SCREEN_STATES.read(capture,j.device,now,app_screen.AUTHORITY.tickets) if shared else None
    latest=j.video_sequence;age=round(self.m.clock()-j.video_received,1) if j.video else None
   reason='screen_locked' if state and state['keyguard_locked'] else 'screen_off' if state and not state['interactive'] else 'awake' if state else 'unknown'
-  diagnostic=dict(device=j.device,turn=j.sequence,after=after,latest=latest,latest_age_s=age,share_authorized=shared,reason=reason)
+  diagnostic=dict(device=j.device,turn=j.sequence,after=after,latest=latest,latest_age_s=age,share_authorized=shared,device_share_authorized=device_authorized,reason=reason)
   if state:diagnostic.update(screen_state_age_s=state['age_s'],interactive=state['interactive'],keyguard_locked=state['keyguard_locked'])
   print("FRAME_WAIT_TIMEOUT "+json.dumps(diagnostic,separators=(",",":")),flush=True)
   if not shared:
