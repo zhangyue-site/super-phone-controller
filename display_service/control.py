@@ -1,4 +1,4 @@
-"""Server-only interaction state writer. Does not claim to execute phone actions."""
+"""Server-only interaction state writer. Execution evidence comes from the current board turn."""
 import argparse,json,os,tempfile,time
 from pathlib import Path
 

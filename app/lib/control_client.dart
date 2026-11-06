@@ -1,0 +1,507 @@
+import 'diagnostics.dart';
+import 'button_detector.dart';
+import 'controller_config.dart';
+import 'dart:async';
+import 'cloud_relay.dart';
+import 'screen_share.dart';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:http/http.dart' as http;
+import 'ble_ota_service.dart';
+
+/// Ephemeral BLE possession capability, kept only in memory.
+class ControlClient implements LocalVisionSource {
+  Future<Uint8List> _localVisionBytes(
+      String operation, Map<String, dynamic> body, int limit) async {
+    if (!isPaired || !authorized || _http == null) {
+      throw StateError('请先在控制手机连接被控手机');
+    }
+    final ticket = _ticket;
+    final uri =
+        Uri.parse('${ControllerConfig.base}/app-local-vision/$operation');
+    final request = http.Request('POST', uri)..followRedirects = false;
+    request.headers.addAll({
+      'Authorization': 'Bearer $ticket',
+      'Content-Type': 'application/json'
+    });
+    request.body = jsonEncode(body);
+    final response =
+        await _http!.send(request).timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200 && response.statusCode != 202) {
+      await response.stream.listen((_) {}).cancel();
+      if (response.statusCode == 403 && _ticket == ticket) {
+        _ticket = null;
+        _expires = null;
+      }
+      throw ControlHttpFailure(response.statusCode, '控制手机本地识别请求未获确认');
+    }
+    if (response.contentLength != null && response.contentLength! > limit) {
+      await response.stream.listen((_) {}).cancel();
+      throw const FormatException('本地识别响应过大');
+    }
+    final builder = BytesBuilder(copy: false);
+    var count = 0;
+    await for (final chunk
+        in response.stream.timeout(const Duration(seconds: 30))) {
+      if (_closed || _ticket != ticket || !authorized) {
+        throw StateError('控制连接已结束');
+      }
+      count += chunk.length;
+      if (count > limit) throw const FormatException('本地识别响应超过声明长度');
+      builder.add(chunk);
+    }
+    if (_closed || _ticket != ticket || !authorized) {
+      throw StateError('控制连接已结束');
+    }
+    return builder.takeBytes();
+  }
+
+  @override
+  Future<Map<String, dynamic>> localVision(
+      String operation, Map<String, dynamic> body) async {
+    if (!const ['manifest', 'frame', 'result'].contains(operation)) {
+      throw ArgumentError('本地识别操作无效');
+    }
+    final raw = await _localVisionBytes(
+        operation, body, operation == 'frame' ? 750000 : 8192);
+    final value = jsonDecode(utf8.decode(raw));
+    if (value is! Map<String, dynamic>) {
+      throw const FormatException('本地识别响应格式无效');
+    }
+    return value;
+  }
+
+  @override
+  Future<Uint8List> localModelBytes(ButtonModelManifest manifest) async {
+    final raw = await _localVisionBytes(
+        'model', {'sha256': manifest.sha256}, manifest.size);
+    if (raw.length != manifest.size) throw const FormatException('模型下载长度不符');
+    return raw;
+  }
+
+  static String get base => '${ControllerConfig.base}/app-control';
+  http.Client? _http;
+  CloudRelay? _relay;
+  bool _closed = false;
+  Object? _relayError;
+  BleOtaService? _board;
+  String? _ticket;
+  DateTime? _expires;
+  BleOtaService? _relayBoard;
+  bool _paired = false, _refreshing = false;
+  Future<void>? _closing;
+  String? deviceId;
+  Future<void> Function(bool hid)? onModeChange;
+  ControlClient({http.Client? client}) : _http = client;
+  @override
+  bool get isPaired => _paired;
+  bool get supportsSkillReplay => _board != null;
+  bool get canWifiUpgrade => ownsGateway && _relay?.supportsMaintenance == true;
+  bool get usesBoardLink => _board != null || _relayBoard != null;
+  bool get ownsGateway => _relay != null && authorized;
+  String get upgradeStatus {
+    final stage = _relay?.diagnostics['otaStage'];
+    return switch (stage) {
+      1 => '正在检查 Wi-Fi 固件',
+      2 => '正在写入固件',
+      3 => '板端准备重启，需重新连接核验版本',
+      4 => '板端报告已是当前版本',
+      5 => 'Wi-Fi 升级失败，请检查网络或使用蓝牙升级/USB救援',
+      _ => '升级状态尚未确认'
+    };
+  }
+
+  void requestWifiUpgrade() {
+    if (!ownsGateway) throw StateError('仅当前蓝牙网关可请求板端 Wi-Fi 升级');
+    _relay!.requestWifiUpgrade();
+  }
+
+  String get connectionStatus => _relayError != null
+      ? '蓝牙网关已停止：$_relayError'
+      : _relay != null
+          ? (_relay!.isClosed ? '蓝牙网关已释放' : '此手机持有蓝牙网关；云端动作需回执确认')
+          : _paired
+              ? '已绑定目标；云端在线状态以任务回执为准'
+              : '等待控制板授权';
+
+  Future<void> renewCapture([String? usbSession]) async {
+    if (!authorized || _paired || _relay == null || _ticket == null) {
+      throw StateError('被控端中继未连接');
+    }
+    await ScreenShare.channel.invokeMethod<void>('renewCapture', {
+      'controlTicket': _ticket,
+      if (usbSession != null) 'usbSession': usbSession,
+    });
+  }
+
+  Future<void> pair(String code) async {
+    if (_closed ||
+        _ticket != null ||
+        !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(code)) {
+      throw const FormatException('请粘贴被控手机生成的完整连接码');
+    }
+    _http ??= http.Client();
+    final grant = await _post('pair-redeem', {'code': code});
+    final ticket = grant['ticket'], device = grant['device'];
+    if (_closed ||
+        grant['scope'] != 'phone-commands' ||
+        ticket is! String ||
+        !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket) ||
+        device is! String ||
+        !RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(device) ||
+        grant['expiresIn'] != 300) {
+      throw const FormatException('连接授权无效');
+    }
+    _paired = true;
+    _ticket = ticket;
+    deviceId = device;
+    _expires = DateTime.now().add(const Duration(seconds: 300));
+  }
+
+  Future<Map<String, dynamic>> pairingCode() async {
+    if (!authorized || _paired || _relay == null) {
+      throw StateError('请先建立被控手机中继');
+    }
+    return _post('pair-issue', {}, auth: true);
+  }
+
+  Future<void> revokeControllers() async {
+    if (!canReadStatus || _paired) throw StateError('被控端连接已结束');
+    await _post('pair-revoke', {}, auth: true);
+  }
+
+  Future<void> refresh() async {
+    if (_closed ||
+        _refreshing ||
+        !authorized ||
+        _expires == null ||
+        _expires!.difference(DateTime.now()).inSeconds > 90) {
+      return;
+    }
+    _refreshing = true;
+    SafeDiagnostics.record('control_refresh',
+        phase: 'renew',
+        reason: 'renew_begin',
+        remainingMs: _expires?.difference(DateTime.now()).inMilliseconds);
+    try {
+      Map<String, dynamic> result;
+      if (_paired) {
+        result = await _post('pair-renew', {}, auth: true);
+      } else {
+        final board = _relayBoard;
+        if (board == null) return;
+        final info = await board.readInfo();
+        if (info == null || info.device != deviceId) {
+          throw StateError('控制板身份已改变');
+        }
+        final challenge = await _post('challenge', {'device': info.device});
+        final nonce = challenge['challenge'];
+        if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
+          throw const FormatException('授权挑战无效');
+        }
+        final proof = await board.signDownloadChallenge(Uint8List.fromList(
+            List.generate(
+                32,
+                (i) =>
+                    int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16))));
+        result = await _post(
+            'renew',
+            {
+              'device': info.device,
+              'challenge': nonce,
+              'proof':
+                  proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+            },
+            auth: true);
+      }
+      if (result['scope'] != 'phone-commands' || result['expiresIn'] != 300) {
+        throw const FormatException('续期授权无效');
+      }
+      if (!_closed) _expires = DateTime.now().add(const Duration(seconds: 300));
+      SafeDiagnostics.record('control_refresh',
+          phase: 'renew',
+          reason: 'renew_ok',
+          remainingMs: _expires?.difference(DateTime.now()).inMilliseconds);
+    } catch (e) {
+      SafeDiagnostics.record('control_refresh',
+          phase: 'renew',
+          reason: 'renew_fail',
+          error: e,
+          httpStatus: e is ControlHttpFailure ? e.status : null);
+      rethrow;
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  bool get canReadStatus =>
+      !_closed &&
+      (_board != null ||
+          (_ticket != null &&
+              _expires != null &&
+              DateTime.now().isBefore(_expires!)));
+  @override
+  bool get authorized =>
+      canReadStatus &&
+      _relayError == null &&
+      (_relay == null || !_relay!.isClosed);
+  Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
+      {bool auth = false}) async {
+    final response = await _http!
+        .post(
+            Uri.parse(path.startsWith('relay:')
+                ? "${base.replaceFirst('/app-control', '/app-relay')}/${path.substring(6)}"
+                : '$base/$path'),
+            headers: {
+              'Content-Type': 'application/json',
+              if (auth) 'Authorization': 'Bearer $_ticket',
+            },
+            body: jsonEncode(body))
+        .timeout(const Duration(seconds: 20));
+    if (response.bodyBytes.length > 8192) {
+      throw const FormatException('服务器响应过大');
+    }
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('服务器响应无效');
+    }
+    if (response.statusCode != 200) {
+      SafeDiagnostics.record('control_http_failure',
+          phase: path.startsWith('relay:') ? path.substring(6) : path,
+          reason: 'http_error',
+          httpStatus: response.statusCode);
+      // Only an authenticated lease expiry before delivery may recover.
+      // Generic 403 and uncertain action ACKs remain terminal.
+      if (response.statusCode == 409 &&
+          (path == 'relay:poll' || path == 'relay:maintenance') &&
+          decoded['code'] == 'relay_lease_expired') {
+        throw ControlHttpFailure(409, '中转连接过期，停止旧任务后重新连接',
+            relayLeaseExpired: true);
+      }
+      if (response.statusCode == 403 && path != 'relay:detach') {
+        _ticket = null;
+        _expires = null;
+      }
+      throw ControlHttpFailure(
+          response.statusCode, decoded['reply'] as String? ?? '请求失败，请查询状态后重试');
+    }
+    return decoded;
+  }
+
+  Future<void> authorize(BleOtaService service) async {
+    void checkOpen() {
+      if (_closed) throw StateError('控制连接已结束');
+    }
+
+    checkOpen();
+    if (service.supportsLocalControl) _http ??= http.Client();
+    if (_http == null) {
+      if (!service.supportsControl) {
+        throw const FormatException('请先升级控制板固件：需要蓝牙指令协议；不会改走手机直连服务器');
+      }
+      _board = service;
+      return;
+    }
+    final info = await service.readInfo();
+    checkOpen();
+    if (info == null) throw const FormatException('请先连接控制板');
+    deviceId = info.device;
+    final challenge = await _post('challenge', {'device': info.device});
+    checkOpen();
+    final nonce = challenge['challenge'];
+    if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
+      throw const FormatException('授权挑战无效');
+    }
+    final bytes = Uint8List.fromList(List.generate(
+        32, (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16)));
+    final proof = await service.signDownloadChallenge(bytes);
+    checkOpen();
+    final grant = await _post('authorize', {
+      'device': info.device,
+      'challenge': nonce,
+      'proof': proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+    });
+    checkOpen();
+    final ticket = grant['ticket'];
+    final ttl = grant['expiresIn'];
+    if (grant['scope'] != 'phone-commands' ||
+        ticket is! String ||
+        !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket) ||
+        ttl is! int ||
+        ttl < 1 ||
+        ttl > 300) {
+      throw const FormatException('授权范围无效');
+    }
+    _ticket = ticket;
+    _expires = DateTime.now().add(Duration(seconds: ttl));
+    SafeDiagnostics.record('control_grant',
+        phase: 'authorize', reason: 'grant_ok', remainingMs: ttl * 1000);
+    if (service.supportsLocalControl) {
+      _relayBoard = service;
+      _relayError = null;
+      final relay = CloudRelay(
+        beforeModeChange: onModeChange,
+        post: (p, b) => _post('relay:$p', b, auth: true),
+        read: service.readLocalControl,
+        write: service.writeLocalControl,
+        disconnect: service.disconnect,
+        onError: (e) {
+          _relayError = e;
+        },
+      );
+      _relay = relay;
+      await relay.start();
+      if (_closed) {
+        await relay.close();
+        checkOpen();
+      }
+    }
+  }
+
+  bool get canRecoverGateway =>
+      !_closed &&
+      !_paired &&
+      canReadStatus &&
+      _relayBoard != null &&
+      _relay?.isClosed == true &&
+      _relay?.closeFinished == true &&
+      _relay?.recoverableNetworkFailure == true;
+  bool get gatewayRecoveryNeedsPairing =>
+      !_closed && _relay?.recoverableNetworkFailure == true && !canReadStatus;
+
+  Future<void> recoverGateway(
+      {required Future<void> Function() reconnect,
+      required Future<void> Function() check}) async {
+    if (!canRecoverGateway) throw StateError('自动恢复条件不满足');
+    final oldRelay = _relay!;
+    final board = _relayBoard!, retired = oldRelay.connectionNonce;
+    Future<void> current() async {
+      if (_closed || !canReadStatus) throw StateError('授权已过期，请重新连接并配对控制手机');
+      await check();
+      if (_closed || !canReadStatus) throw StateError('连接恢复已取消');
+    }
+
+    var connected = false;
+    CloudRelay? next;
+    try {
+      await current();
+      // Reconcile the old task before any new BLE handshake. Never replay a packet.
+      final stopped = await command('stop');
+      await current();
+      if (stopped['state'] != 'stopped') throw StateError('旧任务停止尚未确认');
+      if (retired != null) {
+        try {
+          await _post('relay:detach', {'nonce': retired}, auth: true);
+        } on ControlHttpFailure catch (error) {
+          if (error.status != 403) rethrow;
+        }
+      }
+      await current();
+      // reconnect() may open BLE and then fail its trailing check(); from
+      // here on this owner disconnects whatever link it may have opened.
+      connected = true;
+      await reconnect();
+      await current();
+      final info = await board.readInfo();
+      await current();
+      if (info == null ||
+          info.device != deviceId ||
+          !board.supportsLocalControl) {
+        throw StateError('控制板身份或协议已改变，自动恢复已停止');
+      }
+      final challenge = await _post('challenge', {'device': info.device});
+      await current();
+      final nonce = challenge['challenge'];
+      if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
+        throw const FormatException('授权挑战无效');
+      }
+      final proof = await board.signDownloadChallenge(Uint8List.fromList(
+          List.generate(32,
+              (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16))));
+      await current();
+      if (proof.length != 32) {
+        throw const FormatException('控制板授权证明无效');
+      }
+      final result = await _post(
+          'renew',
+          {
+            'device': info.device,
+            'challenge': nonce,
+            'proof':
+                proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+          },
+          auth: true);
+      await current();
+      if (result['scope'] != 'phone-commands' || result['expiresIn'] != 300) {
+        throw const FormatException('续期授权无效');
+      }
+      _expires = DateTime.now().add(const Duration(seconds: 300));
+      next = CloudRelay(
+        retiredNonce: retired,
+        beforeModeChange: onModeChange,
+        post: (p, b) => _post('relay:$p', b, auth: true),
+        read: board.readLocalControl,
+        write: board.writeLocalControl,
+        disconnect: board.disconnect,
+        onError: (e) {
+          if (!_closed) _relayError = e;
+        },
+      );
+      _relay = next;
+      await next.start(beforePolling: current);
+      if (_closed) throw StateError('连接恢复已取消');
+      _relayError = null;
+    } catch (_) {
+      if (!_closed) _relay = oldRelay;
+      if (next != null) {
+        await next.close(reason: 'owner_shutdown');
+      } else if (connected) {
+        await board.disconnect();
+      }
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> command(String operation,
+      {String? text,
+      String? taskId,
+      String? skillId,
+      Map<String, String>? parameters}) async {
+    if ((operation == 'skills' || operation == 'skill') &&
+        !supportsSkillReplay) {
+      throw UnsupportedError('技能回放暂未接通；已保存数据不会删除，可继续发送普通文字任务');
+    }
+    final readOrStop = operation == 'status' || operation == 'stop';
+    if (!(readOrStop ? canReadStatus : authorized)) {
+      throw const FormatException('控制连接已结束，请返回并重新连接控制板；旧动作不会重发');
+    }
+    final body = <String, dynamic>{
+      'operation': operation,
+      if (text != null) 'text': text,
+      if (taskId != null) 'task_id': taskId,
+      if (skillId != null) 'skill_id': skillId,
+      if (parameters != null) 'parameters': parameters
+    };
+    if (_board != null) return _board!.controlRequest(body);
+    return _post('command', {...body}, auth: true);
+  }
+
+  void close() => unawaited(shutdown());
+
+  Future<void> shutdown() {
+    if (_closing != null) return _closing!;
+    _closed = true;
+    final relay = _relay;
+    _relay = null;
+    return _closing = () async {
+      try {
+        if (relay != null) await relay.close(reason: 'owner_shutdown');
+      } finally {
+        _ticket = null;
+        _expires = null;
+        _board = null;
+        _http?.close();
+      }
+    }();
+  }
+}

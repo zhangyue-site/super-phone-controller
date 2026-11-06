@@ -1,6 +1,14 @@
+import 'app_ota_client.dart';
+import 'controller_config.dart';
+import 'dart:convert';
 import 'dart:async';
+import 'board_rpc.dart';
 import 'dart:io';
 import 'dart:typed_data';
+import 'transfer_session.dart';
+import 'ota_data_write.dart';
+import 'firmware_image.dart';
+import 'board_info.dart';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -74,6 +82,8 @@ class PushProgress {
 ///  * Android 支持 MTU 协商，iOS 的 CoreBluetooth 固定不给谈；
 ///  * iOS 的分片上限由 maximumWriteValueLength 给出，通常 182 字节。
 class BleOtaService {
+  final AppOtaClient Function()? upgradeClientFactory;
+  BleOtaService({this.upgradeClientFactory});
   static const svcUuid = '6f6f7461-2d6f-7461-0000-000000000001';
   static const ctrlUuid = '6f6f7461-2d6f-7461-0000-000000000002';
   static const statUuid = '6f6f7461-2d6f-7461-0000-000000000003';
@@ -84,63 +94,286 @@ class BleOtaService {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _ctrl;
   BluetoothCharacteristic? _stat;
-  StreamSubscription? _statSub;
+  BluetoothCharacteristic? _info;
+  BluetoothCharacteristic? _auth;
+  BluetoothCharacteristic? _upgradeAuth;
+  BluetoothCharacteristic? _localControl;
+  bool get supportsLocalControl => _localControl != null && !_busy;
+  Future<Map<String, dynamic>> readLocalControl() async {
+    final c = _localControl;
+    if (c == null || _busy) throw StateError("本地控制未连接");
+    return Map<String, dynamic>.from(
+      jsonDecode(utf8.decode(await c.read())) as Map,
+    );
+  }
+
+  Future<void> writeLocalControl(List<int> bytes) async {
+    final c = _localControl;
+    if (c == null || _busy || bytes.length != 48) throw StateError("本地控制不可用");
+    await c.write(bytes, withoutResponse: false);
+  }
+
+  BoardRpc? _controlRpc;
+  bool get supportsControl => _controlRpc != null && !_busy;
+  Future<Map<String, dynamic>> controlRequest(Map<String, dynamic> request) {
+    final rpc = _controlRpc;
+    if (rpc == null || _busy) {
+      throw StateError('请先升级支持双手机控制的新固件，并保持蓝牙连接；不使用手机直连服务器替代');
+    }
+    return rpc.request(request);
+  }
+
+  String? _otaTicket, _otaDigest;
+  DateTime? _otaExpiresAt;
+  void retainOfficialUpgrade(DownloadedFirmware image) {
+    _otaTicket = image.ticket;
+    _otaExpiresAt = image.expiresAt;
+    _otaDigest = sha256.convert(image.bytes).toString();
+  }
+
+  String? _confirmedDevice, _confirmedBoot, _confirmedVersion, _confirmedSha;
+  DateTime? _confirmedAt;
+  void confirmFirmware(
+      {required String device,
+      required String boot,
+      required String currentVersion,
+      required String sha}) {
+    _confirmedDevice = device;
+    _confirmedBoot = boot;
+    _confirmedVersion = currentVersion;
+    _confirmedSha = sha;
+    _confirmedAt = DateTime.now();
+  }
+
+  void _clearConfirmation() {
+    _confirmedDevice =
+        _confirmedBoot = _confirmedVersion = _confirmedSha = null;
+    _confirmedAt = null;
+  }
+
   bool _busy = false;
+  TransferSession? _transfer;
+  int _connectionEpoch = 0;
+  StreamSubscription<BluetoothConnectionState>? _authConnectionSub;
 
   bool get busy => _busy;
   BluetoothDevice? get device => _device;
 
   /// 扫描广播里带 OTA 服务的设备。
-  Stream<List<ScanResult>> scan() {
-    FlutterBluePlus.startScan(
-      withServices: [Guid(svcUuid)],
-      timeout: const Duration(seconds: 15),
-      androidUsesFineLocation: false,
-    );
-    return FlutterBluePlus.scanResults;
-  }
+  Future<void> startScan() => FlutterBluePlus.startScan(
+        withServices: [Guid(svcUuid)],
+        timeout: const Duration(seconds: 12),
+        androidUsesFineLocation: false,
+      );
+  Stream<List<ScanResult>> get scanResults => FlutterBluePlus.scanResults;
 
   Future<void> stopScan() => FlutterBluePlus.stopScan();
 
   /// 连接并发现服务，返回设备的 MTU 与每帧正文大小。
   Future<int> connect(BluetoothDevice device) async {
-    // 插件要求显式声明许可，否则拒绝连接——这是防止商业滥用的一道门。
-    await device.connect(
-      license: License.nonprofit,
-      timeout: const Duration(seconds: 15),
-      // Android 上会协商到 517；iOS 的 CoreBluetooth 忽略这个值，
-      // 实际分片长度由 maximumWriteValueLength 决定，插件内部已处理。
-      mtu: Platform.isAndroid ? 517 : null,
-    );
-
-    final services = await device.discoverServices();
-    final svc = services.where((s) => s.uuid == Guid(svcUuid)).firstOrNull;
-    if (svc == null) {
-      await device.disconnect();
-      throw Exception('设备上没有 OTA 服务，确认选的是 PhoneCtl 板子');
-    }
-
-    _ctrl = svc.characteristics
-        .where((c) => c.uuid == Guid(ctrlUuid))
-        .firstOrNull;
-    _stat = svc.characteristics
-        .where((c) => c.uuid == Guid(statUuid))
-        .firstOrNull;
-    if (_ctrl == null || _stat == null) {
-      await device.disconnect();
-      throw Exception('OTA 特征值缺失');
-    }
-
+    _clearConfirmation();
+    final epoch = ++_connectionEpoch;
+    await _authConnectionSub?.cancel();
+    _authConnectionSub = null;
     _device = device;
+    try {
+      // 插件要求显式声明许可，否则拒绝连接——这是防止商业滥用的一道门。
+      await device.connect(
+        license: License.nonprofit,
+        timeout: const Duration(seconds: 15),
+        // Android 上会协商到 517；iOS 的 CoreBluetooth 忽略这个值，
+        // 实际分片长度由 maximumWriteValueLength 决定，插件内部已处理。
+        mtu: Platform.isAndroid ? 517 : null,
+      );
 
-    // 协商失败时 mtu 仍是 23，减去 3 字节 ATT 头和 1 字节命令码 = 19。
-    final mtu = device.mtuNow;
-    var chunk = mtu - 4;
-    if (chunk < 19) chunk = 19;
+      if (epoch != _connectionEpoch) throw StateError('连接已取消');
+      final services = await device.discoverServices();
+      if (epoch != _connectionEpoch) throw StateError('连接已取消');
+      final svc = services.where((s) => s.uuid == Guid(svcUuid)).firstOrNull;
+      if (svc == null) {
+        await device.disconnect();
+        throw Exception('设备上没有 OTA 服务，确认选的是 PhoneCtl 板子');
+      }
 
-    // iOS 的真实上限只能从特征值问出来，比 MTU 推算更准。
-    _statSub = _stat!.onValueReceived.listen((v) {});
-    return chunk;
+      _ctrl = svc.characteristics
+          .where((c) => c.uuid == Guid(ctrlUuid))
+          .firstOrNull;
+      _stat = svc.characteristics
+          .where((c) => c.uuid == Guid(statUuid))
+          .firstOrNull;
+      _device = device;
+      _info = svc.characteristics
+          .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000004'))
+          .firstOrNull;
+      _auth = svc.characteristics
+          .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000005'))
+          .firstOrNull;
+
+      _upgradeAuth = svc.characteristics
+          .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000009'))
+          .firstOrNull;
+      _localControl = svc.characteristics
+          .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000008'))
+          .firstOrNull;
+      if ((_ctrl == null || _stat == null) &&
+          (_localControl == null || _info == null || _auth == null)) {
+        throw StateError('控制板通信特征不完整');
+      }
+      _controlRpc?.close();
+      final control = svc.characteristics
+          .where((c) => c.uuid == Guid('6f6f7461-2d6f-7461-0000-000000000007'))
+          .firstOrNull;
+      _controlRpc = control == null
+          ? null
+          : BoardRpc(
+              mtu: device.mtuNow,
+              write: (b) => control
+                  .write(b, withoutResponse: false)
+                  .timeout(const Duration(seconds: 5)),
+              read: () => control.read(),
+              isCurrent: () =>
+                  epoch == _connectionEpoch && device.isConnected && !_busy,
+            );
+
+      // 协商失败时 mtu 仍是 23，减去 3 字节 ATT 头和 1 字节命令码 = 19。
+      final mtu = device.mtuNow;
+      if (mtu < (_localControl != null ? 51 : 40)) {
+        await device.disconnect();
+        throw StateError('蓝牙连接的传输容量太小，请返回并重新连接控制板');
+      }
+      final chunk = otaChunkSize(mtu);
+
+      // Enable status notifications before creating any transfer session.
+      await _stat?.setNotifyValue(true);
+      if (epoch != _connectionEpoch) throw StateError('连接已取消');
+      _authConnectionSub = device.connectionState.listen((state) {
+        if (state == BluetoothConnectionState.disconnected &&
+            epoch == _connectionEpoch) {
+          ++_connectionEpoch;
+          _auth = null;
+          _clearConfirmation();
+        }
+      });
+      return chunk;
+    } catch (_) {
+      // A newer connect to the same board owns the shared native link.
+      final superseded =
+          epoch != _connectionEpoch && _device?.remoteId == device.remoteId;
+      if (!superseded) {
+        try {
+          await device.disconnect();
+        } catch (_) {}
+      }
+      if (epoch == _connectionEpoch) {
+        _controlRpc?.close();
+        _controlRpc = null;
+        _localControl = null;
+        _device = null;
+        _ctrl = null;
+        _stat = null;
+        _info = null;
+        _auth = null;
+        _upgradeAuth = null;
+      }
+      rethrow;
+    }
+  }
+
+  Future<BoardInfo?> readInfo() async {
+    final info = _info;
+    if (info == null) return null;
+    return BoardInfo.parse(
+      await info.read().timeout(const Duration(seconds: 5)),
+    );
+  }
+
+  Future<List<int>> signDownloadChallenge(List<int> nonce) =>
+      _signDownloadChallenge(nonce);
+  static final Map<String, Future<void>> _signingTails = {};
+  Future<List<int>> _signDownloadChallenge(List<int> nonce,
+      {TransferSession? transfer}) async {
+    final auth = _auth;
+    final device = _device;
+    final epoch = _connectionEpoch;
+    final challenge = Uint8List.fromList(nonce);
+    final queuedFor = Stopwatch()..start();
+    void checkCurrent() {
+      if (auth == null ||
+          device == null ||
+          challenge.length != 32 ||
+          epoch != _connectionEpoch ||
+          !identical(auth, _auth) ||
+          !identical(device, _device) ||
+          !device.isConnected ||
+          (transfer != null &&
+              (!identical(_transfer, transfer) || transfer.cancelled)) ||
+          (_busy && transfer == null)) {
+        throw StateError('下载授权签名已失效或控制板正在升级，请手动重试');
+      }
+    }
+
+    checkCurrent();
+    final key =
+        '${device!.remoteId.str}/${auth!.serviceUuid.str}/${auth.uuid.str}';
+    final previous = _signingTails[key] ?? Future<void>.value();
+    final released = Completer<void>();
+    _signingTails[key] = released.future;
+    try {
+      await previous;
+      checkCurrent();
+      if (queuedFor.elapsed >= const Duration(seconds: 10)) {
+        throw StateError('下载授权签名等待超时，请手动重试');
+      }
+      // AUTH stores one global proof. Keep write(nonce) + read(proof) atomic.
+      await auth
+          .write(challenge, withoutResponse: false)
+          .timeout(const Duration(seconds: 5));
+      checkCurrent();
+      final proof = await auth.read().timeout(const Duration(seconds: 5));
+      checkCurrent();
+      return proof;
+    } finally {
+      released.complete();
+      if (identical(_signingTails[key], released.future)) {
+        _signingTails.remove(key);
+      }
+    }
+  }
+
+  Future<BoardInfo> _confirmReboot(
+    BluetoothDevice device,
+    BoardInfo before,
+    FirmwareImage target,
+    TransferSession session,
+  ) async {
+    if (device.isConnected) {
+      await device.connectionState
+          .firstWhere((s) => s == BluetoothConnectionState.disconnected)
+          .timeout(const Duration(seconds: 15));
+    }
+    final elapsed = Stopwatch()..start();
+    while (elapsed.elapsed < const Duration(seconds: 75)) {
+      if (session.cancelled) throw StateError('已停止等待启动确认');
+      try {
+        await connect(device);
+        final current = await readInfo();
+        if (session.cancelled) throw StateError('已停止等待启动确认');
+        if (current != null &&
+            current.confirms(before, target.version, target.elfSha256)) {
+          return current;
+        }
+        if (current != null && current.device != before.device) {
+          throw StateError('重连设备身份不符');
+        }
+      } catch (_) {
+        if (session.cancelled) rethrow;
+      }
+      try {
+        await device.disconnect();
+      } catch (_) {}
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
+    throw StateError('未确认新版本启动，可能发生回滚或连接中断；请保持供电后重新检查版本');
   }
 
   /// 订阅状态通知，返回原始 4 字节状态流。
@@ -153,29 +386,90 @@ class BleOtaService {
       yield const PushProgress(done: true, success: false, log: '已有推送在进行');
       return;
     }
-    if (data.length < 4096) {
-      yield const PushProgress(done: true, success: false, log: '文件太小，不是固件');
-      return;
-    }
-    if (data.length > maxImageSize) {
-      yield PushProgress(
-          done: true,
-          success: false,
-          log: '固件 ${data.length} 字节超过槽位上限 $maxImageSize');
-      return;
-    }
-
+    late final FirmwareImage target;
     final ctrl = _ctrl, stat = _stat;
     if (ctrl == null || stat == null) {
-      yield const PushProgress(done: true, success: false, log: '未连接');
+      yield const PushProgress(
+        done: true,
+        success: false,
+        log: '当前控制板未提供蓝牙固件升级，请使用USB维护通道',
+      );
       return;
     }
 
+    if (chunkSize < 1 || chunkSize > 511) {
+      yield const PushProgress(done: true, log: '传输分片大小无效');
+      return;
+    }
     _busy = true;
+    final session = TransferSession();
+    _transfer = session;
+    final statusSub = stat.onValueReceived.listen(session.accept);
+    void checkActive() {
+      if (session.cancelled) throw StateError('已中断推送');
+    }
+
     final total = data.length;
+    var verified = false;
+    final device = _device;
 
     try {
-      yield const PushProgress(step: '连接设备', log: '已连接，MTU=${0}');
+      final before = await readInfo();
+      if (before == null || device == null) {
+        throw StateError('请先更新控制板基础固件以支持重启确认');
+      }
+      if (!before.otaSupported) {
+        throw StateError('当前控制板请使用USB维护通道升级');
+      }
+      target = FirmwareImage.parse(data, boardModel: before.boardModel);
+      final confirmed = _confirmedDevice == before.device &&
+          _confirmedBoot == before.boot &&
+          _confirmedVersion == before.version &&
+          _confirmedSha == target.sha &&
+          _confirmedAt != null &&
+          DateTime.now().difference(_confirmedAt!) < const Duration(minutes: 2);
+      _clearConfirmation(); // Every attempt consumes consent; never replay it.
+      if (!confirmed) {
+        throw StateError('请先核对当前→目标版本并手动确认刷写；设备或镜像变化后需重新确认');
+      }
+      before.assertFirmwareAllowed(target);
+      if (before.otaAuth != null) {
+        if (_otaExpiresAt != null && !DateTime.now().isBefore(_otaExpiresAt!)) {
+          throw StateError('蓝牙刷写授权凭证已过期，请重新下载官方固件并再次确认刷写');
+        }
+        if (!const ['hmac-sha256-v1', 'hmac-sha256-image-v2']
+                .contains(before.otaAuth) ||
+            _upgradeAuth == null) {
+          throw StateError('此控制板升级授权协议不受支持');
+        }
+        if (_otaTicket == null ||
+            _otaDigest != sha256.convert(data).toString()) {
+          throw StateError('请先从服务器下载官方固件，再进行受保护的蓝牙升级');
+        }
+        if (before.otaAuth == 'hmac-sha256-image-v2' && device.mtuNow < 103) {
+          throw StateError('蓝牙传输容量不足，固件授权需要MTU至少103，请重新连接');
+        }
+        final challenge = await _upgradeAuth!.read();
+        final client = upgradeClientFactory?.call() ??
+            AppOtaClient(Uri.parse(ControllerConfig.base));
+        try {
+          final authorization = await client.authorizeBle(
+            _otaTicket!,
+            before.device,
+            before.boot,
+            challenge,
+            (bytes) => _signDownloadChallenge(Uint8List.fromList(bytes),
+                transfer: session),
+            protocol: before.otaAuth!,
+          );
+          checkActive();
+          await _upgradeAuth!.write(authorization, withoutResponse: false);
+        } finally {
+          client.close();
+        }
+      }
+      checkActive();
+      yield const PushProgress(step: '连接设备', log: '设备连接就绪');
 
       final digest = sha256.convert(data).bytes;
       final begin = Uint8List(1 + 4 + 32);
@@ -186,10 +480,25 @@ class BleOtaService {
       begin[4] = (total >> 24) & 0xFF;
       begin.setRange(5, 37, digest);
       await ctrl.write(begin, withoutResponse: false);
+      yield const PushProgress(step: '准备接收', log: '正在等待控制板准备接收固件');
+      await waitForOtaReceiver(
+        read: () async {
+          if (session.completed) {
+            final result = await session.result;
+            throw StateError(OtaError.text(result[2]));
+          }
+          return stat.read();
+        },
+        checkActive: () {
+          checkActive();
+          if (!device.isConnected) throw StateError('蓝牙已断开，请重新连接后检查版本');
+        },
+      );
 
       // iOS 必须用 withResponse，否则 CoreBluetooth 会限流丢包。
-      final withoutResponse = Platform.isAndroid;
-      final chunk = withoutResponse ? chunkSize : chunkSize;
+      // Acknowledged writes provide backpressure on both platforms.
+      const withoutResponse = false;
+      final chunk = chunkSize;
 
       yield PushProgress(
         step: '传输固件',
@@ -200,11 +509,25 @@ class BleOtaService {
       var lastPct = -1;
       final frame = Uint8List(1 + chunk);
       while (sent < total) {
+        checkActive();
+        if (session.completed) {
+          final error = await session.result;
+          throw StateError(OtaError.text(error[2]));
+        }
         final n = (total - sent) > chunk ? chunk : (total - sent);
         frame[0] = 0x02;
         frame.setRange(1, 1 + n, data, sent);
-        final payload = n == chunk ? frame : Uint8List.sublistView(frame, 0, 1 + n);
-        await ctrl.write(payload, withoutResponse: withoutResponse);
+        final payload =
+            n == chunk ? frame : Uint8List.sublistView(frame, 0, 1 + n);
+        await writeOtaData(
+          write: () => ctrl.write(payload, withoutResponse: withoutResponse),
+          checkActive: () {
+            checkActive();
+            if (!device.isConnected) throw StateError('蓝牙已断开，请重新连接控制板后检查版本');
+            if (session.completed) throw StateError('控制板已停止接收固件，请检查设备状态');
+          },
+        );
+        checkActive();
         sent += n;
 
         final pct = (sent * 100) ~/ total;
@@ -227,22 +550,28 @@ class BleOtaService {
         log: '数据发完，等待板子校验',
       );
 
+      checkActive();
+      // Arm the already-subscribed mailbox before END: READY may arrive in write().
+      session.verifying = true;
       await ctrl.write(Uint8List.fromList([0x03]), withoutResponse: false);
+      final result = await session.result.timeout(const Duration(seconds: 20));
+      checkActive();
 
-      // 等板子回报 READY 或 ERROR，最多 20 秒（校验 1.3MB 很快，留足余量）。
-      final result = await statusStream()
-          .map((v) => v.length >= 3 ? v : null)
-          .where((v) => v != null && (v[0] == OtaState.ready || v[0] == OtaState.error))
-          .first
-          .timeout(const Duration(seconds: 20));
-
-      if (result![0] == OtaState.ready) {
+      if (result[0] == OtaState.ready) {
+        verified = true;
         yield const PushProgress(
           percent: 100,
-          step: '切换启动槽',
+          step: '等待重启确认',
+          log: '写入校验通过，等待同一控制板重启并完成自检',
+        );
+        final restarted = await _confirmReboot(device, before, target, session);
+        yield PushProgress(
+          percent: 100,
+          step: '升级完成',
           done: true,
           success: true,
-          log: '校验通过，启动槽已切换，板子即将重启',
+          log: '已确认目标版本 ${target.version} 启动、自检通过'
+              '${before.runningSlot != null && restarted.runningSlot == null ? '；旧固件未提供槽位信息，已按新启动、镜像标识与有效状态核验' : ''}',
         );
       } else {
         yield PushProgress(
@@ -252,23 +581,68 @@ class BleOtaService {
         );
       }
     } on TimeoutException {
-      yield const PushProgress(
-          done: true, success: false, log: '等待板子校验超时，请重试');
+      yield PushProgress(
+        done: true,
+        success: false,
+        log: verified ? '固件已写入，但重启确认超时，请检查控制板版本' : '等待板子校验超时，请重试',
+      );
     } catch (e) {
-      yield PushProgress(done: true, success: false, log: '传输失败：$e');
+      yield PushProgress(
+          done: true,
+          success: false,
+          log: e is FlutterBluePlusException &&
+                  e.platform == ErrorPlatform.android &&
+                  e.code == 17
+              ? '控制板暂时无法接收升级数据，本次更新已停止。请保持供电，重新连接蓝牙后再试（蓝牙错误17）。'
+              : '传输失败：$e');
     } finally {
+      _clearConfirmation();
+      if (!verified) {
+        try {
+          await ctrl.write([0x04],
+              withoutResponse: false).timeout(const Duration(seconds: 2));
+        } catch (_) {
+          // A disconnected device also aborts the pending image.
+        }
+      }
+      await statusSub.cancel();
+      if (identical(_transfer, session)) _transfer = null;
       _busy = false;
     }
   }
 
+  Future<void> cancelPush() async {
+    _clearConfirmation();
+    final session = _transfer;
+    if (session == null) return;
+    session.cancel();
+    ++_connectionEpoch;
+    try {
+      await _ctrl?.write([0x04],
+          withoutResponse: false).timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // Disconnection also makes the firmware discard the pending image.
+    }
+    await _device?.disconnect();
+  }
+
   Future<void> disconnect() async {
-    await _statSub?.cancel();
-    _statSub = null;
+    _clearConfirmation();
+    _controlRpc?.close();
+    _controlRpc = null;
+    ++_connectionEpoch;
+    final device = _device;
+    _localControl = null;
+    _device = null;
+    await _authConnectionSub?.cancel();
+    _authConnectionSub = null;
+    await cancelPush();
     _ctrl = null;
     _stat = null;
+    _info = null;
+    _auth = null;
     try {
-      await _device?.disconnect();
+      await device?.disconnect();
     } catch (_) {}
-    _device = null;
   }
 }

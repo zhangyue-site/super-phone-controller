@@ -1,0 +1,71 @@
+import 'dart:convert';
+import 'firmware_image.dart';
+
+class BoardInfo {
+  final String device, version, elfSha256, boot;
+  final int imageState;
+  final String? otaAuth, boardModel, otaVersionPolicy, runningSlot;
+  final bool otaSupported;
+  const BoardInfo(
+    this.device,
+    this.version,
+    this.elfSha256,
+    this.boot,
+    this.imageState, {
+    this.otaAuth,
+    this.boardModel,
+    this.otaVersionPolicy,
+    this.runningSlot,
+    this.otaSupported = true,
+  });
+  static BoardInfo parse(List<int> bytes) {
+    final dynamic obj = jsonDecode(utf8.decode(bytes));
+    if (obj is! Map ||
+        obj['protocol'] != 1 ||
+        obj['device'] is! String ||
+        !RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(obj['device']) ||
+        obj['version'] is! String ||
+        !RegExp(r'^[A-Za-z0-9._-]{1,31}$').hasMatch(obj['version']) ||
+        obj['elfSha256'] is! String ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(obj['elfSha256']) ||
+        obj['boot'] is! String ||
+        !RegExp(r'^[0-9a-f]{32}$').hasMatch(obj['boot']) ||
+        obj['imageState'] is! int) {
+      throw const FormatException('控制板启动信息无效');
+    }
+    return BoardInfo(
+      obj['device'],
+      obj['version'],
+      obj['elfSha256'],
+      obj['boot'],
+      obj['imageState'],
+      otaAuth: obj['otaAuth'] as String?,
+      boardModel: obj['boardModel'] as String?,
+      otaVersionPolicy: obj['otaVersionPolicy'] as String?,
+      runningSlot: obj['runningSlot'] as String?,
+      otaSupported: obj['otaSupported'] != false,
+    );
+  }
+
+  void assertFirmwareAllowed(FirmwareImage image) {
+    if (otaVersionPolicy == 'manual-confirmed-any') {
+      image.assertUpgradeAllowed(version, confirmed: true);
+      return;
+    }
+    try {
+      image.assertUpgradeAllowed(version);
+    } on StateError {
+      throw StateError('当前控制板不支持同版本重刷或降级，请先升级到0.4.2或更新的支持版本');
+    }
+  }
+
+  bool confirms(BoardInfo before, String targetVersion, String targetElf) =>
+      device == before.device &&
+      boot != before.boot &&
+      version == targetVersion &&
+      elfSha256 == targetElf &&
+      imageState == 2 &&
+      (before.runningSlot == null ||
+          runningSlot == null ||
+          runningSlot != before.runningSlot);
+}

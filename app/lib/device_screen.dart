@@ -1,3 +1,7 @@
+import 'usb_launch.dart';
+import 'usb_route_lease.dart';
+import 'usb_target_screen.dart';
+import 'app_release.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -7,13 +11,15 @@ import 'ble_ota_service.dart';
 import 'firmware_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
+import 'product_widgets.dart';
 
 /// 屏幕 1：扫描并选择要刷的板子。
 ///
 /// 设计取舍：不显示"连接中"这种阻塞态——BLE 扫描本身是流式的，用户要的是
 /// 立刻看到板子出现。所以扫描一进来就启动，列表随发现增长。
 class DeviceScreen extends StatefulWidget {
-  const DeviceScreen({super.key});
+  const DeviceScreen({super.key, this.targetOnly = false});
+  final bool targetOnly;
 
   @override
   State<DeviceScreen> createState() => _DeviceScreenState();
@@ -26,60 +32,231 @@ class _DeviceScreenState extends State<DeviceScreen> {
   bool _scanning = false;
   String? _error;
   Timer? _autoStop;
+  StreamSubscription? _adapterSub;
+  bool _opening = false;
+  bool _bluetoothOn = false;
+  UsbAttachment? _usb;
+  bool _usbReady = false;
+  bool _legacyBle = false;
+  int _usbRevision = 0;
+  Timer? _usbRefresh;
+  late final _routeLease = UsbRouteLease(() {
+    if (!mounted) return;
+    if (_opening) Navigator.of(context).popUntil((route) => route.isFirst);
+    setState(() => _legacyBle = false);
+    _tryUsbOpen();
+  });
+
+  Future<void> _acceptUsb(dynamic value) async {
+    if (!mounted) return;
+    _usbRevision++;
+    final previous = _usb?.session;
+    try {
+      final next = value == null ? null : UsbAttachment.parse(value as Map);
+      setState(() => _usb = next);
+      _routeLease.update(next);
+      _usbRefresh?.cancel();
+      if (_legacyBle && next == null) {
+        _usbRefresh = Timer.periodic(const Duration(milliseconds: 400), (_) {
+          if (!mounted || !_legacyBle || _usb != null) {
+            _usbRefresh?.cancel();
+          } else {
+            _readUsb();
+          }
+        });
+      }
+      if (!_legacyBle && _opening && next != null && next.session != previous) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
+      await _tryUsbOpen();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _usb = null;
+          _error = 'USB识别：$e';
+        });
+      }
+    }
+  }
+
+  Future<void> _readUsb() async {
+    final revision = _usbRevision;
+    try {
+      final value = await UsbLaunch.snapshot();
+      if (!mounted || revision != _usbRevision) return;
+      final previous = _usb?.session;
+      setState(() => _usb = value);
+      if (value != null) {
+        _routeLease.update(value);
+        _usbRefresh?.cancel();
+      }
+      if (previous != _usb?.session || !_opening) await _tryUsbOpen();
+    } catch (e) {
+      if (mounted && revision == _usbRevision) {
+        setState(() {
+          _usb = null;
+          _error = 'USB识别：$e';
+        });
+      }
+    }
+  }
+
+  Future<void> _tryUsbOpen() async {
+    if ((_usb == null || _legacyBle)) {
+      if (_usbReady) _listenBluetooth();
+      return;
+    }
+    final subscription = _adapterSub;
+    _adapterSub = null;
+    await subscription?.cancel();
+    if ((_usb == null || _legacyBle)) _listenBluetooth();
+    if (_scanning) await _stopScan();
+  }
+
+  void _listenBluetooth() {
+    if ((widget.targetOnly && !_legacyBle) ||
+        !mounted ||
+        !_usbReady ||
+        (_usb != null && !_legacyBle) ||
+        _adapterSub != null) {
+      return;
+    }
+    _adapterSub = FlutterBluePlus.adapterState.listen((state) {
+      if (!mounted ||
+          (_usb != null && !_legacyBle) ||
+          state == BluetoothAdapterState.unknown) {
+        return;
+      }
+      _bluetoothOn = state == BluetoothAdapterState.on;
+      if (_bluetoothOn) {
+        _startScan();
+      } else {
+        if (_scanning) _stopScan();
+        setState(() => _error = '请打开手机蓝牙，开启后会自动寻找控制板');
+      }
+    }, onError: (Object error) {
+      if (mounted && (_usb == null || _legacyBle)) {
+        setState(() => _error = '无法使用蓝牙，请检查权限或换用支持蓝牙的手机');
+      }
+    });
+  }
+
+  Future<void> _initializeUsb() async {
+    await _readUsb();
+    if (!mounted) return;
+    setState(() => _usbReady = true);
+    _listenBluetooth();
+  }
 
   @override
   void initState() {
     super.initState();
-    _checkBluetooth();
+    UsbLaunch.channel.setMethodCallHandler((call) async {
+      if (call.method == 'changed') await _acceptUsb(call.arguments);
+    });
+    _initializeUsb();
   }
 
   Future<void> _checkBluetooth() async {
-    if (!await FlutterBluePlus.isSupported) {
-      setState(() => _error = '这台设备不支持蓝牙');
+    if ((widget.targetOnly && !_legacyBle) ||
+        !_usbReady ||
+        (_usb != null && !_legacyBle)) {
       return;
     }
-    final state = await FlutterBluePlus.adapterState.first;
-    if (state != BluetoothAdapterState.on) {
-      setState(() => _error = '蓝牙未开启，请先在系统设置里打开');
-      return;
+    try {
+      if (!await FlutterBluePlus.isSupported) {
+        if (mounted) setState(() => _error = '这台设备不支持蓝牙');
+        return;
+      }
+      final state = await FlutterBluePlus.adapterState
+          .where((s) => s != BluetoothAdapterState.unknown)
+          .first
+          .timeout(const Duration(seconds: 5));
+      if (!mounted || (_usb != null && !_legacyBle)) {
+        return;
+      }
+      if (state != BluetoothAdapterState.on) {
+        setState(() => _error = '请在系统设置中开启蓝牙');
+        return;
+      }
+      await _startScan();
+    } catch (_) {
+      if (mounted) setState(() => _error = '暂时无法使用蓝牙，请检查权限后重试');
     }
-    _startScan();
   }
 
   Future<void> _startScan() async {
-    if (_scanning) return;
+    if ((widget.targetOnly && !_legacyBle) ||
+        _scanning ||
+        _opening ||
+        !mounted ||
+        !_usbReady ||
+        (_usb != null && !_legacyBle)) {
+      return;
+    }
     setState(() {
       _scanning = true;
       _error = null;
       _found.clear();
     });
-
-    _scanSub = _svc.scan().listen((results) {
-      if (!mounted) return;
+    await _scanSub?.cancel();
+    _scanSub = _svc.scanResults.listen((results) {
+      if (!mounted || _opening || (_usb != null && !_legacyBle)) {
+        return;
+      }
       setState(() {
         for (final r in results) {
           _found[r.device.remoteId.str] = r;
         }
       });
+    }, onError: (Object e) {
+      if (mounted) {
+        setState(() {
+          _scanning = false;
+          _error = '扫描失败，请检查蓝牙权限后重试';
+        });
+      }
     });
-
-    // 8 秒没动静就停，省电；用户可手动重新扫。
-    _autoStop?.cancel();
-    _autoStop = Timer(const Duration(seconds: 8), _stopScan);
+    try {
+      if ((_usb != null && !_legacyBle)) {
+        return;
+      }
+      await _svc.startScan();
+      if (!mounted || _opening || (_usb != null && !_legacyBle)) {
+        await _svc.stopScan();
+        return;
+      }
+      _autoStop?.cancel();
+      _autoStop = Timer(const Duration(seconds: 12), _stopScan);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _scanning = false;
+          _error = '扫描失败，请检查蓝牙权限后重试';
+        });
+      }
+    }
   }
 
   Future<void> _stopScan() async {
     _autoStop?.cancel();
-    await _svc.stopScan();
+    try {
+      await _svc.stopScan();
+    } catch (_) {}
     if (!mounted) return;
     setState(() => _scanning = false);
   }
 
   @override
   void dispose() {
+    _usbRefresh?.cancel();
+    _routeLease.dispose();
+    UsbLaunch.channel.setMethodCallHandler(null);
     _autoStop?.cancel();
     _scanSub?.cancel();
-    _svc.disconnect();
+    _adapterSub?.cancel();
+    if (_scanning) _svc.stopScan();
+    if (_opening) _svc.disconnect();
     super.dispose();
   }
 
@@ -90,22 +267,84 @@ class _DeviceScreenState extends State<DeviceScreen> {
   }
 
   Future<void> _open(ScanResult r) async {
+    if ((_usb == null || _legacyBle)) await _openDevice(r.device);
+  }
+
+  Future<void> _openDevice(BluetoothDevice device, {UsbAttachment? usb}) async {
+    if (_opening || (_usb != null && !_legacyBle)) {
+      return;
+    }
+    _opening = true;
     await _stopScan();
     if (!mounted) return;
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => FirmwareScreen(service: _svc, device: r.device),
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => FirmwareScreen(
+        service: _svc,
+        device: device,
+        usbAttachment: usb,
+        isUsbCurrent: () => mounted && _usb?.session == usb?.session,
+      ),
     ));
     // 从推送页返回后重新扫，避免板子重启后列表是旧的。
-    if (mounted) _startScan();
+    await _svc.disconnect();
+    _opening = false;
+    if (mounted) {
+      _checkBluetooth();
+      _tryUsbOpen();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final usb = _legacyBle ? null : _usb;
+    if (usb != null) {
+      return UsbTargetScreen(
+        key: ValueKey(usb.session),
+        attachment: usb,
+        service: _svc,
+        onLegacy: () {
+          _routeLease.select(usb);
+          setState(() => _legacyBle = true);
+          _listenBluetooth();
+          _checkBluetooth();
+        },
+        isCurrent: () => mounted && _usb?.session == usb.session,
+      );
+    }
+    if (!_usbReady) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (widget.targetOnly && !_legacyBle) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('被控手机')),
+        body: ListView(padding: const EdgeInsets.all(24), children: [
+          const Icon(Icons.usb, size: 48),
+          const SizedBox(height: 20),
+          Text('等待连接USB控制板', style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 12),
+          const Text('请用USB连接控制板。识别后会进入被控手机屏幕共享，请按系统提示授权。'),
+          if (_error != null) ...[
+            const SizedBox(height: 16),
+            Text(_error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ],
+          const SizedBox(height: 20),
+          OutlinedButton.icon(
+              onPressed: _readUsb,
+              icon: const Icon(Icons.refresh),
+              label: const Text('重新检查USB连接')),
+        ]),
+      );
+    }
     final devices = _sorted;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('PhoneCtl Flash'),
+        title: const Text('控制板升级'),
         actions: [
+          IconButton(
+              tooltip: 'App 版本与更新',
+              onPressed: () => AppRelease.show(context),
+              icon: const Icon(Icons.info_outline)),
           IconButton(
             tooltip: '重新扫描',
             onPressed: _scanning ? null : _checkBluetooth,
@@ -115,27 +354,30 @@ class _DeviceScreenState extends State<DeviceScreen> {
       ),
       body: Column(
         children: [
-          _ScanBar(scanning: _scanning, count: devices.length, onToggle: () {
-            _scanning ? _stopScan() : _startScan();
-          }),
+          _ScanBar(
+              scanning: _scanning,
+              count: devices.length,
+              onToggle: () {
+                _scanning ? _stopScan() : _checkBluetooth();
+              }),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: InfoBanner(
                 icon: Icons.bluetooth_disabled,
-                color: AppTheme.danger,
-                text: _error!,
+                color: AppTheme.colors(context).danger,
+                text: productError(_error!),
               ),
             ),
           Expanded(
             child: devices.isEmpty
-                ? _EmptyState(scanning: _scanning)
+                ? _EmptyState(scanning: _scanning, onRetry: _checkBluetooth)
                 : ListView.separated(
                     padding: const EdgeInsets.all(16),
                     itemCount: devices.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (_, i) =>
-                        _DeviceCard(result: devices[i], onTap: () => _open(devices[i])),
+                    itemBuilder: (_, i) => _DeviceCard(
+                        result: devices[i], onTap: () => _open(devices[i])),
                   ),
           ),
         ],
@@ -167,7 +409,9 @@ class _ScanBar extends StatelessWidget {
             child: Text(
               scanning ? '正在扫描附近设备…' : '扫描已停止 · 发现 $count 个',
               style: TextStyle(
-                color: scanning ? AppTheme.accent : AppTheme.textDim,
+                color: scanning
+                    ? AppTheme.colors(context).accent
+                    : AppTheme.colors(context).textDim,
                 fontSize: 14,
               ),
             ),
@@ -175,7 +419,7 @@ class _ScanBar extends StatelessWidget {
           TextButton(
             onPressed: onToggle,
             child: Text(scanning ? '停止' : '扫描',
-                style: const TextStyle(color: AppTheme.accent)),
+                style: TextStyle(color: AppTheme.colors(context).accent)),
           ),
         ],
       ),
@@ -198,22 +442,21 @@ class _DeviceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rawName =
-        result.advertisementData.advName.isNotEmpty
-            ? result.advertisementData.advName
-            : (result.device.platformName.isNotEmpty
-                ? result.device.platformName
-                : '未命名设备');
+    final rawName = result.advertisementData.advName.isNotEmpty
+        ? result.advertisementData.advName
+        : (result.device.platformName.isNotEmpty
+            ? result.device.platformName
+            : '未命名设备');
     final (title, version) = _splitName(rawName);
     final rssi = result.rssi;
     final (label, color) = rssi > -60
-        ? ('强', AppTheme.accent)
+        ? ('强', AppTheme.colors(context).accent)
         : rssi > -75
-            ? ('中', AppTheme.warn)
-            : ('弱', AppTheme.textDim);
+            ? ('中', AppTheme.colors(context).warn)
+            : ('弱', AppTheme.colors(context).textDim);
 
     return Material(
-      color: AppTheme.surface,
+      color: AppTheme.colors(context).surface,
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         onTap: onTap,
@@ -222,7 +465,7 @@ class _DeviceCard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppTheme.border),
+            border: Border.all(color: AppTheme.colors(context).border),
           ),
           child: Row(
             children: [
@@ -230,10 +473,11 @@ class _DeviceCard extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: AppTheme.surfaceHi,
+                  color: AppTheme.colors(context).surfaceHi,
                   borderRadius: BorderRadius.circular(11),
                 ),
-                child: const Icon(Icons.memory, color: AppTheme.accent, size: 22),
+                child: Icon(Icons.memory,
+                    color: AppTheme.colors(context).accent, size: 22),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -241,15 +485,18 @@ class _DeviceCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(title,
-                        style: const TextStyle(
-                            color: AppTheme.text,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: AppTheme.colors(context).text,
                             fontSize: 16,
                             fontWeight: FontWeight.w600)),
                     if (version.isNotEmpty) ...[
                       const SizedBox(height: 3),
                       Text(version,
-                          style: AppTheme.mono
-                              .copyWith(color: AppTheme.textDim, fontSize: 12)),
+                          style: AppTheme.mono.copyWith(
+                              color: AppTheme.colors(context).textDim,
+                              fontSize: 12)),
                     ],
                   ],
                 ),
@@ -258,15 +505,15 @@ class _DeviceCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text('$rssi dBm',
-                      style: AppTheme.mono
-                          .copyWith(color: color, fontSize: 12)),
+                      style:
+                          AppTheme.mono.copyWith(color: color, fontSize: 12)),
                   const SizedBox(height: 3),
-                  Text(label,
-                      style: TextStyle(color: color, fontSize: 11)),
+                  Text(label, style: TextStyle(color: color, fontSize: 11)),
                 ],
               ),
               const SizedBox(width: 6),
-              const Icon(Icons.chevron_right, color: AppTheme.textDim, size: 20),
+              Icon(Icons.chevron_right,
+                  color: AppTheme.colors(context).textDim, size: 20),
             ],
           ),
         ),
@@ -278,33 +525,46 @@ class _DeviceCard extends StatelessWidget {
 class _EmptyState extends StatelessWidget {
   final bool scanning;
 
-  const _EmptyState({required this.scanning});
+  final VoidCallback onRetry;
+  const _EmptyState({required this.scanning, required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
+          child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(scanning ? Icons.search : Icons.bluetooth_searching,
-                size: 56, color: AppTheme.textDim.withOpacity(0.5)),
+                size: 56,
+                color: AppTheme.colors(context).textDim.withValues(alpha: 0.5)),
             const SizedBox(height: 20),
             Text(
               scanning ? '正在寻找板子…' : '还没发现设备',
-              style: const TextStyle(
-                  color: AppTheme.text, fontSize: 17, fontWeight: FontWeight.w500),
+              style: TextStyle(
+                  color: AppTheme.colors(context).text,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w500),
             ),
             const SizedBox(height: 12),
-            const Text(
+            if (!scanning)
+              TextButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('重新寻找控制板')),
+            Text(
               '确认板子已上电，广播名以 PhoneCtl- 开头。\n如果刚刷完固件，等它重启完成再扫。',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.textDim, fontSize: 13, height: 1.6),
+              style: TextStyle(
+                  color: AppTheme.colors(context).textDim,
+                  fontSize: 13,
+                  height: 1.6),
             ),
           ],
         ),
-      ),
+      )),
     );
   }
 }
