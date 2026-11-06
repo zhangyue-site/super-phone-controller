@@ -1,5 +1,5 @@
 """Image-only semantic observations; no model-provided executable commands."""
-import base64,json,os,time,urllib.request,urllib.error,io
+import base64,errno,io,json,os,socket,ssl,time,urllib.request,urllib.error
 from PIL import Image
 from pathlib import Path
 from contextvars import ContextVar
@@ -42,9 +42,9 @@ def normalize_observation(result,width,height):
 
 class VisionTransportError(ValueError):
  """Read-only transport failure; never authorizes an actuator retry."""
- def __init__(self,provider,model,config,retryable):
-  super().__init__('视觉识别服务连接失败，本次停止；请稍后重试。')
-  self.provider=provider;self.model=model;self.config=dict(config);self.retryable=retryable
+ def __init__(self,provider,model,config,retryable,*,timed_out=False):
+  super().__init__('视觉识别请求超时，本次停止；请稍后重试。' if timed_out else '视觉识别服务连接失败，本次停止；请稍后重试。')
+  self.provider=provider;self.model=model;self.config=dict(config);self.retryable=retryable;self.timed_out=timed_out
 
 
 
@@ -140,28 +140,52 @@ def _open_vision(request,provider,timeout=18):
  # Phone vision only: no inherited shell proxy and no redirect out of Go.
  return urllib.request.build_opener(urllib.request.ProxyHandler({}),_NoGoRedirect()).open(request,timeout=timeout)
 
+def _transport_error_details(error):
+ # Fixed names only: exception text, custom class names and URL reasons can
+ # contain credentials or provider response content.
+ kinds=((urllib.error.HTTPError,'HTTPError','http'),(urllib.error.URLError,'URLError','url'),
+  (TimeoutError,'TimeoutError','timeout'),(socket.gaierror,'gaierror','dns'),(ssl.SSLError,'SSLError','tls'),
+  (ConnectionResetError,'ConnectionResetError','connection'),(ConnectionRefusedError,'ConnectionRefusedError','connection'),
+  (ConnectionAbortedError,'ConnectionAbortedError','connection'),(BrokenPipeError,'BrokenPipeError','connection'),
+  (ConnectionError,'ConnectionError','connection'),(OSError,'OSError','io'))
+ outer=next(((name,category) for kind,name,category in kinds if isinstance(error,kind)),(None,'unknown'))
+ reason=error.reason if isinstance(error,urllib.error.URLError) and not isinstance(error,urllib.error.HTTPError) else error
+ inner=next(((name,category) for kind,name,category in kinds if isinstance(reason,kind)),(None,outer[1]))
+ code=getattr(reason,'errno',None)
+ known_codes=set(errno.errorcode)|{getattr(socket,name) for name in dir(socket) if name.startswith('EAI_')}
+ code=code if type(code) is int and code in known_codes else None
+ return dict(type=outer[0],category=inner[1],reason_type=inner[0],errno=code)
+
 def request_vision(payload,provider,model,cfg):
  # Exactly one request here. The navigator alone may retry once on a fresh
  # image. Never select another provider or an official usage-billed endpoint.
  _LAST_ROUTE.set((provider,model,dict(cfg)))
  request=urllib.request.Request(_vision_url(provider,cfg),json.dumps(payload).encode(),request_headers(cfg))
- started=time.monotonic()
+ # Allow more time for Go's variable response latency, without retrying here.
+ # This is a socket wait, not a total request deadline; other providers keep 18s.
+ timeout=30 if provider=='opencode-go' else 18
+ phase='open';started=time.monotonic()
  try:
-  with _open_vision(request,provider,timeout=18) as response:value=json.loads(response.read(24000))
+  with _open_vision(request,provider,timeout=timeout) as response:
+   phase='read';value=json.loads(response.read(24000))
  except (OSError,urllib.error.URLError) as error:
   status=getattr(error,'code',None)
-  retryable=provider=='opencode-go' and (not isinstance(error,urllib.error.HTTPError) or status==429 or 500<=status<600)
-  # Missing counters are unknown, never zero. The successful retry has its own
-  # VISION_USAGE record; failed transport is also retained for attempt accounting.
+  status=status if type(status) is int and 100<=status<=599 else None
+  retryable=provider=='opencode-go' and (not isinstance(error,urllib.error.HTTPError) or status==429 or status is not None and 500<=status<600)
+  details=_transport_error_details(error)
+  print('VISION_TRANSPORT_ERROR '+json.dumps(dict(provider=provider,status=status,retryable=retryable,retry=False,
+   phase=phase,elapsed_ms=max(0,int((time.monotonic()-started)*1000)),timeout_s=timeout,**details)),flush=True)
+  # Missing counters are unknown, never zero. Preserve failed attempt usage;
+  # log the primary failure before the existing bounded error-body read.
   usage=None
   if isinstance(error,urllib.error.HTTPError):
    try:
     failure=json.loads(error.read(24000))
     if isinstance(failure,dict):usage=failure.get('usage')
    except (OSError,ValueError,TypeError):pass
-  print('VISION_USAGE '+json.dumps({'provider':provider,'model':model,'session':request.get_header('X-opencode-session'),'usage':usage,'transport_error':type(error).__name__,'http_status':status}),flush=True)
-  print('VISION_TRANSPORT_ERROR '+json.dumps({'provider':provider,'type':type(error).__name__,'status':status,'retryable':retryable,'retry':False}),flush=True)
-  raise VisionTransportError(provider,model,cfg,retryable) from error
+   finally:error.close()
+  print('VISION_USAGE '+json.dumps({'provider':provider,'model':model,'session':request.get_header('X-opencode-session'),'usage':usage,'transport_error':details['type'],'http_status':status}),flush=True)
+  raise VisionTransportError(provider,model,cfg,retryable,timed_out=details['category']=='timeout') from error
  return value,request,provider,started
 
 def launcher_method(result,jpeg,query):
