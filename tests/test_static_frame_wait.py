@@ -2,9 +2,12 @@
 
 Not evidence of a real phone, lock screen, or the experimental sampling path.
 """
-import tempfile,threading,time,unittest
+import io,json,tempfile,threading,time,unittest
+from contextlib import redirect_stdout
+from unittest.mock import patch
 from pathlib import Path
 from display_service import app_screen
+from display_service.app_ota import Authority
 from display_service.dialogue import Mailbox
 from display_service.general_nav import GeneralNavigator
 from display_service.skill_engine import SkillStore
@@ -64,4 +67,71 @@ class StaticFrameWait(unittest.TestCase):
    ops,result,j=self.run_task(order,sampling=True)
    self.assertIn('已通过画面核验完成',result,order);self.assertTrue(j.navigation_verified)
    self.assertEqual(ops,['hid_home','hid_pointer'])
+
+class FirstFrameDiagnostics(unittest.TestCase):
+ def setUp(self):
+  self.authority=Authority(clock=lambda:100.0)
+  self.authority_patch=patch.object(app_screen,'AUTHORITY',self.authority)
+  self.authority_patch.start();self.addCleanup(self.authority_patch.stop)
+  self.m=Mailbox();self.j=self.m.create('synthetic-first-frame','a'*16,1)
+  self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+  self.n=GeneralNavigator(self.m,SkillStore(Path(self.tmp.name)),frame_timeout=.01)
+  self.ticket='t'*43
+ def timeout(self):
+  # No frame is emitted and no task capability is pre-bound by this helper.
+  j=self.j
+  before=(j.screen_session,j.command,j.result,dict(j.last_receipt),j.sequence,j.video_sequence,
+          j.video_barrier,j.video,j.cancelled,j.done,j.state,j.event.is_set(),j.ui_event.is_set())
+  tickets=dict(self.authority.tickets);nonces=dict(self.authority.upgrade_nonces)
+  output=io.StringIO()
+  with redirect_stdout(output),self.assertRaises(ValueError) as raised:self.n._frame(j,after=j.video_sequence)
+  self.assertEqual(before,(j.screen_session,j.command,j.result,dict(j.last_receipt),j.sequence,j.video_sequence,
+          j.video_barrier,j.video,j.cancelled,j.done,j.state,j.event.is_set(),j.ui_event.is_set()))
+  self.assertEqual(tickets,self.authority.tickets);self.assertEqual(nonces,self.authority.upgrade_nonces)
+  log=output.getvalue();self.assertTrue(log.startswith('FRAME_WAIT_TIMEOUT '))
+  for private in (self.ticket,'replacement-ticket','private-screen-pixels','private-screen-text'):
+   self.assertNotIn(private,log)
+  return str(raised.exception),json.loads(log.split(' ',1)[1])
+ def test_first_frame_with_device_grant_reports_unbound_not_missing_share(self):
+  self.authority.tickets[self.ticket]=(200,self.j.device,'usb-screen')
+  reason,event=self.timeout()
+  self.assertIn('本任务尚未收到首帧',reason);self.assertIn('当前画面状态待确认',reason)
+  self.assertNotIn('请在App中共享',reason);self.assertNotIn('屏幕共享仍有效',reason)
+  self.assertIn('未重复任何操作',reason)
+  self.assertIsNone(event['share_authorized'])
+  self.assertEqual(event['share_state'],'awaiting_first_frame')
+  self.assertFalse(event['screen_session_bound']);self.assertTrue(event['device_share_authorized'])
+ def test_missing_expired_and_other_device_grants_keep_share_prompt(self):
+  for grant in (None,(100,self.j.device,'usb-screen'),(200,'different-device','usb-screen')):
+   with self.subTest(grant=grant):
+    self.authority.tickets.clear()
+    if grant:self.authority.tickets[self.ticket]=grant
+    reason,event=self.timeout()
+    self.assertIn('请在App中共享整个屏幕',reason)
+    self.assertFalse(event['share_authorized']);self.assertFalse(event['device_share_authorized'])
+    self.assertEqual(event['share_state'],'unavailable')
+ def test_bound_active_grant_keeps_static_frame_reason_and_private_data_out_of_log(self):
+  self.authority.tickets[self.ticket]=(200,self.j.device,'usb-screen')
+  self.j.screen_session=self.ticket
+  self.j.video=b'private-screen-pixels';self.j.reply='private-screen-text'
+  self.j.video_sequence=4;self.j.video_received=self.m.clock()-3
+  reason,event=self.timeout()
+  self.assertIn('屏幕共享仍有效',reason)
+  self.assertTrue(event['share_authorized']);self.assertTrue(event['screen_session_bound'])
+  self.assertEqual(event['share_state'],'bound_authorized')
+  self.assertEqual(event['after'],4);self.assertEqual(event['latest'],4)
+  self.assertGreaterEqual(event['latest_age_s'],3)
+ def test_bound_invalid_grant_never_adopts_a_replacement_grant(self):
+  for grant in (None,(100,self.j.device,'usb-screen'),(200,'different-device','usb-screen')):
+   with self.subTest(grant=grant):
+    self.authority.tickets.clear()
+    if grant:self.authority.tickets[self.ticket]=grant
+    self.authority.tickets['replacement-ticket']=(200,self.j.device,'usb-screen')
+    self.j.screen_session=self.ticket
+    reason,event=self.timeout()
+    self.assertIn('请在App中共享整个屏幕',reason)
+    self.assertNotIn('本任务尚未收到首帧',reason)
+    self.assertFalse(event['share_authorized']);self.assertTrue(event['screen_session_bound'])
+    self.assertTrue(event['device_share_authorized']);self.assertEqual(event['share_state'],'bound_unavailable')
+
 if __name__=='__main__':unittest.main()
