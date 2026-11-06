@@ -34,7 +34,26 @@ class WechatNavigator:
      if j.video_width>=j.video_height:raise ValueError("请保持手机竖屏并重新共享")
      return j.video,j.video_sequence,signature(j.video)
    time.sleep(.025)
-  raise ValueError("未收到新的手机画面，请在App中共享整个屏幕")
+  raise ValueError(self._frame_timeout_reason(j,after))
+ def _frame_timeout_reason(self,j,after):
+  # Diagnosis only: snapshot without nested locks, never bind a ticket or replay.
+  from . import app_screen
+  with self.m.lock:
+   device,turn,screen_session=j.device,j.sequence,j.screen_session
+   latest=j.video_sequence;age=round(self.m.clock()-j.video_received,1) if j.video else None
+  with app_screen.AUTHORITY.lock:
+   now=app_screen.AUTHORITY.clock()
+   grant=app_screen.AUTHORITY.tickets.get(screen_session) if screen_session else None
+   device_shared=any(item[0]>now and item[1]==device for item in app_screen.AUTHORITY.tickets.values())
+   shared=bool(grant and grant[0]>now and grant[1]==device)
+  bound=bool(screen_session)
+  share_state=('bound_authorized' if shared else 'bound_unavailable') if bound else 'unavailable'
+  if not bound and device_shared:shared=None;share_state='awaiting_first_frame'
+  print("FRAME_WAIT_TIMEOUT "+json.dumps(dict(device=device,turn=turn,after=after,latest=latest,latest_age_s=age,share_authorized=shared,share_state=share_state,screen_session_bound=bound,device_share_authorized=device_shared),separators=(",",":")),flush=True)
+  if share_state=='awaiting_first_frame':
+   return "检测到该设备有有效共享授权，但本任务尚未收到首帧，当前画面状态待确认。请保持被控手机亮屏并解锁；页面静止时可在助手“设置与设备维护”中开启“静态页面持续取样（实验）”。本次已停止，未重复任何操作。"
+  if not shared:return "未收到新的手机画面，请在App中共享整个屏幕"
+  return "屏幕共享仍有效，但%d秒内没有收到新的手机画面，可能是被控手机已息屏或锁屏，或页面静止没有产生新画面。请保持被控手机亮屏并解锁；页面静止时可在助手“设置与设备维护”中开启“静态页面持续取样（实验）”。本次已停止，未重复任何操作。"%round(self.timeout)
  def _observe(self,j,raw,query,verify=False):
   start=time.monotonic()
   with self.m.lock:
