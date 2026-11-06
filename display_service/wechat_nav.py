@@ -34,7 +34,20 @@ class WechatNavigator:
      if j.video_width>=j.video_height:raise ValueError("请保持手机竖屏并重新共享")
      return j.video,j.video_sequence,signature(j.video)
    time.sleep(.025)
-  raise ValueError("未收到新的手机画面，请在App中共享整个屏幕")
+  raise ValueError(self._frame_timeout_reason(j,after))
+ def _frame_timeout_reason(self,j,after):
+  # Android uploads only when the screen content changes, so an authorized
+  # share on a still, dark or locked screen can stop producing new frames.
+  # Diagnosis only: nothing is retried or replayed here.
+  from . import app_screen
+  with app_screen.AUTHORITY.lock:
+   grant=app_screen.AUTHORITY.tickets.get(j.screen_session) if j.screen_session else None
+   shared=bool(grant and grant[0]>app_screen.AUTHORITY.clock() and grant[1]==j.device)
+  with self.m.lock:
+   latest=j.video_sequence;age=round(self.m.clock()-j.video_received,1) if j.video else None
+  print("FRAME_WAIT_TIMEOUT "+json.dumps(dict(device=j.device,turn=j.sequence,after=after,latest=latest,latest_age_s=age,share_authorized=shared),separators=(",",":")),flush=True)
+  if not shared:return "未收到新的手机画面，请在App中共享整个屏幕"
+  return "屏幕共享仍有效，但%d秒内没有收到新的手机画面，可能是被控手机已息屏或锁屏，或页面静止没有产生新画面。请保持被控手机亮屏并解锁；页面静止时可在助手“设置与设备维护”中开启“静态页面持续取样（实验）”。本次已停止，未重复任何操作。"%round(self.timeout)
  def _observe(self,j,raw,query,verify=False):
   start=time.monotonic()
   with self.m.lock:
