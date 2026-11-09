@@ -9,7 +9,6 @@ ROOT=Path(__file__).resolve().parents[1]
 def main():
  parser=argparse.ArgumentParser(description=__doc__)
  parser.add_argument('modules',nargs='*',help='Optional test modules instead of full discovery')
- parser.add_argument('--include-focused',action='store_true')
  args=parser.parse_args()
  os.chdir(ROOT);sys.path[:0]=[str(ROOT),str(ROOT/'tests')]
  original_connect=socket.socket.connect;original_create=socket.create_connection
@@ -24,7 +23,6 @@ def main():
  try:
   loader=unittest.defaultTestLoader
   suite=loader.loadTestsFromNames(args.modules) if args.modules else loader.discover(str(ROOT/'tests'))
-  if args.include_focused:suite.addTests(loader.loadTestsFromNames(['test_visual_retry','test_go_endpoint','test_screen_verified_feedback']))
   return 0 if unittest.TextTestRunner().run(suite).wasSuccessful() else 1
  finally:socket.socket.connect=original_connect;socket.create_connection=original_create
 if __name__=='__main__':raise SystemExit(main())

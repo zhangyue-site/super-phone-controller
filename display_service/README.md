@@ -10,7 +10,7 @@
 
 | 环境变量 | 用途 | 未提供时 |
 | --- | --- | --- |
-| `EPAPER_CONFIG` | 设备 ID 到设备令牌的外部 JSON 映射 | 使用通用 `/etc/phone-controller/devices.example.json` 路径，不内置设备 |
+| `EPAPER_CONFIG` | 设备 ID 到设备令牌的外部 JSON 映射 | 使用通用 `/etc/phone-controller/devices.json` 路径，不内置设备 |
 | `EPAPER_MODEL_CONFIG` | 模型路由 JSON，结构为 `models.providers` | 当前用户 `.config/phone-controller/models.json`；无配置则不能调用模型 |
 | `EPAPER_JEV_CREDENTIAL` | 可选的图像判断提供方凭据 | 当前用户 `.config/phone-controller/jev.json`；不包含默认账号 |
 | `EPAPER_JEV_PROXY` | 可选的图像判断代理 | 默认直连，不连接隐藏的本机代理 |
@@ -37,4 +37,4 @@
 
 蓝牙 Gateway 和直连设备领取共享单一执行所有权；待领取任务在确认后 60 秒过期，执行中任务使用独立的生命周期限制。STOP、掉线、过期或回执不明不会将旧动作转交给另一个入口。`board_control.py` 保留历史会话工具及元数据兼容逻辑，当前 HTTP Handler 未注册 `/board-control`；手动指令和技能仍通过已认证的 App/配对入口及同一执行链路处理。
 
-完整离线回归可运行 `python3 tools/run_offline_tests.py --include-focused`。此入口禁止 Python 外部 socket 连接，只允许本机 HTTP 测试；模型响应和手机画面均使用合成 fixture，不代表实机验收。
+完整离线回归可运行 `python3 tools/run_offline_tests.py`。此入口禁止 Python 外部 socket 连接，只允许本机 HTTP 测试；模型响应和手机画面均使用合成 fixture，不代表实机验收。
