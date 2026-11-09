@@ -88,3 +88,5 @@ CONTROLLER_MODEL_SMOKE=/path/to/your/model.onnx DYLD_LIBRARY_PATH="$ort_dir" \
 | esp_codec_dev 1.6.2 | [Apache-2.0，内含需单独核对的厂商文件](https://components.espressif.com/components/espressif/esp_codec_dev/versions/1.6.2) |
 | esp_tinyusb 2.4.0 | [Apache-2.0](https://components.espressif.com/components/espressif/esp_tinyusb/versions/2.4.0) |
 | TinyUSB | [MIT](https://github.com/hathach/tinyusb/blob/master/LICENSE)，打包前核对实际使用的 Espressif 组件版本及其附带条款 |
+
+独立 AMOLED 构建还使用 [Waveshare BSP 2.0.1（Apache-2.0）](https://components.espressif.com/components/waveshare/esp32_s3_touch_amoled_2_16/versions/2.0.1)、[LVGL 9.6（MIT）](https://github.com/lvgl/lvgl/blob/master/LICENCE.txt)及上述 esp_tinyusb。Waveshare BSP 的解码依赖 [esp_new_jpeg 1.0.2](https://components.espressif.com/components/espressif/esp_new_jpeg/versions/1.0.2) 使用包含 Espressif 产品范围条款的 ESPRESSIF MIT License。成品分发时还应按组件锁文件核对 FreeType、libpng、zlib、QOI 等传递依赖。
