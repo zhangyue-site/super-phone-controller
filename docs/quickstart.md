@@ -40,7 +40,6 @@ flutter pub get
 flutter test --dart-define=CONTROLLER_BASE_URL=https://controller.test
 flutter build apk --debug --dart-define=CONTROLLER_BASE_URL=https://controller.test
 # 在 macOS 构建 iOS 模拟器版本
-flutter config --no-enable-swift-package-manager
 flutter build ios --simulator --dart-define=CONTROLLER_BASE_URL=https://controller.test
 ```
 
@@ -48,7 +47,7 @@ flutter build ios --simulator --dart-define=CONTROLLER_BASE_URL=https://controll
 
 ## ESP32-S3
 
-当前公开集成入口为 `firmware-epaper/`。`firmware/` 是早期原型，`firmware-recovery/` 是单独的恢复工程。AMOLED 在独立开发分支，接口和板型需独立核对。
+当前公开集成入口为 `firmware-epaper/`。`firmware/` 是早期原型，`firmware-recovery/` 是单独的恢复工程。AMOLED 的公开开发源码位于 [0.6.31 分支提交](https://github.com/zhangyue-site/super-phone-controller/tree/c2fe1ee8f495cc56f4903186bad010e1b5721123/firmware-amoled)，使用 ESP-IDF 5.5.2，接口和板型需独立核对。
 
 在已初始化 ESP-IDF 6.0 或 5.5.2 的 shell 执行构建命令，生成带占位身份的开发镜像。
 

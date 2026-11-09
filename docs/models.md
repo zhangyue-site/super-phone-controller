@@ -55,13 +55,18 @@ CONTROLLER_MODEL_SMOKE=/path/to/your/model.onnx DYLD_LIBRARY_PATH="$ort_dir" \
 | 端侧检测训练检查点 | 未获得可追溯的训练基座、数据许可和检查点授权 | 由部署者自行获取，源码仓库仅提供推理接口 |
 | 端侧检测浮点 ONNX 导出 | 未获得导出物的再分发许可，现场导出超过 32 MiB | 由部署者自行获取符合契约的导出 |
 | 端侧检测 INT8 ONNX 导出 | 未获得量化导出物的再分发许可 | 由部署者自行获取 |
-| 服务端现场 OCR 导出与预览识别适配 | 未获得可追溯的可分发权重清单 | 现场权重与候选代码单独保留，公开入口使用已审查的通用视觉或自备模型 |
+| 协调服务当前配置的端侧 ONNX 导出 | 与上述独立候选文件大小不同，未取得该实际部署导出的训练和再分发证明 | 由部署者自行获取符合接口的导出 |
+| 其他端侧训练检查点、历史基线、图标检测及不同输入尺寸或量化的候选导出 | 缺少逐个导出的上游基座、训练数据和许可证记录 | 由部署者自行获取，按各自张量契约验证 |
+| 现场 OCR 导出 | 文件大小和摘要与下列上游发布物不同，未获得该副本的可追溯授权 | 使用上游发布物或自备模型 |
+| 上游 PP-OCRv6 small recognition ONNX | [PaddlePaddle 官方模型卡，Apache-2.0](https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/tree/b8f84f0b80c529de40b4fbb3544b84fa7233a513) | 可按许可证分发。此仓库链接上游版本，部署者自行取得并保留许可证及适用通知 |
 | MiMo、DeepSeek、GLM、Jev 远端调用 | 本项目按各服务的访问条款调用 API，未收集可分发权重 | 部署者自行申请访问并配置 |
 | ONNX Runtime | [Microsoft 上游 MIT](https://github.com/microsoft/onnxruntime/blob/main/LICENSE)，二进制还附带[第三方通知](https://github.com/microsoft/onnxruntime/blob/main/ThirdPartyNotices.txt) | 由依赖管理器获取，分发成品时按实际版本附通知 |
 | onnxruntime_plus 1.5.0 | [pub.dev MIT](https://pub.dev/packages/onnxruntime_plus/versions/1.5.0/license) | 由 Flutter 解析 |
 | image 4.8.0 | [pub.dev MIT](https://pub.dev/packages/image/versions/4.8.0/license) | 由 Flutter 解析 |
 | Pillow 12 | [上游 MIT-CMU](https://github.com/python-pillow/Pillow/blob/main/LICENSE) | 由 pip 解析 |
 | pypinyin 0.55.0 | [上游 MIT](https://github.com/mozillazg/python-pinyin/blob/master/LICENSE.txt) | 由 pip 解析 |
+
+上游 OCR 文件为 `inference.onnx`，发布摘要为 `5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634`。它用于文字识别，输入和字典按模型卡配置，按钮检测端点只接受前述检测契约。
 
 固件及 App 的依赖由各构建工具按清单解析。发布二进制前，按实际解析结果另核对传递依赖、原生运行库和随包通知。项目自身许可见首页。
 
