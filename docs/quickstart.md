@@ -39,8 +39,11 @@ cd app
 flutter pub get
 flutter test --dart-define=CONTROLLER_BASE_URL=https://controller.test
 flutter build apk --debug --dart-define=CONTROLLER_BASE_URL=https://controller.test
-# 在 macOS 构建 iOS 模拟器版本
-flutter build ios --simulator --dart-define=CONTROLLER_BASE_URL=https://controller.test
+# 在 macOS 上将 simulator_id 设为已启动的 iOS 模拟器 ID
+flutter test integration_test/startup_test.dart -d "$simulator_id" \
+  --dart-define=CONTROLLER_BASE_URL=https://controller.test
+# 构建无签名的 iPhone 设备版本
+flutter build ios --release --no-codesign --dart-define=CONTROLLER_BASE_URL=https://controller.test
 ```
 
 `controller.test` 供构建和测试。连接自建服务时填自己的 HTTPS 地址。iOS 真机需部署者签名，配置 `APP_BUNDLE_ID`、`BROADCAST_BUNDLE_ID` 和 Runner 与广播扩展共享的 Keychain access group。发起任务角色通过配对和服务 API 发起任务。被控角色另需 ReplayKit 系统广播、捕获授权、画面上传及板端 HID，最后用动作后画面核验。两种角色分别验收。
