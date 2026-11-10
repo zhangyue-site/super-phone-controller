@@ -380,8 +380,10 @@ class ScreenShareService: Service() {
      val responseBody=c.inputStream.use { readBounded(it,16385) }
      if(responseBody.size>16384)throw IllegalStateException()
      val data=JSONObject(String(responseBody,Charsets.UTF_8))
-     if(running && ticket==requestTicket)RecognitionEvidence.acknowledge(data.optJSONObject("recognitionReceipt"))
-     if(running && ticket==requestTicket){supportsLocalResults=data.optInt("localResultsProtocol")==1;taskStatus=data.toString();supportsAccessibilityFrames=data.optInt("accessibilityProtocol")==1
+     if(running && ticket==requestTicket){
+      RecognitionEvidence.acknowledge(data.optJSONObject("recognitionReceipt"))
+      RecognitionEvidence.acknowledgeLocal(data.optJSONArray("localResultsReceipt"))
+      supportsLocalResults=data.optInt("localResultsProtocol")==1;taskStatus=data.toString();supportsAccessibilityFrames=data.optInt("accessibilityProtocol")==1
       captureState=data.optString("state").let{if(it in setOf("idle","thinking","running","planning","plan","verifying","capturing","done","error","stopped"))it else "unknown"}
       statusOkAt=SystemClock.elapsedRealtime();hasStatusBarrier=Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
       frameDemand=data.optString("state") in setOf("thinking","running","planning","plan","verifying","capturing") && Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}

@@ -50,6 +50,15 @@ void main() {
     await poll();
     expect(
         callsTo('beginButtonRecognition').single.arguments, {'autoEpoch': 101});
+    state = {
+      'source': 'buttons',
+      'ocrCount': 10,
+      'ocrReceived': 10,
+      'ocrPreview': '设置 · 蓝牙',
+    };
+    await poll();
+    expect(find.text('设置 · 蓝牙'), findsOneWidget);
+    expect(find.text('本轮已识别 10 / 10 帧 · 106 已接收 10 / 10 帧'), findsOneWidget);
     state = {'autoEpoch': 102, 'autoStep': 'ocr'};
     await poll();
     expect(callsTo('startBillOcr').last.arguments, {'autoEpoch': 102});

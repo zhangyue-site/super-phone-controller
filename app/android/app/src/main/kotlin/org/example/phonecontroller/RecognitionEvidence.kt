@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-/** Read-only metadata, no screen text or transaction fields in this envelope. */
+/** Bounded local recognition. The legacy diagnostic envelope carries metadata only. */
 object RecognitionEvidence {
  private var id=""
  private var kind=""
@@ -16,7 +16,7 @@ object RecognitionEvidence {
  private var received=0
  private var receivedDone=false
  private data class LocalResult(val run: String,val stamp: Long,val epoch: Long,
-  val source: String,val count: Int,val text: String?,val boxes: Int?,var state: String)
+  val source: String,val count: Int,val text: String?,val boxes: Int?,var state: String,var acknowledged: Int)
  private val results=mutableMapOf<String,LocalResult>()
  private val rows=mutableListOf<JSONObject>()
  @Synchronized fun begin(source: String,captureEpoch: Long): String {
@@ -35,7 +35,7 @@ object RecognitionEvidence {
    .put("ms",ms.coerceIn(0,60000)).put("lines",lines.coerceIn(0,60000))
    .put("width",frame.width).put("height",frame.height).put("page",page))
   if(text!=null || boxes!=null)results[kind]=LocalResult(id,frame.capturedAt,epoch,kind,
-   rows.size,text?.lineSequence()?.take(12)?.joinToString("\n")?.take(480),boxes,"running")
+   rows.size,text?.lineSequence()?.take(12)?.joinToString("\n")?.take(480),boxes,"running",results[kind]?.acknowledged?:0)
   return true
  }
  @Synchronized fun preview(run: String,text: String){if(matches(run))preview=text.lineSequence().take(6).joinToString("\n").take(300)}
@@ -67,9 +67,26 @@ object RecognitionEvidence {
  @Synchronized fun acknowledge(value: JSONObject?) {
   if(value==null||value.optString("run")!=id)return
   val n=value.optInt("count",-1)
-  if(n in received..rows.size){received=n;receivedDone=value.optString("state")=="done" && n==10}
+  if(n in received..rows.size){
+   received=n;receivedDone=value.optString("state")=="done" && n==10
+   results[kind]?.let{it.acknowledged=maxOf(it.acknowledged,n)}
+  }
  }
- @Synchronized fun status(): Map<String,Any> = mapOf("run" to id,"source" to kind,
-  "active" to (state=="running"),"state" to state,"count" to rows.size,
-  "received" to received,"receivedDone" to receivedDone,"preview" to preview)
+ @Synchronized fun acknowledgeLocal(values: JSONArray?) {
+  if(values==null || values.length()>2)return
+  for(i in 0 until values.length()){
+   val item=values.optJSONObject(i)?:continue
+   val local=results[item.optString("source")]?:continue
+   if(item.optString("run")!=local.run || item.optString("epoch")!=local.epoch.toString())continue
+   val count=item.optInt("count",-1)
+   if(count in local.acknowledged..local.count)local.acknowledged=count
+  }
+ }
+ @Synchronized fun status(): Map<String,Any> {
+  val ocr=results["ocr"]
+  return mapOf("run" to id,"source" to kind,"active" to (state=="running"),"state" to state,
+   "count" to rows.size,"received" to received,"receivedDone" to receivedDone,"preview" to preview,
+   "ocrCount" to (ocr?.count?:0),"ocrReceived" to (ocr?.acknowledged?:0),
+   "ocrPreview" to (ocr?.text?.lineSequence()?.take(6)?.joinToString("\n")?.take(300)?:""))
+ }
 }
