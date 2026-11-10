@@ -192,6 +192,7 @@ jobs:
           fi
           test -d build/ios/iphoneos/Runner.app/PlugIns/ScreenBroadcast.appex
           test -s build/ios/iphoneos/Runner.app/Frameworks/App.framework/flutter_assets/assets/bt_v10_int8.onnx
+          test -s build/ios/iphoneos/Runner.app/PlugIns/ScreenBroadcast.appex/bt_v10_int8.onnx
           xcrun nm -gjU build/ios/iphoneos/Runner.app/PlugIns/ScreenBroadcast.appex/ScreenBroadcast | grep -Fx _OrtGetApiBase
           xcrun nm -gjU build/ios/iphoneos/Runner.app/Runner | grep -Fx _OrtGetApiBase
       - name: Package private unsigned IPA

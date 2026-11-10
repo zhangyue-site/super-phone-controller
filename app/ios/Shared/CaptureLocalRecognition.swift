@@ -116,9 +116,8 @@ private final class CaptureButtonModel {
 
   private func load() throws -> ORTSession {
     if let session = session { return session }
-    let bundle = Bundle.main.bundleURL
-    let app = bundle.pathExtension == "appex" ? bundle.deletingLastPathComponent().deletingLastPathComponent() : bundle
-    let model = app.appendingPathComponent("Frameworks/App.framework/flutter_assets/assets/bt_v10_int8.onnx")
+    let model = Bundle.main.url(forResource: "bt_v10_int8", withExtension: "onnx")
+      ?? Bundle.main.bundleURL.appendingPathComponent("Frameworks/App.framework/flutter_assets/assets/bt_v10_int8.onnx")
     let environment = try ORTEnv(loggingLevel: .error)
     let options = try ORTSessionOptions()
     try options.setIntraOpNumThreads(1)

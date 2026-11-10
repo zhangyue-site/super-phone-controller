@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+A19897B40FE055010081AB31 = {isa = PBXBuildFile; fileRef = A19897B40FE055010081AB30; };
 A19897B40FE055010081AB11 = {isa = PBXBuildFile; fileRef = A19897B40FE055010081AB10; };
 A19897B40FE055010081AB12 = {isa = PBXBuildFile; fileRef = A19897B40FE055010081AB10; };
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
@@ -58,6 +59,7 @@ DD615B768CF8ACFE2ED53E52 = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+A19897B40FE055010081AB30 = {isa = PBXFileReference; lastKnownFileType = file; path = "../assets/bt_v10_int8.onnx"; sourceTree = SOURCE_ROOT; };
 A19897B40FE055010081AB22 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ScreenBroadcast/Profile.xcconfig; sourceTree = SOURCE_ROOT; };
 A19897B40FE055010081AB21 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ScreenBroadcast/Release.xcconfig; sourceTree = SOURCE_ROOT; };
 A19897B40FE055010081AB20 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ScreenBroadcast/Debug.xcconfig; sourceTree = SOURCE_ROOT; };
@@ -129,6 +131,7 @@ E2AA269EB967A8853A258BFA = {isa = PBXFrameworksBuildPhase; buildActionMask = 214
 45871A9C8C1F89DA22820CAD,
 EBE4ECA53B5B9521033F6612,
 A19897B40FE055010081AB10,
+A19897B40FE055010081AB30,
 A19897B40FE055010081AB22,
 A19897B40FE055010081AB21,
 A19897B40FE055010081AB20,
@@ -268,7 +271,7 @@ DD615B768CF8ACFE2ED53E52,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-41D311A605520FC7B8B9A980 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+41D311A605520FC7B8B9A980 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A19897B40FE055010081AB31,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
