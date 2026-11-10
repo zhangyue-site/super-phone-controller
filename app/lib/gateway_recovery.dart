@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'diagnostics.dart';
 import 'package:http/http.dart' as http;
 
 /// BLE link establishment failed after the old task was confirmed stopped
@@ -26,7 +27,9 @@ class GatewayRecoveryGate {
   String get status =>
       exhausted ? '共享或连接已结束，自动恢复已停止；旧任务不会重发' : '连接暂时中断，正在自动恢复；旧任务不会重发';
   static bool transportError(Object error) =>
-      error is http.ClientException || error is TimeoutException;
+      error is http.ClientException ||
+      error is TimeoutException ||
+      error is ControlHttpFailure && error.relayLeaseExpired;
 
   Future<void> cancel() async {
     _blocked = true;

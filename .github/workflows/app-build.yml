@@ -19,10 +19,6 @@ on:
         description: 'Optional build number'
         type: string
         default: ''
-      android_source_sha256:
-        description: 'Optional SHA-256 of a private Android source snapshot'
-        type: string
-        default: ''
       release_id:
         description: 'Private coordinator correlation ID (no secrets)'
         type: string
@@ -63,45 +59,28 @@ jobs:
           python3 -m unittest discover -s ../tools -p test_prepare_app_config.py
           python3 -m unittest discover -s ../tools -p test_capture_lifecycle_contract.py
 
-      - name: Verify and load Android source snapshot
-        if: ${{ inputs.android_source_sha256 != '' }}
-        env:
-          SNAPSHOT_URL: ${{ secrets.ANDROID_BUILD_SNAPSHOT_URL }}
-          SNAPSHOT_SHA256: ${{ inputs.android_source_sha256 }}
+      - name: Restore pinned bundled model
         run: |
           set -euo pipefail
-          [[ "$SNAPSHOT_URL" == https://* && "$SNAPSHOT_SHA256" =~ ^[a-f0-9]{64}$ ]]
-          snapshot=$(mktemp "$RUNNER_TEMP/android-source.XXXXXX")
-          trap 'rm -f "$snapshot"' EXIT
-          curl --fail --silent --proto '=https' --max-time 180 "$SNAPSHOT_URL" -o "$snapshot"
-          echo "$SNAPSHOT_SHA256  $snapshot" | sha256sum -c -
-          python3 - "$snapshot" <<'PYTHON'
-          import sys, tarfile
-          from pathlib import PurePosixPath
-          with tarfile.open(sys.argv[1], "r:gz") as archive:
-              for member in archive.getmembers():
-                  path = PurePosixPath(member.name)
-                  allowed = path.parts and path.parts[0] in {"android", "assets", "lib", "test"}
-                  allowed = allowed or str(path) in {"pubspec.yaml", "pubspec.lock", "analysis_options.yaml"}
-                  if not allowed or path.is_absolute() or ".." in path.parts or not (member.isfile() or member.isdir()):
-                      raise ValueError(f"Unexpected snapshot entry: {member.name}")
-              archive.extractall(filter="data")
-          PYTHON
+          apk=$(mktemp "$RUNNER_TEMP/model-source.XXXXXX")
+          model=$(mktemp "$RUNNER_TEMP/bundled-model.XXXXXX")
+          trap 'rm -f "$apk" "$model"' EXIT
+          curl --fail --silent --show-error --proto '=https' --max-time 180 \
+            https://cdn.zhangyue.site/apps/phone-controller-flash/releases/1.3.17/phone-controller-flash-1.3.17-vc60.apk -o "$apk"
+          echo "263c8120640db90889073a23cfd3e77dd64f5ca068ac23eea27185f5eaa4be13  $apk" | sha256sum -c -
+          unzip -p "$apk" assets/flutter_assets/assets/bt_v10_int8.onnx > "$model"
+          echo "45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2  $model" | sha256sum -c -
+          install -m 0644 "$model" assets/bt_v10_int8.onnx
 
       - name: Resolve dependencies
         run: flutter pub get
 
       - name: Analyze
-        env:
-          SNAPSHOT_SHA256: ${{ inputs.android_source_sha256 }}
-        run: |
-          if [[ -n "$SNAPSHOT_SHA256" ]]; then
-            flutter analyze lib test
-          else
-            flutter analyze
-          fi
+        run: flutter analyze lib test
 
       - name: Regression tests
+        id: android_regressions
+        continue-on-error: true
         run: flutter test --dart-define=CONTROLLER_BASE_URL=https://controller.test
 
       - name: Native capture and USB session regressions
@@ -126,7 +105,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           BUILD_NAME: ${{ inputs.build_name }}
           BUILD_NUMBER: ${{ inputs.build_number }}
-          PCFLASH_REMOTE_DIAGNOSTICS: ${{ inputs.android_source_sha256 != '' && '1' || '0' }}
+          PCFLASH_REMOTE_DIAGNOSTICS: '1'
         run: |
           set -euo pipefail
           test -n "$PRIVATE_ARTIFACT_PASSWORD" || { echo "Private artifact encryption is required"; exit 1; }
@@ -160,6 +139,12 @@ jobs:
           retention-days: 7
           path: ${{ runner.temp }}/controller-private-build.7z
           if-no-files-found: error
+
+      - name: Require regressions to pass before release
+        if: ${{ steps.android_regressions.outcome == 'failure' }}
+        run: |
+          echo 'The encrypted APK is available for diagnosis. This run is not release eligible.'
+          exit 1
 
   ios:
     # Public repository + standard GitHub macOS runner: free build minutes.

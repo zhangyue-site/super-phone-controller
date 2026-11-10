@@ -311,6 +311,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('控制板 Wi-Fi 升级'), 120,
         scrollable: find.byType(Scrollable).first);
+    await tester.ensureVisible(find.text('控制板 Wi-Fi 升级'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('控制板 Wi-Fi 升级'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('检查并请求升级'));

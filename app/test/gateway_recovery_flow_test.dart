@@ -11,6 +11,7 @@ import 'package:pcflash/cloud_relay.dart';
 class RecoveryBoard extends BleOtaService {
   String nonce = '12' * 16, identity = 'test-board';
   int writes = 0, proofs = 0, disconnects = 0;
+  bool maintenanceSupported = false;
   @override
   bool get supportsLocalControl => true;
   @override
@@ -23,6 +24,7 @@ class RecoveryBoard extends BleOtaService {
 
   @override
   Future<Map<String, dynamic>> readLocalControl() async => {
+        if (maintenanceSupported) 'relayOnline': true,
         'nonce': nonce,
         'seq': 0,
         'op': 0,
@@ -128,6 +130,62 @@ void main() {
       }
       expect(authorizations, 1);
       expect(auth.every((value) => value == 'Bearer ${'t' * 43}'), true);
+      expect(board.writes, 0);
+      await client.shutdown();
+    });
+  }
+
+  for (final failedOp in ['poll', 'maintenance']) {
+    test(
+        '$failedOp authenticated lease expiry recovers with same parent ticket and no replay',
+        () async {
+      final board = RecoveryBoard()
+        ..maintenanceSupported = failedOp == 'maintenance';
+      var failed = false, authorizations = 0, attaches = 0;
+      final calls = <String>[], tickets = <String>[];
+      final client = ControlClient(client: MockClient((request) async {
+        final op = request.url.path.split('/').last;
+        calls.add(op);
+        final ticket = request.headers['Authorization'];
+        if (ticket != null) tickets.add(ticket);
+        if (op == failedOp && !failed) {
+          failed = true;
+          return http.Response(
+              jsonEncode({'code': 'relay_lease_expired'}), 409);
+        }
+        if (op == 'detach') return http.Response('{}', 403);
+        if (op == 'authorize') authorizations++;
+        if (op == 'attach') attaches++;
+        return http.Response(
+            jsonEncode(switch (op) {
+              'challenge' => {'challenge': 'a' * 64},
+              'authorize' => {
+                  'ticket': 't' * 43,
+                  'expiresIn': 300,
+                  'scope': 'phone-commands'
+                },
+              'renew' => {'expiresIn': 300, 'scope': 'phone-commands'},
+              'command' => {'state': 'stopped'},
+              'attach' => {'state': 'connected'},
+              _ => {'state': 'idle'},
+            }),
+            200);
+      }));
+      await client.authorize(board);
+      await until(() => client.canRecoverGateway);
+      expect(client.canReadStatus, true);
+      calls.clear();
+      await client.recoverGateway(
+          check: () async {},
+          reconnect: () async {
+            calls.add('reconnect');
+            board.nonce = '34' * 16;
+          });
+      expect(client.authorized, true);
+      expect(calls.indexOf('command'), lessThan(calls.indexOf('reconnect')));
+      expect(authorizations, 1);
+      expect(attaches, 2);
+      expect(tickets.every((v) => v == 'Bearer ${'t' * 43}'), true);
       expect(board.writes, 0);
       await client.shutdown();
     });

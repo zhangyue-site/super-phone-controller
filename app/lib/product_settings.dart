@@ -1,3 +1,5 @@
+import 'accessibility_assist.dart';
+import 'capture_sampling.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'diagnostics.dart';
@@ -138,6 +140,8 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     return Scaffold(
         appBar: AppBar(title: const Text('设置与设备维护')),
         body: ListView(padding: const EdgeInsets.all(20), children: [
+          if (Theme.of(context).platform == TargetPlatform.android) const AccessibilityAssistCard(),
+          if (Theme.of(context).platform == TargetPlatform.android) const CaptureSamplingCard(),
           Text('外观', style: Theme.of(context).textTheme.titleLarge),
           RadioGroup<ThemeMode>(
               groupValue: appearance?.mode ?? ThemeMode.system,

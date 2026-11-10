@@ -11,6 +11,13 @@
 
 开发先在工作区修改、测试、commit和push；在线服务目录不直接作为开发区。新板型/设备须独立配置密钥，不能把现有设备身份复用给公共设备。
 
+## App 云端构建
+
+- Android 和 iOS 在 GitHub Actions 的 `Build Flutter app` 分别选择 `android` 或 `ios`。从对应平台的发布分支触发，填写版本号和递增构建号。
+- Android 发布分支包含源码，构建前从已发布 APK 还原固定版本的内置模型，并核对 APK 和模型的 SHA-256。APK 由 GitHub Secrets 配置的正式证书签名，上传加密产物。回归失败时，产物仅用于诊断，构建任务仍标记失败。
+- iOS 发布分支在 GitHub 完成模拟器冷启动验证和设备编译，签名服务器核验加密产物的源码、版本与签名后上传 TestFlight。以 Apple 处理状态和内测组读回为准。
+- 本机用于编辑和实机验证。可再生成的 APK、IPA 和本机构建缓存无需长期保留。密钥、运行配置和未脱敏的诊断文件保存在私有环境中。
+
 ## 发布与恢复
 
 main分支且OTA_ENABLED=true时，CI通过受限SSH key调用 `tools/cloud_publish_ota.py`。该key只能运行固定设备的发布命令，不能开shell、转发端口或选择任意路径。SSH主机公钥固定，不跳过校验。固件不提供匿名下载，也不添加HTTP上传接口。

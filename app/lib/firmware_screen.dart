@@ -43,6 +43,20 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
   static String get otaBase => ControllerConfig.base;
 
   FirmwareInfo? _info;
+  List<OfficialFirmwareRelease> _releases = [];
+  String? _releaseError;
+  AppOtaClient? _downloadClient;
+  int _downloadEpoch = 0;
+  bool _downloading = false;
+
+  void _cancelDownload() {
+    _downloadEpoch++;
+    _downloadClient?.close();
+    _downloadClient = null;
+    _downloading = false;
+    if (mounted) setState(() => _busy = false);
+  }
+
   Uint8List? _bytes;
   int _chunkSize = 20;
   bool _busy = false;
@@ -60,6 +74,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     _deviceVersion = ''; // Advertising names are not running-version evidence.
     _connectionSub = widget.device.connectionState.listen((state) {
       if (mounted && state != BluetoothConnectionState.connected) {
+        if (_downloading) _cancelDownload();
         setState(() {
           _connected = false;
           _deviceVersion = '';
@@ -128,6 +143,8 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
 
   @override
   void dispose() {
+    _downloadEpoch++;
+    _downloadClient?.close();
     _screenTimer?.cancel();
     _connectionSub?.cancel();
     widget.service.disconnect();
@@ -219,7 +236,12 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     }
   }
 
-  Future<void> _fetchFromServer() async {
+  Future<void> _fetchFromServer({String? selectedSha}) async {
+    _downloadClient?.close();
+    final epoch = ++_downloadEpoch;
+    _downloading = true;
+    bool active() => mounted && epoch == _downloadEpoch && _connected;
+
     setState(() {
       _busy = true;
       _error = null;
@@ -227,32 +249,59 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     try {
       final board = await widget.service.readInfo();
       if (board == null) throw StateError('控制板需先更新一次基础固件以支持自动下载授权');
+      if (!active()) return;
       final client = AppOtaClient(Uri.parse(otaBase));
+      setState(() => _downloadClient = client);
       try {
         final result = await client.download(
             board.device, widget.service.signDownloadChallenge,
-            boardModel: board.boardModel);
+            boardModel: board.boardModel,
+            selectedSha: selectedSha,
+            isActive: active);
+        if (!active()) return;
         final image =
             FirmwareImage.parse(result.bytes, boardModel: board.boardModel);
         if (image.version != result.version) {
           throw const FormatException('下载版本与固件不符');
         }
-        await _loadBytes(result.bytes, 'app.bin');
+        await _loadBytes(result.bytes, 'app.bin', active: active);
+        if (!active()) return;
         widget.service.retainOfficialUpgrade(result);
+        setState(() => _busy = true);
+        try {
+          final releases = await client.releases(result.ticket!);
+          if (active()) {
+            setState(() {
+              _releases = releases;
+              _releaseError = null;
+            });
+          }
+        } catch (e) {
+          if (active()) setState(() => _releaseError = '官方历史版本暂不可用：$e');
+        }
       } finally {
+        if (identical(_downloadClient, client)) _downloadClient = null;
         client.close();
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!active()) return;
       setState(() {
         _busy = false;
         _error = '下载失败：$e';
       });
+    } finally {
+      if (mounted && epoch == _downloadEpoch) {
+        setState(() {
+          _busy = false;
+          _downloading = false;
+        });
+      }
     }
   }
 
-  Future<void> _loadBytes(Uint8List bytes, String name) async {
-    if (!mounted) return;
+  Future<void> _loadBytes(Uint8List bytes, String name,
+      {bool Function()? active}) async {
+    if (!mounted || (active != null && !active())) return;
     setState(() {
       _info = null;
       _bytes = null;
@@ -261,7 +310,7 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
     late final FirmwareImage image;
     try {
       final board = await widget.service.readInfo();
-      if (!mounted) return;
+      if (!mounted || (active != null && !active())) return;
       if (board == null) throw const FormatException('未能读取控制板型号，请重新连接');
       image = FirmwareImage.parse(bytes, boardModel: board.boardModel);
     } on FormatException catch (error) {
@@ -287,6 +336,44 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
 
   Future<void> _start() async {
     if (_bytes == null || _info == null || !_connected || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final board = await widget.service.readInfo();
+      if (!mounted) return;
+      if (board == null) throw StateError('未能读取当前版本，请重新连接');
+      final image = FirmwareImage.parse(_bytes!, boardModel: board.boardModel);
+      board.assertFirmwareAllowed(image);
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('确认刷写固件'),
+          content: SingleChildScrollView(
+              child: Text('当前 ${board.version} → 目标 ${image.version}\n\n'
+                  '同版本将重新安装；较低版本将降级，旧版本可能失去重刷、降级等新能力。旧固件可能不报告槽位，届时按新启动、镜像标识和有效状态核验，并说明槽位证据缺失。刷写期间请保持供电和蓝牙连接。\n'
+                  '大小 ${_bytes!.length} 字节\nSHA256 ${image.sha}')),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('确认刷写')),
+          ],
+        ),
+      );
+      if (!mounted || accepted != true || !_connected) return;
+      widget.service.confirmFirmware(
+          device: board.device,
+          boot: board.boot,
+          currentVersion: board.version,
+          sha: image.sha);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+      return;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => PushScreen(
         service: widget.service,
@@ -422,6 +509,30 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
             primary: true,
             onTap: _busy ? null : _fetchFromServer,
           ),
+          if (_releases.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              key: ValueKey('${_info?.sha256}|$_busy'),
+              initialValue: _releases.any((r) => r.sha256 == _info?.sha256)
+                  ? _info?.sha256
+                  : null,
+              decoration: const InputDecoration(labelText: '选择官方版本（可选）'),
+              isExpanded: true,
+              items: _releases
+                  .map((r) => DropdownMenuItem(
+                      value: r.sha256,
+                      child: Text(
+                          '${r.version}${r.current ? ' · 当前官方版本' : ' · 历史版本'}',
+                          overflow: TextOverflow.ellipsis)))
+                  .toList(),
+              onChanged: _busy || !_connected
+                  ? null
+                  : (sha) {
+                      if (sha != null) _fetchFromServer(selectedSha: sha);
+                    },
+            ),
+          ],
+          if (_releaseError != null) Text(_releaseError!),
           const SizedBox(height: 10),
           _SourceCard(
             icon: Icons.folder_open_outlined,
@@ -430,6 +541,8 @@ class _FirmwareScreenState extends State<FirmwareScreen> {
             onTap: _busy ? null : _pickLocal,
           ),
           if (_busy) ...[
+            if (_downloading)
+              TextButton(onPressed: _cancelDownload, child: const Text('取消下载')),
             const SizedBox(height: 20),
             const Center(
               child: SizedBox(

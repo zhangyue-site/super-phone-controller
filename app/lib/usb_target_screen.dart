@@ -1,3 +1,4 @@
+import 'accessibility_assist.dart';
 import 'target_check_errors.dart';
 import 'diagnostics.dart';
 import 'dart:async';
@@ -12,6 +13,7 @@ import 'target_session.dart';
 import 'product_widgets.dart';
 import 'product_settings.dart';
 import 'screen_task_status.dart';
+import 'local_auto_loop.dart';
 
 /// The target owns capture and the BLE relay, never command entry.
 class UsbTargetScreen extends StatefulWidget {
@@ -363,6 +365,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         _relay = '本机蓝牙已释放；等待控制手机网关或板端 Wi-Fi';
       }
     } catch (e) {
+      workbenchDiagnostic('relay_error',
+          value: e is MissingPluginException ? 1 : e is TimeoutException ? 2 : 3);
       if (_current(generation)) setState(() => _error = '连接未完成：$e');
     } finally {
       if (mounted && generation == _generation) setState(() => _busy = false);
@@ -486,6 +490,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
           error: _error,
         ),
         for (final message in _checkErrors.messages) ProductError(message),
+        const AccessibilityAssistCard(),
+        const LocalAutoLoopCard(),
         Card(
             child: Padding(
                 padding: const EdgeInsets.all(16),

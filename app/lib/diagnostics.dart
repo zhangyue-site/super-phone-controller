@@ -49,5 +49,8 @@ class SafeDiagnostics {
 
 class ControlHttpFailure extends FormatException {
   final int status;
-  ControlHttpFailure(this.status, String message) : super(message);
+  final bool relayLeaseExpired;
+  ControlHttpFailure(this.status, String message,
+      {this.relayLeaseExpired = false})
+      : super(message);
 }

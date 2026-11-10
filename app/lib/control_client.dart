@@ -1,6 +1,7 @@
 import 'diagnostics.dart';
 import 'button_detector.dart';
 import 'controller_config.dart';
+import 'controller_pairing_store.dart';
 import 'dart:async';
 import 'cloud_relay.dart';
 import 'screen_share.dart';
@@ -158,6 +159,39 @@ class ControlClient implements LocalVisionSource {
     _expires = DateTime.now().add(const Duration(seconds: 300));
   }
 
+  ControllerPairing? get restorablePairing {
+    final ticket = _ticket, device = deviceId, expires = _expires;
+    if (!_paired ||
+        !authorized ||
+        ticket == null ||
+        device == null ||
+        expires == null) {
+      return null;
+    }
+    return ControllerPairing(ticket, device, expires);
+  }
+
+  Future<void> restorePairing(ControllerPairing pairing) async {
+    if (_closed || _ticket != null || !pairing.valid) {
+      throw StateError('配对已失效');
+    }
+    _http ??= http.Client();
+    _paired = true;
+    _ticket = pairing.ticket;
+    deviceId = pairing.device;
+    _expires = pairing.expires;
+    try {
+      await _refresh(force: true);
+      if (!authorized) throw StateError('配对已失效');
+    } catch (_) {
+      _ticket = null;
+      _expires = null;
+      _paired = false;
+      deviceId = null;
+      rethrow;
+    }
+  }
+
   Future<Map<String, dynamic>> pairingCode() async {
     if (!authorized || _paired || _relay == null) {
       throw StateError('请先建立被控手机中继');
@@ -170,12 +204,14 @@ class ControlClient implements LocalVisionSource {
     await _post('pair-revoke', {}, auth: true);
   }
 
-  Future<void> refresh() async {
+  Future<void> refresh() => _refresh();
+
+  Future<void> _refresh({bool force = false}) async {
     if (_closed ||
         _refreshing ||
         !authorized ||
         _expires == null ||
-        _expires!.difference(DateTime.now()).inSeconds > 90) {
+        (!force && _expires!.difference(DateTime.now()).inSeconds > 90)) {
       return;
     }
     _refreshing = true;
@@ -270,6 +306,14 @@ class ControlClient implements LocalVisionSource {
           phase: path.startsWith('relay:') ? path.substring(6) : path,
           reason: 'http_error',
           httpStatus: response.statusCode);
+      // Only an authenticated lease expiry before delivery may recover.
+      // Generic 403 and uncertain action ACKs remain terminal.
+      if (response.statusCode == 409 &&
+          (path == 'relay:poll' || path == 'relay:maintenance') &&
+          decoded['code'] == 'relay_lease_expired') {
+        throw ControlHttpFailure(409, '中转连接过期，停止旧任务后重新连接',
+            relayLeaseExpired: true);
+      }
       if (response.statusCode == 403 && path != 'relay:detach') {
         _ticket = null;
         _expires = null;

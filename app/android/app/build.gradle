@@ -44,6 +44,7 @@ android {
 
     buildFeatures { buildConfig = true }
     defaultConfig {
+        buildConfigField "boolean", "REMOTE_WORKBENCH_DIAGNOSTICS", (System.getenv("PCFLASH_REMOTE_DIAGNOSTICS") == "1").toString()
         buildConfigField "String", "CONTROLLER_BASE_URL", groovy.json.JsonOutput.toJson(configuredBase)
         buildConfigField "String", "DOWNLOAD_URL", groovy.json.JsonOutput.toJson(configuredDownload)
 
@@ -77,4 +78,8 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
 }

@@ -6,12 +6,14 @@ import android.media.projection.MediaProjectionManager
 import android.media.projection.MediaProjectionConfig
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.os.Bundle
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
+ private val billTextLoop by lazy { BillTextLoop(applicationContext) }
  private var usbProof: UsbProofBridge? = null
  private var pending: MethodChannel.Result? = null
  private var ticket: String? = null
@@ -41,6 +43,8 @@ class MainActivity: FlutterActivity() {
  override fun configureFlutterEngine(engine: FlutterEngine) {
   super.configureFlutterEngine(engine)
   SafeDiagnostics.initialize(this)
+  WorkbenchDiagnostics.record("plugins",0,
+   if(engine.plugins.has(com.jmx.flutter_blue_plus.FlutterBluePlusPlugin::class.java))1 else 0)
   UsbLaunchBridge.initialize(this)
   usbProof?.close();usbProof=UsbProofBridge(applicationContext)
   val usb=MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/usb")
@@ -59,10 +63,91 @@ class MainActivity: FlutterActivity() {
     else -> result.notImplemented()
    }
   }
+  MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/local-loop").setMethodCallHandler { call,result ->
+   when(call.method) {
+    "startBillOcr" -> result.success(billTextLoop.start(call.argument<Boolean>("delayed")==true))
+    "stopBillOcr" -> { billTextLoop.stop();result.success(null) }
+    "billOcrStatus" -> result.success(billTextLoop.status)
+    "recognitionStatus" -> result.success(RecognitionEvidence.status())
+    "beginButtonRecognition" -> {
+     val lease=ScreenShareService.beginRecognition("buttons")
+     if(lease==null)result.error("recognition_unavailable","请先开启共享，或停止上一轮识别",null)
+     else {WorkbenchDiagnostics.beginRecognition();result.success(mapOf("run" to lease.first,"epoch" to lease.second,"afterFrame" to System.nanoTime()))}
+    }
+    "endButtonRecognition" -> {
+     val id=call.argument<String>("run")?:""
+     val reason=call.argument<String>("reason")?:"stopped"
+     RecognitionEvidence.finish(id,if(reason in setOf("done","stopped","error","frame_timeout","timeout"))reason else "error")
+     ScreenShareService.endRecognition(id);result.success(null)
+    }
+    "recordButtonRecognition" -> {
+     val id=call.argument<String>("run")?:""
+     val stamp=call.argument<Number>("frameId")?.toLong()?:-1L
+     val epoch=call.argument<Number>("epoch")?.toLong()?:-1L
+     val width=call.argument<Int>("width")?:0;val height=call.argument<Int>("height")?:0
+     val ms=call.argument<Int>("ms")?:0
+     val age=call.argument<Number>("age")?.toLong()?:-1L
+     if(age !in 0..2500 || !ScreenShareService.recognitionLive(id) || RecognitionEvidence.source()!="buttons")
+      result.error("recognition_expired","共享会话已改变，本轮已停止",null)
+     else result.success(RecognitionEvidence.frame(id,LoopFrame(byteArrayOf(),width,height,width,height,stamp,epoch),age,ms,0,"buttons"))
+    }
+    "diagnostic" -> {
+     WorkbenchDiagnostics.record(call.argument<String>("stage"),call.argument<Int>("count"),
+      call.argument<Int>("value"))
+     result.success(null)
+    }
+    "latestFrame" -> {
+     val f=ScreenShareService.latestLoopFrame
+     if(f==null || !ScreenShareService.active)result.success(mapOf("available" to false))
+     else result.success(mapOf("available" to true,"jpeg" to f.jpeg,"width" to f.width,"height" to f.height,
+      "nativeWidth" to f.nativeWidth,"nativeHeight" to f.nativeHeight,
+      "captureEpoch" to f.captureEpoch,"frameId" to f.capturedAt, "ageMs" to ((System.nanoTime()-f.capturedAt)/1_000_000L)))
+    }
+    else -> result.notImplemented()
+   }
+  }
+  MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/capture-sampling").setMethodCallHandler { call,result ->
+   when(call.method) {
+    "status" -> result.success(mapOf("enabled" to CaptureSamplingSettings.enabled(this)))
+    "setEnabled" -> {
+     val enabled=call.argument<Boolean>("enabled")
+     if(enabled==null || !CaptureSamplingSettings.setEnabled(this,enabled))result.error("storage_failed","取样设置未保存",null)
+     else result.success(mapOf("enabled" to CaptureSamplingSettings.enabled(this)))
+    }
+    else -> result.notImplemented()
+   }
+  }
+  MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/accessibility").setMethodCallHandler { call,result ->
+   when(call.method) {
+    "status" -> result.success(AccessibilityAssistService.status(this))
+    "setEnabled" -> {
+     val enabled=call.argument<Boolean>("enabled")
+     if(enabled==null || !AccessibilityAssistService.setEnabled(this,enabled))result.error("storage_failed","辅助设置未保存",null)
+     else result.success(AccessibilityAssistService.status(this))
+    }
+    "openSettings" -> {
+     try {startActivity(AccessibilityAssistService.settingsIntent());result.success(null)}
+     catch(_: Exception) {result.error("settings_unavailable","无法打开无障碍设置，请从系统设置进入",null)}
+    }
+    else -> result.notImplemented()
+   }
+  }
   MethodChannel(engine.dartExecutor.binaryMessenger, "pcflash/app").setMethodCallHandler { call, result ->
    when(call.method) {
     "diagnosticEvent" -> { SafeDiagnostics.record(call.arguments as? Map<*,*> ?: emptyMap<Any,Any>());result.success(null) }
-    "diagnostics" -> result.success(SafeDiagnostics.read())
+    "diagnostics" -> { ScreenShareService.recordDiagnosticSnapshot();result.success(SafeDiagnostics.read()) }
+    "readControllerPairing", "saveControllerPairing", "clearControllerPairing" -> {
+     try {
+      val store = ControllerPairingStorage(noBackupFilesDir)
+      when (call.method) {
+       "readControllerPairing" -> result.success(store.read())
+       "saveControllerPairing" -> { store.save(requireNotNull(call.argument<String>("value"))); result.success(null) }
+       else -> { store.clear(); result.success(null) }
+      }
+     } catch (_: Exception) {
+      result.error("pairing_storage", "无法访问本机配对存储", null)
+     }
+    }
     "appearance" -> result.success(getSharedPreferences("appearance",MODE_PRIVATE).getString("mode","system"))
     "setAppearance" -> {
      val mode=call.argument<String>("mode")
@@ -186,6 +271,7 @@ class MainActivity: FlutterActivity() {
   }
  }
  override fun onDestroy() {
+  billTextLoop.close()
   usbProof?.close();usbProof=null
   UsbLaunchBridge.detachOwner(this)
   ticket?.let { ScreenShareService.revoke(it) };ticket=null

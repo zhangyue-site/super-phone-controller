@@ -12,7 +12,7 @@ class FirmwareImage {
   static const maxSize = 0x340000;
 
   /// Reject unknown or same-day ordering until a signed release sequence exists.
-  void assertUpgradeAllowed(String currentVersion) {
+  void assertUpgradeAllowed(String currentVersion, {bool confirmed = false}) {
     if (project == 'phone_controller_amoled') {
       List<int> parts(String value) {
         final m = RegExp(
@@ -23,6 +23,7 @@ class FirmwareImage {
       }
 
       final target = parts(version), current = parts(currentVersion);
+      if (confirmed) return;
       for (var i = 0; i < 3; i++) {
         if (target[i] > current[i]) return;
         if (target[i] < current[i]) break;
@@ -43,7 +44,9 @@ class FirmwareImage {
       return result;
     }
 
-    if (!day(version).isAfter(day(currentVersion))) {
+    final targetDay = day(version), currentDay = day(currentVersion);
+    if (confirmed) return;
+    if (!targetDay.isAfter(currentDay)) {
       throw StateError('目标固件不是可确认的较新版本，已停止更新');
     }
   }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'ble_ota_service.dart';
 import 'control_client.dart';
+import 'controller_pairing_store.dart';
 import 'controller_local_vision.dart';
 import 'controller_model_status.dart';
 import 'product_widgets.dart';
@@ -152,6 +153,7 @@ class _ControlScreenState extends State<ControlScreen>
     });
     try {
       await _authorize();
+      _rememberPairing();
       _prepareVision();
     } catch (e) {
       if (mounted) setState(() => _error = '云端控制连接失败：$e');
@@ -167,9 +169,19 @@ class _ControlScreenState extends State<ControlScreen>
     await _client.authorize(service);
   }
 
+  DateTime? _storedPairingExpiry;
+  void _rememberPairing() {
+    if (!mounted) return;
+    final pairing = _client.restorablePairing;
+    if (pairing == null || pairing.expires == _storedPairingExpiry) return;
+    _storedPairingExpiry = pairing.expires;
+    unawaited(ControllerPairingStore.save(pairing));
+  }
+
   Future<void> _poll() async {
     try {
       await _client.refresh();
+      _rememberPairing();
       if (mounted && !_client.authorized) {
         setState(() => _error = _client.connectionStatus);
       } else if (mounted && _client.ownsGateway) {

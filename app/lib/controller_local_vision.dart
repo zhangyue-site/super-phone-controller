@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'button_detector.dart';
 import 'controller_model_runtime.dart';
+import 'controller_builtin_model.dart';
 import 'diagnostics.dart';
 
 class _ObservationCancelled implements Exception {}
@@ -90,6 +91,27 @@ class ControllerLocalVision extends ChangeNotifier {
     try {
       await _retiring;
       _check(generation);
+      // v47: 优先加载 APK 内置模型
+      _status = '正在检查内置模型';
+      _emit();
+      try {
+        final builtinPath = await BuiltinModelLoader.getModelPath();
+        _check(generation);
+        _status = '正在加载内置模型';
+        _emit();
+        final builtinRuntime = _runtimeFactory();
+        await builtinRuntime.load(builtinPath, 'builtin');
+        _runtime = builtinRuntime;
+        runtime = builtinRuntime;
+        _ready = true;
+        _status = '内置模型已就绪';
+        _emit();
+        return;
+      } catch (e) {
+        if (identical(_runtime, runtime)) {}
+        _status = '内置模型不可用，回退云端模型';
+        _emit();
+      }
       final obj = await _source.localVision('manifest', {});
       _check(generation);
       if (obj['available'] == false) {
