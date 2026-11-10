@@ -19,6 +19,10 @@ on:
         description: 'Optional build number'
         type: string
         default: ''
+      android_source_sha256:
+        description: 'Optional SHA-256 of a private Android source snapshot'
+        type: string
+        default: ''
       release_id:
         description: 'Private coordinator correlation ID (no secrets)'
         type: string
@@ -53,14 +57,39 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Resolve dependencies
-        run: flutter pub get
-
       - name: Public source privacy check
         run: |
           python3 ../tools/check_public_source.py
           python3 -m unittest discover -s ../tools -p test_prepare_app_config.py
           python3 -m unittest discover -s ../tools -p test_capture_lifecycle_contract.py
+
+      - name: Verify and load Android source snapshot
+        if: ${{ inputs.android_source_sha256 != '' }}
+        env:
+          SNAPSHOT_URL: ${{ secrets.ANDROID_BUILD_SNAPSHOT_URL }}
+          SNAPSHOT_SHA256: ${{ inputs.android_source_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SNAPSHOT_URL" == https://* && "$SNAPSHOT_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          snapshot=$(mktemp "$RUNNER_TEMP/android-source.XXXXXX")
+          trap 'rm -f "$snapshot"' EXIT
+          curl --fail --silent --proto '=https' --max-time 180 "$SNAPSHOT_URL" -o "$snapshot"
+          echo "$SNAPSHOT_SHA256  $snapshot" | sha256sum -c -
+          python3 - "$snapshot" <<'PYTHON'
+          import sys, tarfile
+          from pathlib import PurePosixPath
+          with tarfile.open(sys.argv[1], "r:gz") as archive:
+              for member in archive.getmembers():
+                  path = PurePosixPath(member.name)
+                  allowed = path.parts and path.parts[0] in {"android", "assets", "lib", "test"}
+                  allowed = allowed or str(path) in {"pubspec.yaml", "pubspec.lock", "analysis_options.yaml"}
+                  if not allowed or path.is_absolute() or ".." in path.parts or not (member.isfile() or member.isdir()):
+                      raise ValueError(f"Unexpected snapshot entry: {member.name}")
+              archive.extractall(filter="data")
+          PYTHON
+
+      - name: Resolve dependencies
+        run: flutter pub get
 
       - name: Analyze
         run: flutter analyze
@@ -88,6 +117,9 @@ jobs:
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          BUILD_NAME: ${{ inputs.build_name }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          PCFLASH_REMOTE_DIAGNOSTICS: ${{ inputs.android_source_sha256 != '' && '1' || '0' }}
         run: |
           set -euo pipefail
           test -n "$PRIVATE_ARTIFACT_PASSWORD" || { echo "Private artifact encryption is required"; exit 1; }
@@ -99,7 +131,16 @@ jobs:
           python3 ../tools/prepare_app_config.py --output "$CONTROLLER_RUNTIME_CONFIG"
           chmod 600 "$CONTROLLER_RUNTIME_CONFIG"
           trap 'rm -f "$ANDROID_KEYSTORE_PATH" "$CONTROLLER_RUNTIME_CONFIG"' EXIT
-          flutter build apk --release --dart-define-from-file="$CONTROLLER_RUNTIME_CONFIG"
+          args=(--release --dart-define-from-file="$CONTROLLER_RUNTIME_CONFIG")
+          if [[ -n "$BUILD_NAME" ]]; then
+            [[ "$BUILD_NAME" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]
+            args+=(--build-name="$BUILD_NAME")
+          fi
+          if [[ -n "$BUILD_NUMBER" ]]; then
+            [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]
+            args+=(--build-number="$BUILD_NUMBER")
+          fi
+          flutter build apk "${args[@]}"
           SIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
           "$SIGNER" verify --verbose build/app/outputs/flutter-apk/app-release.apk
           command -v 7z >/dev/null || sudo apt-get install -y p7zip-full
