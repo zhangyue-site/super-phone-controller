@@ -92,7 +92,14 @@ jobs:
         run: flutter pub get
 
       - name: Analyze
-        run: flutter analyze
+        env:
+          SNAPSHOT_SHA256: ${{ inputs.android_source_sha256 }}
+        run: |
+          if [[ -n "$SNAPSHOT_SHA256" ]]; then
+            flutter analyze lib test
+          else
+            flutter analyze
+          fi
 
       - name: Regression tests
         run: flutter test --dart-define=CONTROLLER_BASE_URL=https://controller.test
