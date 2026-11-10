@@ -24,6 +24,9 @@ final class CapturePipeline {
   private var windowInFlight = false
   private var preparationFence = CapturePreparationFence()
   private var taskStatus = ""
+  private let localRecognition = CaptureLocalRecognition()
+  private var supportsLocalResults = false
+  private var lastRecognitionFrame = 0.0
   private let context = CIContext(options:[.cacheIntermediates:false])
   func start(onStarted: @escaping () -> Void = {}, onStopped: @escaping (String) -> Void) {
     worker.async {
@@ -62,6 +65,12 @@ final class CapturePipeline {
       let factor = min(1,min(720 / bounds.width,1280 / bounds.height))
       let image = oriented.transformed(by:CGAffineTransform(scaleX:factor,y:factor))
       guard let bytes = context.jpegRepresentation(of:image,colorSpace:CGColorSpaceCreateDeviceRGB(),options:[CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String):0.7]), bytes.count <= 524288 else { end("画面编码超限，请重新共享"); releaseSlot(); return }
+      let stamp = CMTimeConvertScale(frame.capturedAt, timescale: 1_000_000_000, method: .roundTowardZero).value
+      let age = now - Double(stamp) / 1e9
+      if stamp > 0, (0...2.5).contains(age) {
+        lastRecognitionFrame = Double(stamp) / 1e9
+        localRecognition.offer(bytes, stamp: stamp, now: now, callbackQueue: worker)
+      }
       sequence += 1
       let headers = ["Content-Type":"image/jpeg","X-Screen-Platform":"ios","X-Screen-Sequence":String(sequence),"X-Screen-Barrier":barrier,"X-Screen-Native-Width":String(Int(bounds.width)),"X-Screen-Native-Height":String(Int(bounds.height))]
       upload = request("app-screen/frame",body:bytes,headers:headers,limit:4096) { code,body in
@@ -90,11 +99,17 @@ final class CapturePipeline {
   private func tick() {
     guard valid() else { return }; publish("共享中"); pollPreparationWindow()
     let now = ProcessInfo.processInfo.systemUptime
+    localRecognition.tick(now)
     guard !polling, now - lastPoll >= 2 else { return }; lastPoll = now; polling = true
-    statusRequest = request("app-screen/status",body:Data(),headers:[:],limit:16384) { code,body in
+    let hasFreshFrame = lastRecognitionFrame > 0 && (0...5).contains(now - lastRecognitionFrame)
+    let body = supportsLocalResults ? localRecognition.payload(now: now) : Data()
+    let headers = ["Content-Type": "application/json",
+                   "X-Pcflash-Local-Frame": hasFreshFrame ? "1" : "0"]
+    statusRequest = request("app-screen/status",body:body,headers:headers,limit:16384) { code,body in
       self.polling = false; self.statusRequest = nil
       guard self.valid() else { return }
       if code == 401 || code == 403 || code == 410 { self.end("共享授权已失效"); return }
+      self.supportsLocalResults = body?["localResultsProtocol"] as? Int == 1
       if let body = body, let bytes = try? JSONSerialization.data(withJSONObject:body), bytes.count <= 7000 { self.taskStatus = String(data:bytes,encoding:.utf8) ?? "" }
       else { self.taskStatus = "" }
     }
@@ -140,6 +155,7 @@ final class CapturePipeline {
   }
   private func end(_ reason:String) {
     guard live || onStopped != nil else { return }; live = false; heartbeat?.cancel(); heartbeat = nil; upload?.cancel(); statusRequest?.cancel(); windowRequest?.cancel(); windowRequest = nil; windowInFlight = false
+    localRecognition.stop()
     lock.lock(); pending = nil; accepting = false; lock.unlock()
     if CaptureContract.read("grant.json")?["id"] as? String == grantID { CaptureContract.clearGrant() }
     if !ticket.isEmpty { CaptureContract.revoke(ticket,base:endpoint); ticket = "" }

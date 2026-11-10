@@ -40,6 +40,11 @@ target 'Runner' do
   end
 end
 
+target 'ScreenBroadcast' do
+  use_frameworks! :linkage => :static
+  pod 'onnxruntime-objc', '1.15.1'
+end
+
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)

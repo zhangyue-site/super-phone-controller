@@ -1,0 +1,2 @@
+#include? "Pods/Target Support Files/Pods-ScreenBroadcast/Pods-ScreenBroadcast.release.xcconfig"
+#include "../Flutter/Generated.xcconfig"

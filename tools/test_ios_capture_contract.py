@@ -238,7 +238,7 @@ print("14 preparation contract cases passed")
             found = [key for key, body in refs.items() if f'path = "{path}";' in body]
             self.assertEqual(len(found), 1, path)
             return found[0]
-        shared = [reference('Shared/CaptureContract.swift'), reference('Shared/BoundedRequest.swift'), reference('Shared/CapturePipeline.swift'), reference('Shared/CapturePreparationFence.swift')]
+        shared = [reference('Shared/CaptureContract.swift'), reference('Shared/BoundedRequest.swift'), reference('Shared/CapturePipeline.swift'), reference('Shared/CaptureLocalRecognition.swift'), reference('Shared/CapturePreparationFence.swift')]
         for ref in shared:
             builds = [key for key, body in objects.items() if 'isa = PBXBuildFile;' in body and f'fileRef = {ref};' in body]
             self.assertEqual(len(builds), 2, 'shared Swift must belong to host and extension')
@@ -254,6 +254,17 @@ print("14 preparation contract cases passed")
         self.assertIn('PRODUCT_BUNDLE_IDENTIFIER = "$(BROADCAST_BUNDLE_ID)";', source)
         # No private provisioning profiles or team identifier are committed.
         self.assertNotRegex(source, r'DEVELOPMENT_TEAM\s*=\s*[A-Z0-9]{10}')
+
+class LocalRecognitionContract(unittest.TestCase):
+    def test_both_capture_adapters_use_the_shared_recognition_pipeline(self):
+        ios = IOS
+        project = (ios / "Runner.xcodeproj/project.pbxproj").read_text()
+        capture = (ios / "Shared/CapturePipeline.swift").read_text()
+        self.assertIn("Shared/CaptureLocalRecognition.swift", project)
+        self.assertIn("localRecognition.offer", capture)
+        self.assertIn("localRecognition.stop()", capture)
+        self.assertIn("localResultsProtocol", capture)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+A19897B40FE055010081AB11 = {isa = PBXBuildFile; fileRef = A19897B40FE055010081AB10; };
+A19897B40FE055010081AB12 = {isa = PBXBuildFile; fileRef = A19897B40FE055010081AB10; };
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
@@ -56,6 +58,9 @@ DD615B768CF8ACFE2ED53E52 = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+A19897B40FE055010081AB22 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ScreenBroadcast/Profile.xcconfig; sourceTree = SOURCE_ROOT; };
+A19897B40FE055010081AB21 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ScreenBroadcast/Release.xcconfig; sourceTree = SOURCE_ROOT; };
+A19897B40FE055010081AB20 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ScreenBroadcast/Debug.xcconfig; sourceTree = SOURCE_ROOT; };
 		1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
@@ -76,6 +81,7 @@ A300AB8D497C98F557F69A6E = {isa = PBXFileReference; lastKnownFileType = sourceco
 3F9566239F15C76B69D46C20 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shared/BoundedRequest.swift"; sourceTree = SOURCE_ROOT; };
 45871A9C8C1F89DA22820CAD = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScreenBroadcast/SampleHandler.swift"; sourceTree = SOURCE_ROOT; };
 51814E988543B5EE52F82307 = {isa = PBXFileReference; lastKnownFileType = wrapper.app-extension; path = "ScreenBroadcast.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+A19897B40FE055010081AB10 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shared/CaptureLocalRecognition.swift"; sourceTree = SOURCE_ROOT; };
 EBE4ECA53B5B9521033F6612 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Shared/CapturePipeline.swift"; sourceTree = SOURCE_ROOT; };
 80470285ED2D5BC69F74BB8D = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Runner/ScreenCaptureSession.swift"; sourceTree = SOURCE_ROOT; };
 11D8EF42E5557D7FD1CA56AC = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Runner/SCKCaptureSession.swift"; sourceTree = SOURCE_ROOT; };
@@ -122,6 +128,10 @@ E2AA269EB967A8853A258BFA = {isa = PBXFrameworksBuildPhase; buildActionMask = 214
 3F9566239F15C76B69D46C20,
 45871A9C8C1F89DA22820CAD,
 EBE4ECA53B5B9521033F6612,
+A19897B40FE055010081AB10,
+A19897B40FE055010081AB22,
+A19897B40FE055010081AB21,
+A19897B40FE055010081AB20,
 80470285ED2D5BC69F74BB8D,
 11D8EF42E5557D7FD1CA56AC,
 BD6E569C6E403A1078D910C6,
@@ -312,6 +322,7 @@ DD615B768CF8ACFE2ED53E52,
 849FB503F46319BE7DDDE48B,
 1B9DEB7E2BD5DF8EA0792677,
 CE78B79BDAC225281CE02445,
+A19897B40FE055010081AB11,
 0DE7E2D193D1AE0FBE16487D,
 7A2BE379DF0730865042A6B8,
 BC6D57FA030FAC483B3DB045,
@@ -321,7 +332,7 @@ BC6D57FA030FAC483B3DB045,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-878A52FC5FF6A57D50B7B870 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (6421235B79D8046729871F90,73A5F5DFD2BD0567A238AE45,10F92689A4593278838BDCC4,6F701C58A4F51A0974F9B768,8162604A571B8B71A18E1F46,); runOnlyForDeploymentPostprocessing = 0; };
+878A52FC5FF6A57D50B7B870 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (6421235B79D8046729871F90,73A5F5DFD2BD0567A238AE45,A19897B40FE055010081AB12,10F92689A4593278838BDCC4,6F701C58A4F51A0974F9B768,8162604A571B8B71A18E1F46,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -651,9 +662,9 @@ CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 			};
 			name = Release;
 		};
-1A03BD2FD107C453F3183E30 = {isa = XCBuildConfiguration; baseConfigurationReference = 9740EEB31CF90195004384FC; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_ENTITLEMENTS = ScreenBroadcast/ScreenBroadcast.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)"; MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)"; INFOPLIST_FILE = ScreenBroadcast/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 15.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks","@executable_path/../../Frameworks",); PRODUCT_BUNDLE_IDENTIFIER = "$(BROADCAST_BUNDLE_ID)"; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
-E020E3C67BD0C31227720BD8 = {isa = XCBuildConfiguration; baseConfigurationReference = 9740EEB31CF90195004384FC; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_ENTITLEMENTS = ScreenBroadcast/ScreenBroadcast.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)"; MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)"; INFOPLIST_FILE = ScreenBroadcast/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 15.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks","@executable_path/../../Frameworks",); PRODUCT_BUNDLE_IDENTIFIER = "$(BROADCAST_BUNDLE_ID)"; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
-D696A35BDD1883DA07A8D6C4 = {isa = XCBuildConfiguration; baseConfigurationReference = 9740EEB31CF90195004384FC; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_ENTITLEMENTS = ScreenBroadcast/ScreenBroadcast.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)"; MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)"; INFOPLIST_FILE = ScreenBroadcast/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 15.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks","@executable_path/../../Frameworks",); PRODUCT_BUNDLE_IDENTIFIER = "$(BROADCAST_BUNDLE_ID)"; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Profile; };
+1A03BD2FD107C453F3183E30 = {isa = XCBuildConfiguration; baseConfigurationReference = A19897B40FE055010081AB20; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_ENTITLEMENTS = ScreenBroadcast/ScreenBroadcast.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)"; MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)"; INFOPLIST_FILE = ScreenBroadcast/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 15.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks","@executable_path/../../Frameworks",); PRODUCT_BUNDLE_IDENTIFIER = "$(BROADCAST_BUNDLE_ID)"; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+E020E3C67BD0C31227720BD8 = {isa = XCBuildConfiguration; baseConfigurationReference = A19897B40FE055010081AB21; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_ENTITLEMENTS = ScreenBroadcast/ScreenBroadcast.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)"; MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)"; INFOPLIST_FILE = ScreenBroadcast/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 15.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks","@executable_path/../../Frameworks",); PRODUCT_BUNDLE_IDENTIFIER = "$(BROADCAST_BUNDLE_ID)"; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+D696A35BDD1883DA07A8D6C4 = {isa = XCBuildConfiguration; baseConfigurationReference = A19897B40FE055010081AB22; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_ENTITLEMENTS = ScreenBroadcast/ScreenBroadcast.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)"; MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)"; INFOPLIST_FILE = ScreenBroadcast/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 15.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks","@executable_path/../../Frameworks",); PRODUCT_BUNDLE_IDENTIFIER = "$(BROADCAST_BUNDLE_ID)"; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Profile; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */

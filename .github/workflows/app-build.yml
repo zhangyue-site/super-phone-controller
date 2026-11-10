@@ -129,6 +129,19 @@ jobs:
           flutter-version: '3.44.0'
           channel: stable
           cache: true
+      - name: Restore pinned bundled model
+        run: |
+          set -euo pipefail
+          apk=$(mktemp "$RUNNER_TEMP/model-source.XXXXXX")
+          model=$(mktemp "$RUNNER_TEMP/bundled-model.XXXXXX")
+          trap 'rm -f "$apk" "$model"' EXIT
+          curl --fail --silent --show-error --proto '=https' --max-time 180 \
+            https://cdn.zhangyue.site/apps/phone-controller-flash/releases/1.3.17/phone-controller-flash-1.3.17-vc60.apk -o "$apk"
+          echo "263c8120640db90889073a23cfd3e77dd64f5ca068ac23eea27185f5eaa4be13  $apk" | shasum -a 256 -c -
+          unzip -p "$apk" assets/flutter_assets/assets/bt_v10_int8.onnx > "$model"
+          echo "45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2  $model" | shasum -a 256 -c -
+          install -m 0644 "$model" assets/bt_v10_int8.onnx
+
       - name: Resolve iOS dependencies
         run: |
           flutter config --no-enable-swift-package-manager
@@ -178,6 +191,8 @@ jobs:
             exit 1
           fi
           test -d build/ios/iphoneos/Runner.app/PlugIns/ScreenBroadcast.appex
+          test -s build/ios/iphoneos/Runner.app/Frameworks/App.framework/flutter_assets/assets/bt_v10_int8.onnx
+          xcrun nm -gjU build/ios/iphoneos/Runner.app/PlugIns/ScreenBroadcast.appex/ScreenBroadcast | grep -Fx _OrtGetApiBase
           xcrun nm -gjU build/ios/iphoneos/Runner.app/Runner | grep -Fx _OrtGetApiBase
       - name: Package private unsigned IPA
         env:
