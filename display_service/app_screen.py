@@ -5,7 +5,9 @@ import json,re,threading,os,hashlib,hmac,secrets
 from .app_ota import Authority
 from .conversation import CONVERSATION
 from .wechat_nav import STORE
+from .local_screen_results import LocalScreenResults, MAX_BODY
 AUTHORITY=Authority()
+LOCAL_RESULTS=LocalScreenResults()
 LOCK=threading.Lock()
 SEQUENCES={}
 USB_AUTHORITY=Authority()
@@ -96,7 +98,8 @@ def handle(handler,config):
     result=usb_authorize(obj['device'],obj['serial'],obj['challenge'],obj['proof'],keys)
     with AUTHORITY.lock:
      for old,item in list(AUTHORITY.tickets.items()):
-      if item[1]==obj['device'] and old!=result['ticket']:AUTHORITY.tickets.pop(old,None)
+      if item[1]==obj['device'] and old!=result['ticket']:
+       AUTHORITY.tickets.pop(old,None);LOCAL_RESULTS.discard(old)
      CONVERSATION.mailbox.cancel(obj['device'])
    elif path.endswith('/challenge'):
     if set(obj)!={'device'}:raise ValueError('fields')
@@ -107,7 +110,8 @@ def handle(handler,config):
     with AUTHORITY.lock:
      extend_diagnostic_ticket(obj['device'],grant)
      for old,item in list(AUTHORITY.tickets.items()):
-      if item[1]==obj['device'] and old!=grant['ticket']:AUTHORITY.tickets.pop(old,None)
+      if item[1]==obj['device'] and old!=grant['ticket']:
+       AUTHORITY.tickets.pop(old,None);LOCAL_RESULTS.discard(old)
      CONVERSATION.mailbox.cancel(obj['device'])
     result={'ticket':grant['ticket'],'expiresIn':grant['expiresIn'],'scope':'screen-frames'}
    handler.reply(200,json.dumps(result).encode());return True
@@ -116,12 +120,30 @@ def handle(handler,config):
   ticket=header[7:];device=subject(ticket)
   mailbox=CONVERSATION.mailbox
   if path.endswith('/status'):
-   if size!=0:raise ValueError('size')
+   if not 0<=size<=MAX_BODY:raise ValueError('size')
+   payload=None
+   if size:
+    if handler.headers.get('Content-Type')!='application/json':raise ValueError('content type')
+    raw=handler.rfile.read(size)
+    if len(raw)!=size:raise ValueError('truncated')
+    payload=json.loads(raw)
    # Recheck while holding the capture authority lock, then mailbox: revoke
    # and authorize use the same lock order. Never cache a terminal globally.
    with AUTHORITY.lock:
     AUTHORITY._prune(AUTHORITY.clock());item=AUTHORITY.tickets.get(ticket)
     if item is None or item[1]!=device:raise ValueError('revoked')
+    results_ack=[]
+    if payload is not None:
+     state_fields=('X-Screen-Interactive','X-Screen-Keyguard-Locked')
+     if isinstance(payload,dict) and payload.get('platform')=='ios':
+      unlocked=handler.headers.get_all('X-Pcflash-Local-Frame',[])==['1']
+     else:
+      unlocked=all(len(handler.headers.get_all(key,[]))==1 for key in state_fields) and tuple(
+       handler.headers.get(key) for key in state_fields)==('1','0')
+     try:results_ack=LOCAL_RESULTS.record(ticket,device,AUTHORITY.tickets,AUTHORITY.clock(),unlocked,payload)
+     except (ValueError,TypeError):LOCAL_RESULTS.discard(ticket)
+    else:
+     LOCAL_RESULTS.discard(ticket)
     with mailbox.lock:
      j=mailbox.jobs.get(device)
      if j and (j.cancelled or (j.done and getattr(j,'screen_session','')!=ticket)):j=None
@@ -129,12 +151,15 @@ def handle(handler,config):
       'frame':j.video_sequence if j else 0,'pointerReady':bool(j and j.pointer_protocol=='absolute-v1'),
       'skills':STORE.catalog(device),'barrier':j.video_barrier if j else '',
       'verified':bool(j and j.done and j.state=='done' and getattr(j,'navigation_verified',False) is True)}
+   result['localResultsProtocol']=1
+   if results_ack:result['localResultsReceipt']=results_ack
    handler.reply(200,json.dumps(result,ensure_ascii=False).encode());return True
   if path.endswith('/stop'):
    if size!=0:raise ValueError('size')
    with AUTHORITY.lock:
     if ticket not in AUTHORITY.tickets:raise ValueError('revoked')
     AUTHORITY.tickets.pop(ticket,None)
+    LOCAL_RESULTS.discard(ticket)
     with LOCK:SEQUENCES.pop(ticket,None)
     mailbox.cancel(device);STORE.invalidate(device)
    handler.reply(200,b'{}');return True

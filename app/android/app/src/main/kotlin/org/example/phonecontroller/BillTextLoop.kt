@@ -34,10 +34,10 @@ class BillTextLoop(private val context: Context) {
 
  private fun unlocked()=context.getSystemService(PowerManager::class.java).isInteractive &&
   !context.getSystemService(KeyguardManager::class.java).isKeyguardLocked
- fun start(delayed: Boolean = false): Boolean {
-  if(active)return true
+ fun start(delayed: Boolean = false, autoEpoch: Long? = null): Boolean {
+  if(active)return autoEpoch==null
   if(busy||!ScreenShareService.active||!unlocked()){status="请先解锁并开启屏幕共享";return false}
-  val lease=ScreenShareService.beginRecognition("ocr") ?: run {status="另一轮识别正在运行，或共享连接未就绪";return false}
+  val lease=ScreenShareService.beginRecognition("ocr",autoEpoch) ?: run {status="另一轮识别正在运行，或共享连接未就绪";return false}
   runId=lease.first;captureEpoch=lease.second;progress=null
   startAt=SystemClock.elapsedRealtime()+if(delayed) 8000L else 0L
   matched=0;active=true;generation++
@@ -120,7 +120,7 @@ class BillTextLoop(private val context: Context) {
   val bill=page=="bill"
   if(page!="other")matched++
   RecognitionEvidence.preview(runId,text)
-  if(!RecognitionEvidence.frame(runId,frame,age,elapsed,text.lineSequence().count(),page)){
+  if(!RecognitionEvidence.frame(runId,frame,age,elapsed,text.lineSequence().count(),page,text=text)){
    finish("capture_changed");return
   }
   // Keep existing v52 diagnostics compatible; count successful frames, not matches.

@@ -366,7 +366,11 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       }
     } catch (e) {
       workbenchDiagnostic('relay_error',
-          value: e is MissingPluginException ? 1 : e is TimeoutException ? 2 : 3);
+          value: e is MissingPluginException
+              ? 1
+              : e is TimeoutException
+                  ? 2
+                  : 3);
       if (_current(generation)) setState(() => _error = '连接未完成：$e');
     } finally {
       if (mounted && generation == _generation) setState(() => _busy = false);
@@ -466,119 +470,124 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                     client: _control, diagnostic: _relay))),
             icon: const Icon(Icons.settings_outlined))
       ]),
-      body: ListView(padding: const EdgeInsets.all(20), children: [
-        Text(
-            _active
-                ? '屏幕共享中'
-                : _busy
-                    ? '正在连接'
-                    : '需要连接',
-            style: Theme.of(context).textTheme.headlineMedium),
-        const SizedBox(height: 8),
-        const Text('接收控制手机或 AI 助手的任务，由控制板执行操作。'),
-        const SizedBox(height: 20),
-        TargetStatusOverview(
-          board: widget.isCurrent() ? '已识别控制板' : '连接已改变，请重新检查连接线',
-          capture: productError(_capture),
-          permission:
-              _pointerReady ? '最近回执允许操作，开始执行前仍会检查' : '执行任务时检查操作许可，空闲无需重复授权',
-          network: connected
-              ? '此手机中转连接已建立，云端执行状态按任务回执更新'
-              : _externalGateway
-                  ? '等待控制板直连或另一台手机中转；当前网络状态待更新'
-                  : '正在检查手机中转连接',
-          error: _error,
-        ),
-        for (final message in _checkErrors.messages) ProductError(message),
-        const AccessibilityAssistCard(),
-        const LocalAutoLoopCard(),
-        Card(
-            child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('最近任务反馈',
-                          style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 8),
-                      Text(_feedback.state.isEmpty
-                          ? '任务状态暂未更新，请在控制手机查看最近结果。'
-                          : _feedback.taskLabel),
-                      if (_feedback.reply.isNotEmpty)
-                        Text(productError(_feedback.reply)),
-                      const Text('此处显示最近收到的反馈；若与你的任务不一致，请以控制手机的任务页为准。'),
-                    ]))),
-        const SizedBox(height: 16),
-        if (!ready)
-          FilledButton.icon(
-              onPressed:
-                  _busy || _stopping || !widget.isCurrent() ? null : _start,
-              icon: const Icon(Icons.link),
-              label: Text(_busy
-                  ? '正在请求授权或连接…'
-                  : _active
-                      ? '重新检查手机中转'
-                      : '开始屏幕共享并连接')),
-        if (_externalGateway && _active)
-          OutlinedButton.icon(
-              onPressed: _busy || _stopping || !widget.isCurrent()
-                  ? null
-                  : () => _start(allowConsent: false, restoreLocal: true),
-              icon: const Icon(Icons.bluetooth_connected),
-              label: const Text('恢复本机手机中转')),
-        if (connected)
-          OutlinedButton.icon(
-              onPressed: _busy || _stopping ? null : _pairingCode,
-              icon: const Icon(Icons.devices),
-              label: const Text('连接控制手机')),
-        if (!_externalGateway)
-          OutlinedButton.icon(
-              onPressed: _busy || _stopping
-                  ? null
-                  : () async {
-                      setState(() => _busy = true);
-                      try {
-                        await TargetSession.release();
-                        await _control?.shutdown();
-                        await widget.service?.disconnect();
-                        if (mounted) {
-                          setState(() {
-                            _externalGateway = true;
-                            _control = null;
-                            _code = null;
-                            _relay = '本机蓝牙已释放，USB画面继续共享；请在控制手机接管网关或使用板端Wi-Fi';
-                          });
-                        }
-                      } catch (e) {
-                        if (mounted) setState(() => _error = '交接未完成：$e');
-                      } finally {
-                        if (mounted) setState(() => _busy = false);
-                      }
-                    },
-              icon: const Icon(Icons.bluetooth_disabled),
-              label: const Text('释放手机中转，保留屏幕共享')),
-        if (_code != null)
-          Card(
-              child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const Text('在控制手机中粘贴连接码。两分钟内有效，仅可使用一次；请只交给自己的控制手机。'),
-                        const SizedBox(height: 12),
-                        SelectableText(_code!),
-                        TextButton.icon(
-                            onPressed: () async {
-                              await Clipboard.setData(
-                                  ClipboardData(text: _code!));
-                            },
-                            icon: const Icon(Icons.copy),
-                            label: const Text('复制连接码')),
-                      ]))),
-        const SizedBox(height: 16),
-        const Text(
-            '画面用于理解任务和核验结果。返回或进入设置不会停止共享；仅主动停止、系统停止或真实断开连接后，才需要重新开始共享。旧操作不会重放。'),
-      ]),
+      body: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text(
+                _active
+                    ? '屏幕共享中'
+                    : _busy
+                        ? '正在连接'
+                        : '需要连接',
+                style: Theme.of(context).textTheme.headlineMedium),
+            const SizedBox(height: 8),
+            const Text('接收控制手机或 AI 助手的任务，由控制板执行操作。'),
+            const SizedBox(height: 20),
+            TargetStatusOverview(
+              board: widget.isCurrent() ? '已识别控制板' : '连接已改变，请重新检查连接线',
+              capture: productError(_capture),
+              permission:
+                  _pointerReady ? '最近回执允许操作，开始执行前仍会检查' : '执行任务时检查操作许可，空闲无需重复授权',
+              network: connected
+                  ? '此手机中转连接已建立，云端执行状态按任务回执更新'
+                  : _externalGateway
+                      ? '等待控制板直连或另一台手机中转；当前网络状态待更新'
+                      : '正在检查手机中转连接',
+              error: _error,
+            ),
+            for (final message in _checkErrors.messages) ProductError(message),
+            const AccessibilityAssistCard(),
+            const LocalAutoLoopCard(),
+            Card(
+                child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('最近任务反馈',
+                              style: Theme.of(context).textTheme.titleMedium),
+                          const SizedBox(height: 8),
+                          Text(_feedback.state.isEmpty
+                              ? '任务状态暂未更新，请在控制手机查看最近结果。'
+                              : _feedback.taskLabel),
+                          if (_feedback.reply.isNotEmpty)
+                            Text(productError(_feedback.reply)),
+                          const Text('此处显示最近收到的反馈；若与你的任务不一致，请以控制手机的任务页为准。'),
+                        ]))),
+            const SizedBox(height: 16),
+            if (!ready)
+              FilledButton.icon(
+                  onPressed:
+                      _busy || _stopping || !widget.isCurrent() ? null : _start,
+                  icon: const Icon(Icons.link),
+                  label: Text(_busy
+                      ? '正在请求授权或连接…'
+                      : _active
+                          ? '重新检查手机中转'
+                          : '开始屏幕共享并连接')),
+            if (_externalGateway && _active)
+              OutlinedButton.icon(
+                  onPressed: _busy || _stopping || !widget.isCurrent()
+                      ? null
+                      : () => _start(allowConsent: false, restoreLocal: true),
+                  icon: const Icon(Icons.bluetooth_connected),
+                  label: const Text('恢复本机手机中转')),
+            if (connected)
+              OutlinedButton.icon(
+                  onPressed: _busy || _stopping ? null : _pairingCode,
+                  icon: const Icon(Icons.devices),
+                  label: const Text('连接控制手机')),
+            if (!_externalGateway)
+              OutlinedButton.icon(
+                  onPressed: _busy || _stopping
+                      ? null
+                      : () async {
+                          setState(() => _busy = true);
+                          try {
+                            await TargetSession.release();
+                            await _control?.shutdown();
+                            await widget.service?.disconnect();
+                            if (mounted) {
+                              setState(() {
+                                _externalGateway = true;
+                                _control = null;
+                                _code = null;
+                                _relay =
+                                    '本机蓝牙已释放，USB画面继续共享；请在控制手机接管网关或使用板端Wi-Fi';
+                              });
+                            }
+                          } catch (e) {
+                            if (mounted) setState(() => _error = '交接未完成：$e');
+                          } finally {
+                            if (mounted) setState(() => _busy = false);
+                          }
+                        },
+                  icon: const Icon(Icons.bluetooth_disabled),
+                  label: const Text('释放手机中转，保留屏幕共享')),
+            if (_code != null)
+              Card(
+                  child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Text(
+                                '在控制手机中粘贴连接码。两分钟内有效，仅可使用一次；请只交给自己的控制手机。'),
+                            const SizedBox(height: 12),
+                            SelectableText(_code!),
+                            TextButton.icon(
+                                onPressed: () async {
+                                  await Clipboard.setData(
+                                      ClipboardData(text: _code!));
+                                },
+                                icon: const Icon(Icons.copy),
+                                label: const Text('复制连接码')),
+                          ]))),
+            const SizedBox(height: 16),
+            const Text(
+                '画面用于理解任务和核验结果。返回或进入设置不会停止共享；仅主动停止、系统停止或真实断开连接后，才需要重新开始共享。旧操作不会重放。'),
+          ])),
       bottomNavigationBar: SafeArea(
           child: Padding(
               padding: const EdgeInsets.all(16),

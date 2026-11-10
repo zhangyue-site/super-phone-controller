@@ -43,7 +43,8 @@ class _LocalAutoLoopCardState extends State<LocalAutoLoopCard> {
     unawaited(_readOcrStatus());
   }
 
-  Future<void> _billOcr(bool start, {bool delayed = false}) async {
+  Future<void> _billOcr(bool start,
+      {bool delayed = false, int? autoEpoch}) async {
     if (_ocrPending) return;
     setState(() {
       _ocrPending = true;
@@ -51,8 +52,10 @@ class _LocalAutoLoopCardState extends State<LocalAutoLoopCard> {
     });
     try {
       if (start) {
-        final ok = await _channel.invokeMethod<bool>(
-            'startBillOcr', delayed ? {'delayed': true} : null);
+        final ok = await _channel.invokeMethod<bool>('startBillOcr', {
+          if (delayed) 'delayed': true,
+          if (autoEpoch != null) 'autoEpoch': autoEpoch,
+        });
         if (ok != true && mounted) {
           setState(() => _ocrStatus = '未开始，请检查解锁、屏幕共享或上一轮识别');
         }
@@ -82,6 +85,15 @@ class _LocalAutoLoopCardState extends State<LocalAutoLoopCard> {
           _recognized = (meta?['count'] as int?) ?? 0;
           _ocrPreview = (meta?['preview'] as String?) ?? '';
         });
+        final epoch = meta?['autoEpoch'];
+        if (epoch is int && !_busy && !_ocrPending && !_ocrActive) {
+          switch (meta?['autoStep']) {
+            case 'ocr':
+              unawaited(_billOcr(true, autoEpoch: epoch));
+            case 'buttons':
+              unawaited(_run(autoEpoch: epoch));
+          }
+        }
       }
     } catch (_) {
       if (mounted) setState(() => _ocrError = '识别状态暂不可读');
@@ -113,7 +125,7 @@ class _LocalAutoLoopCardState extends State<LocalAutoLoopCard> {
   void _diagnostic(String stage, [int value = 0]) =>
       workbenchDiagnostic(stage, count: _count, value: value);
 
-  Future<void> _run() async {
+  Future<void> _run({int? autoEpoch}) async {
     if (_busy) return;
     setState(() {
       _busy = true;
@@ -129,8 +141,9 @@ class _LocalAutoLoopCardState extends State<LocalAutoLoopCard> {
     String outcome = '本轮已停止';
     String reason = 'stopped';
     try {
-      final lease = await _channel
-          .invokeMapMethod<String, dynamic>('beginButtonRecognition');
+      final lease = await _channel.invokeMapMethod<String, dynamic>(
+          'beginButtonRecognition',
+          autoEpoch == null ? null : {'autoEpoch': autoEpoch});
       final run = lease?['run'];
       final epoch = lease?['epoch'];
       final minimumFrame = lease?['afterFrame'];
@@ -151,6 +164,7 @@ class _LocalAutoLoopCardState extends State<LocalAutoLoopCard> {
           elapsed.elapsed < const Duration(seconds: 90)) {
         final frame = await _channel.invokeMapMethod<String, dynamic>(
           'latestFrame',
+          {'run': run},
         );
         if (_stopped) break;
         final jpeg = frame?['jpeg'];
@@ -208,7 +222,9 @@ class _LocalAutoLoopCardState extends State<LocalAutoLoopCard> {
             'width': width,
             'height': height,
             'ms': result.inferenceMs.round(),
+            'boxes': result.boxes.length,
           });
+          if (_stopped || !mounted) break;
           if (recorded != true) throw const FormatException('识别帧未被本轮接收');
           lastFrame = id;
           lastProgress = elapsed.elapsed;
@@ -344,7 +360,8 @@ class _LocalAutoLoopCardState extends State<LocalAutoLoopCard> {
               spacing: 8,
               children: [
                 FilledButton(
-                  onPressed: _busy || _ocrActive || _ocrPending ? null : _run,
+                  onPressed:
+                      _busy || _ocrActive || _ocrPending ? null : () => _run(),
                   child: const Text('开始一轮识别'),
                 ),
                 OutlinedButton(

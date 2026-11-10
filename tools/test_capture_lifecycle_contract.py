@@ -27,6 +27,15 @@ class CaptureLifecycleContract(unittest.TestCase):
         self.assertIn('"physical_detach"', usb)
         self.assertIn('app.stopService(Intent(app,ScreenShareService::class.java))', usb)
 
+    def test_automatic_recognition_is_scoped_to_the_native_capture(self):
+        service = (NATIVE / "ScreenShareService.kt").read_text()
+        card = (ROOT / "app/lib/local_auto_loop.dart").read_text()
+        self.assertIn("latestLoopFrame?.captureEpoch", service)
+        self.assertIn("autoEpoch!=captureGeneration", service)
+        self.assertIn("localRecognitionId.isNotEmpty()", service)
+        self.assertIn("autoStep", card)
+        self.assertIn("'autoEpoch': autoEpoch", card)
+
     def test_task_removal_callback_only_observes(self):
         service = (NATIVE / "ScreenShareService.kt").read_text()
         callback = service.split("override fun onTaskRemoved(rootIntent: Intent?) {", 1)[1].split("override fun onDestroy()", 1)[0]

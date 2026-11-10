@@ -67,6 +67,15 @@ def handle(handler,device_config):
        if record and record.get('state')=='pending':record.update(state='error',reply=str(error),verified=False);REMOTE._save()
       raise
      result['reply']='已开始执行。'+result['reply']+' 编号 '+ident
+   elif operation=='local-screen-results':
+    if owner[0]!='telegram':raise PermissionError('private Telegram binding required')
+    from .app_screen import AUTHORITY, LOCAL_RESULTS
+    with AUTHORITY.lock:
+     now=AUTHORITY.clock()
+     AUTHORITY._prune(now)
+     rows=LOCAL_RESULTS.read(owner[3],AUTHORITY.tickets,now)
+    result={'state':'local_results' if rows else 'no_local_results','terminal':True,
+     'reply':'暂未收到当前共享的本地识别结果。','results':rows}
    elif operation=='confirm':result=REMOTE.confirm(owner,obj.get('task_id'))
    elif operation=='status':result=REMOTE.status(owner,obj.get('task_id'))
    elif operation=='stop':result=REMOTE.stop(owner)

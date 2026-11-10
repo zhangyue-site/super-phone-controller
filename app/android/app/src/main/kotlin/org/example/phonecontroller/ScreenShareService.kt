@@ -27,7 +27,9 @@ import java.util.concurrent.RejectedExecutionHandler
 class ScreenShareService: Service() {
  companion object {
  @Volatile private var current: ScreenShareService?=null
- fun beginRecognition(kind: String): Pair<String,Long>?=current?.beginLocalRecognition(kind)
+ fun beginRecognition(kind: String, autoEpoch: Long? = null): Pair<String,Long>? =
+  current?.beginLocalRecognition(kind,autoEpoch)
+ fun autoRecognitionStatus(): Map<String,Any> = current?.autoStatus() ?: emptyMap()
  fun recognitionLive(id: String): Boolean=current?.localRecognitionLive(id)?:false
  fun endRecognition(id: String){current?.endLocalRecognition(id)}
 
@@ -137,7 +139,7 @@ class ScreenShareService: Service() {
   }
  }
  private fun recordSnapshot(){val now=SystemClock.elapsedRealtime();frameStats(now,CaptureSamplingSettings.enabled(this),hasDemand(now),true)}
- private var captureGeneration=0L
+ private var captureGeneration=System.nanoTime()
  private val sourceFrames=AtomicLong();private val eligibleFrames=AtomicLong();private val oldFrames=AtomicLong()
  private val uploadOk=AtomicLong();private val uploadWait=AtomicLong();private val uploadError=AtomicLong()
  private val refreshBegin=AtomicLong();private val refreshOk=AtomicLong();private val refreshCancel=AtomicLong();private val refreshError=AtomicLong()
@@ -151,23 +153,43 @@ class ScreenShareService: Service() {
  private var localRecognitionId=""
  private var localRecognitionEpoch=-1L
  private var localRecognitionUntil=0L
- @Synchronized private fun beginLocalRecognition(kind: String): Pair<String,Long>? {
-  if(kind !in setOf("ocr","buttons") || !running || !active || !interactive() || locked() ||
-    recovery.needsAuthorization() || SystemClock.elapsedRealtime()>=until ||
-    projection==null || display==null || reader==null ||
-    usbOwnerSession?.let{projectionValid(it)}==false)return null
-  if(localRecognitionId.isNotEmpty() && localRecognitionLive(localRecognitionId))return null
+ private var autoStep="ocr"
+ private var autoRun=""
+ private fun recognitionAvailable()=running && active && interactive() && !locked() &&
+  !recovery.needsAuthorization() && SystemClock.elapsedRealtime()<until &&
+  projection!=null && display!=null && reader!=null &&
+  usbOwnerSession?.let{projectionValid(it)}!=false
+ @Synchronized private fun autoStatus(): Map<String,Any> {
+  if(!recognitionAvailable() || latestLoopFrame?.captureEpoch!=captureGeneration ||
+     localRecognitionId.isNotEmpty())return emptyMap()
+  return mapOf("autoEpoch" to captureGeneration,"autoStep" to autoStep)
+ }
+ @Synchronized private fun beginLocalRecognition(kind: String,autoEpoch: Long?): Pair<String,Long>? {
+  if(kind !in setOf("ocr","buttons") || !recognitionAvailable())return null
+  if(localRecognitionId.isNotEmpty())return null
+  if(autoEpoch!=null && (autoEpoch!=captureGeneration || autoStep!=kind ||
+    latestLoopFrame?.captureEpoch!=captureGeneration || localRecognitionId.isNotEmpty()))return null
   localRecognitionId=RecognitionEvidence.begin(kind,captureGeneration)
   localRecognitionEpoch=captureGeneration
   localRecognitionUntil=SystemClock.elapsedRealtime()+90000L
+  if(autoEpoch!=null){
+   autoRun=localRecognitionId
+   autoStep="wait"
+  } else autoStep="done"
   return Pair(localRecognitionId,captureGeneration)
  }
  @Synchronized private fun localRecognitionLive(id: String)=id.isNotEmpty() && id==localRecognitionId &&
-  running && active && localRecognitionEpoch==captureGeneration &&
-  SystemClock.elapsedRealtime()<localRecognitionUntil && !recovery.needsAuthorization() &&
-  usbOwnerSession?.let{projectionValid(it)}!=false
+  localRecognitionEpoch==captureGeneration && SystemClock.elapsedRealtime()<localRecognitionUntil &&
+  recognitionAvailable()
  @Synchronized private fun endLocalRecognition(id: String){
-  if(localRecognitionId==id){localRecognitionUntil=0L;localRecognitionId=""}
+  if(localRecognitionId!=id)return
+  if(autoRun==id){
+   autoRun=""
+   val (source,state)=RecognitionEvidence.outcome(id) ?: Pair("","")
+   autoStep=if(source=="ocr" && state in setOf("done","frame_timeout","inference_timeout","timeout","error") &&
+    recognitionAvailable())"buttons" else "done"
+  }
+  localRecognitionUntil=0L;localRecognitionId=""
  }
  private fun hasLocalDemand(now: Long)=localRecognitionId.isNotEmpty() && localRecognitionEpoch==captureGeneration &&
   now<localRecognitionUntil && RecognitionEvidence.matches(localRecognitionId)
@@ -198,6 +220,10 @@ class ScreenShareService: Service() {
    if(!running)return
    val now=SystemClock.elapsedRealtime()
    val local=hasLocalDemand(now)
+   if(!interactive() || locked())synchronized(this@ScreenShareService) {
+    autoStep="done";autoRun=""
+    RecognitionEvidence.clearResults()
+   }
    val enabled=CaptureSamplingSettings.enabled(this@ScreenShareService) || local
    val demand=hasDemand(now) || local
    frameStats(now,enabled,demand)
@@ -273,9 +299,9 @@ class ScreenShareService: Service() {
  @Synchronized private fun pauseCloud(capability: String) {
   if(!running || !active || ticket!=capability)return
   SafeDiagnostics.record(mapOf("event" to "capture_pause","phase" to "capture","reason" to "cloud_auth","generation" to recovery.generation()))
-  recovery.pause();latestLoopFrame=null;taskStatus="";frameDemand=false;status="云端授权暂不可用，保留屏幕共享并自动恢复连接"
+  autoStep="done";autoRun="";RecognitionEvidence.clearResults();recovery.pause();latestLoopFrame=null;taskStatus="";frameDemand=false;status="云端授权暂不可用，保留屏幕共享并自动恢复连接"
  }
- @Synchronized private fun endCapture() { RecognitionEvidence.finish(localRecognitionId,"capture_changed");localRecognitionId="";localRecognitionUntil=0L;captureGeneration++;recovery.stop();running=false;active=false;latestLoopFrame=null;frameDemand=false }
+ @Synchronized private fun endCapture() { RecognitionEvidence.finish(localRecognitionId,"capture_changed");localRecognitionId="";localRecognitionUntil=0L;captureGeneration++;RecognitionEvidence.clearResults();recovery.stop();running=false;active=false;latestLoopFrame=null;frameDemand=false }
  private fun renewalValid(session: String, capability: String, expectedProjection: MediaProjection?): Boolean =
   current===this && active && running && expectedProjection!=null && projection===expectedProjection &&
   ticket==capability && capability.isNotEmpty() && usbOwnerSession==session &&
@@ -341,13 +367,21 @@ class ScreenShareService: Service() {
      c.setRequestProperty("X-Pcflash-Recognition",it)
     }
     CaptureStateHeaders.send(c,captureStateHeadersReader())
+    c.requestMethod="POST";c.doOutput=true
+    val body=if(supportsLocalResults)synchronized(this@ScreenShareService) {
+     if(!recognitionAvailable())RecognitionEvidence.clearResults()
+     RecognitionEvidence.localResults(captureGeneration).toString().toByteArray(Charsets.UTF_8)
+    } else byteArrayOf()
+    c.setRequestProperty("Content-Type","application/json")
+    c.setFixedLengthStreamingMode(body.size)
+    c.outputStream.use{it.write(body)}
     statusHttp=c.responseCode
     if(statusHttp==200) {
-     val body=c.inputStream.use { readBounded(it,16385) }
-     if(body.size>16384)throw IllegalStateException()
-     val data=JSONObject(String(body,Charsets.UTF_8))
+     val responseBody=c.inputStream.use { readBounded(it,16385) }
+     if(responseBody.size>16384)throw IllegalStateException()
+     val data=JSONObject(String(responseBody,Charsets.UTF_8))
      if(running && ticket==requestTicket)RecognitionEvidence.acknowledge(data.optJSONObject("recognitionReceipt"))
-     if(running && ticket==requestTicket){taskStatus=data.toString();supportsAccessibilityFrames=data.optInt("accessibilityProtocol")==1
+     if(running && ticket==requestTicket){supportsLocalResults=data.optInt("localResultsProtocol")==1;taskStatus=data.toString();supportsAccessibilityFrames=data.optInt("accessibilityProtocol")==1
       captureState=data.optString("state").let{if(it in setOf("idle","thinking","running","planning","plan","verifying","capturing","done","error","stopped"))it else "unknown"}
       statusOkAt=SystemClock.elapsedRealtime();hasStatusBarrier=Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
       frameDemand=data.optString("state") in setOf("thinking","running","planning","plan","verifying","capturing") && Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
@@ -380,6 +414,7 @@ class ScreenShareService: Service() {
  }
 
  @Volatile private var supportsAccessibilityFrames=false
+ @Volatile private var supportsLocalResults=false
  private inner class FrameTask(private val bitmap: Bitmap,private val capturedAt: Long,
   private val requestTicket: String,private val uiEpoch: Long,private val localEpoch: Long): Runnable {
   fun discard() { bitmap.recycle() }

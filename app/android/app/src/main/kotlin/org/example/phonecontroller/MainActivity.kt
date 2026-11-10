@@ -65,12 +65,12 @@ class MainActivity: FlutterActivity() {
   }
   MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/local-loop").setMethodCallHandler { call,result ->
    when(call.method) {
-    "startBillOcr" -> result.success(billTextLoop.start(call.argument<Boolean>("delayed")==true))
+    "startBillOcr" -> result.success(billTextLoop.start(call.argument<Boolean>("delayed")==true,call.argument<Number>("autoEpoch")?.toLong()))
     "stopBillOcr" -> { billTextLoop.stop();result.success(null) }
     "billOcrStatus" -> result.success(billTextLoop.status)
-    "recognitionStatus" -> result.success(RecognitionEvidence.status())
+    "recognitionStatus" -> result.success(RecognitionEvidence.status()+ScreenShareService.autoRecognitionStatus())
     "beginButtonRecognition" -> {
-     val lease=ScreenShareService.beginRecognition("buttons")
+     val lease=ScreenShareService.beginRecognition("buttons",call.argument<Number>("autoEpoch")?.toLong())
      if(lease==null)result.error("recognition_unavailable","请先开启共享，或停止上一轮识别",null)
      else {WorkbenchDiagnostics.beginRecognition();result.success(mapOf("run" to lease.first,"epoch" to lease.second,"afterFrame" to System.nanoTime()))}
     }
@@ -87,9 +87,11 @@ class MainActivity: FlutterActivity() {
      val width=call.argument<Int>("width")?:0;val height=call.argument<Int>("height")?:0
      val ms=call.argument<Int>("ms")?:0
      val age=call.argument<Number>("age")?.toLong()?:-1L
+     val boxes=call.argument<Int>("boxes")
+     if(boxes!=null && boxes !in 0..2100){result.error("recognition_invalid","无效的按钮结果",null);return@setMethodCallHandler}
      if(age !in 0..2500 || !ScreenShareService.recognitionLive(id) || RecognitionEvidence.source()!="buttons")
       result.error("recognition_expired","共享会话已改变，本轮已停止",null)
-     else result.success(RecognitionEvidence.frame(id,LoopFrame(byteArrayOf(),width,height,width,height,stamp,epoch),age,ms,0,"buttons"))
+     else result.success(RecognitionEvidence.frame(id,LoopFrame(byteArrayOf(),width,height,width,height,stamp,epoch),age,ms,boxes?:0,"buttons",boxes=boxes))
     }
     "diagnostic" -> {
      WorkbenchDiagnostics.record(call.argument<String>("stage"),call.argument<Int>("count"),
@@ -98,7 +100,10 @@ class MainActivity: FlutterActivity() {
     }
     "latestFrame" -> {
      val f=ScreenShareService.latestLoopFrame
-     if(f==null || !ScreenShareService.active)result.success(mapOf("available" to false))
+     val run=call.argument<String>("run")
+     if(run!=null && !ScreenShareService.recognitionLive(run))
+      result.error("recognition_expired","共享会话已结束，本轮已停止",null)
+     else if(f==null || !ScreenShareService.active)result.success(mapOf("available" to false))
      else result.success(mapOf("available" to true,"jpeg" to f.jpeg,"width" to f.width,"height" to f.height,
       "nativeWidth" to f.nativeWidth,"nativeHeight" to f.nativeHeight,
       "captureEpoch" to f.captureEpoch,"frameId" to f.capturedAt, "ageMs" to ((System.nanoTime()-f.capturedAt)/1_000_000L)))
