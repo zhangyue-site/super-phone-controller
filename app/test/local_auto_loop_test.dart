@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import '../lib/local_auto_loop.dart';
+import 'package:pcflash/local_auto_loop.dart';
 
 void main() {
   testWidgets('starts each native step only when offered for a capture',
