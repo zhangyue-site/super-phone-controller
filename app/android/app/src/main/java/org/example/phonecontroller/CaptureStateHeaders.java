@@ -1,6 +1,7 @@
 package org.example.phonecontroller;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -25,12 +26,15 @@ public final class CaptureStateHeaders {
   catch(RuntimeException unavailable){return Collections.emptyMap();}
  }
  /** Caller configures the existing URL, authorization and transport timeouts. */
- public static void send(HttpURLConnection connection,Reader reader) throws IOException {
+ public static void send(HttpURLConnection connection,Reader reader,byte[] body) throws IOException {
   connection.setRequestMethod("POST");connection.setDoOutput(true);
   for(Map.Entry<String,String> header:sample(reader).entrySet()){
    connection.setRequestProperty(header.getKey(),header.getValue());
   }
-  connection.setFixedLengthStreamingMode(0);
-  connection.getOutputStream().close();
+  connection.setRequestProperty("Content-Type","application/json");
+  connection.setFixedLengthStreamingMode(body.length);
+  try(OutputStream output=connection.getOutputStream()){
+   output.write(body);
+  }
  }
 }

@@ -366,15 +366,11 @@ class ScreenShareService: Service() {
     if(BuildConfig.REMOTE_WORKBENCH_DIAGNOSTICS)RecognitionEvidence.envelope()?.let{
      c.setRequestProperty("X-Pcflash-Recognition",it)
     }
-    CaptureStateHeaders.send(c,captureStateHeadersReader())
-    c.requestMethod="POST";c.doOutput=true
     val body=if(supportsLocalResults)synchronized(this@ScreenShareService) {
      if(!recognitionAvailable())RecognitionEvidence.clearResults()
      RecognitionEvidence.localResults(captureGeneration).toString().toByteArray(Charsets.UTF_8)
     } else byteArrayOf()
-    c.setRequestProperty("Content-Type","application/json")
-    c.setFixedLengthStreamingMode(body.size)
-    c.outputStream.use{it.write(body)}
+    CaptureStateHeaders.send(c,captureStateHeadersReader(),body)
     statusHttp=c.responseCode
     if(statusHttp==200) {
      val responseBody=c.inputStream.use { readBounded(it,16385) }
