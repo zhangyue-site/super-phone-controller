@@ -42,7 +42,8 @@ class CloudRelay {
       this.beforeModeChange,
       this.retiredNonce});
   bool get isClosed => _closed;
-  bool get supportsMaintenance => _maintenanceSupported && _wifiUpgradeSupported;
+  bool get supportsMaintenance =>
+      _maintenanceSupported && _wifiUpgradeSupported;
 
   Future<void> start({Future<void> Function()? beforePolling}) async {
     if (_closed || _timer != null) throw StateError("控制会话不可重复启动");
@@ -73,7 +74,8 @@ class CloudRelay {
     if (_closed) throw StateError("控制连接已结束");
     _lastPoll = DateTime.now(); // Keep the existing idle/startup cadence.
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => _tick());
-    _watchdog ??= Timer.periodic(const Duration(seconds: 5), (_) => _watchdogTick());
+    _watchdog ??=
+        Timer.periodic(const Duration(seconds: 5), (_) => _watchdogTick());
   }
 
   Future<void> _tick() async {
@@ -81,7 +83,8 @@ class CloudRelay {
     final now = DateTime.now();
     final fast = _lastControl != null &&
         now.difference(_lastControl!).inMilliseconds < 3000;
-    if (!fast && _lastPoll != null &&
+    if (!fast &&
+        _lastPoll != null &&
         now.difference(_lastPoll!).inMilliseconds < 500) {
       return;
     }
@@ -202,20 +205,19 @@ class CloudRelay {
       if (op == 5) await close(reason: 'opcode_stop');
     } catch (error) {
       if (_closed) return; // Late completions belong to the closed session.
-      // A lost heartbeat ACK may reconnect only through the existing STOP,
-      // detach and fresh-nonce handshake. Never replay its issued packet.
-      // Input or USB-mode ACK uncertainty still cannot opt into recovery.
-      // Self-heal (vc59): any relay-loop failure may recover through the
-      // existing STOP, detach and fresh-nonce handshake. Identity or
-      // protocol failures raised by the handshake itself still stop the
-      // recovery gate; a wedged BLE read is covered by the watchdog below.
-      recoverableNetworkFailure = true;
+      // Only idle transport errors and heartbeat failures can recover
+      // through STOP and a fresh nonce. An issued action may have landed.
+      recoverableNetworkFailure =
+          _canRecoverWithoutAction && GatewayRecoveryGate.transportError(error);
       await close(reason: 'error', error: error);
       onError(error);
     } finally {
       _busy = false;
     }
   }
+
+  bool get _canRecoverWithoutAction =>
+      !_busy || _activeOp == null || _activeOp == 12;
 
   /// The board acks its status ping every few seconds. A long silence with
   /// the relay session still open means a BLE read/write wedged and _tick
@@ -229,9 +231,10 @@ class CloudRelay {
     if (stale <= 45) return;
     SafeDiagnostics.record('relay_watchdog',
         phase: 'stale_heartbeat', remainingMs: stale * 1000);
-    recoverableNetworkFailure = true;
+    recoverableNetworkFailure = _canRecoverWithoutAction;
     await close(reason: 'stale_heartbeat');
-    onError(TimeoutException('控制板回执 ${stale}s 未更新', const Duration(seconds: 45)));
+    onError(
+        TimeoutException('控制板回执 ${stale}s 未更新', const Duration(seconds: 45)));
   }
 
   Future<void> close({String reason = 'explicit', Object? error}) async {
