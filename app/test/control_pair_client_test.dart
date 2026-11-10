@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:pcflash/control_client.dart';
+import 'package:pcflash/controller_pairing_store.dart';
+import 'package:pcflash/diagnostics.dart';
 import 'package:pcflash/ble_ota_service.dart';
 import 'package:pcflash/board_info.dart';
 
@@ -64,6 +66,31 @@ class RenewalBoard extends BleOtaService {
 }
 
 void main() {
+  test('restore verifies a saved grant before it can be reused', () async {
+    final saved = ControllerPairing('t' * 43, 'test-board',
+        DateTime.now().add(const Duration(minutes: 4)));
+    for (final status in [200, 403]) {
+      var requests = 0;
+      final client = ControlClient(client: MockClient((request) async {
+        requests++;
+        expect(request.url.path, endsWith('/pair-renew'));
+        expect(request.headers['Authorization'], 'Bearer ${saved.ticket}');
+        return http.Response(jsonEncode(grant()), status);
+      }));
+      if (status == 200) {
+        await client.restorePairing(saved);
+        expect(client.restorablePairing!.expires.isAfter(saved.expires), isTrue);
+      } else {
+        await expectLater(client.restorePairing(saved),
+            throwsA(isA<ControlHttpFailure>()));
+        expect(client.authorized, isFalse);
+        expect(client.restorablePairing, isNull);
+      }
+      expect(requests, 1);
+      await client.shutdown();
+    }
+  });
+
   test('pair grants command-only capability and sends bearer for commands',
       () async {
     final paths = <String>[];

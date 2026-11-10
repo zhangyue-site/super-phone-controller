@@ -63,6 +63,18 @@ class MainActivity: FlutterActivity() {
    when(call.method) {
     "diagnosticEvent" -> { SafeDiagnostics.record(call.arguments as? Map<*,*> ?: emptyMap<Any,Any>());result.success(null) }
     "diagnostics" -> result.success(SafeDiagnostics.read())
+    "readControllerPairing", "saveControllerPairing", "clearControllerPairing" -> {
+     try {
+      val store = ControllerPairingStorage(noBackupFilesDir)
+      when (call.method) {
+       "readControllerPairing" -> result.success(store.read())
+       "saveControllerPairing" -> { store.save(requireNotNull(call.argument<String>("value"))); result.success(null) }
+       else -> { store.clear(); result.success(null) }
+      }
+     } catch (_: Exception) {
+      result.error("pairing_storage", "无法访问本机配对存储", null)
+     }
+    }
     "appearance" -> result.success(getSharedPreferences("appearance",MODE_PRIVATE).getString("mode","system"))
     "setAppearance" -> {
      val mode=call.argument<String>("mode")

@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import ReplayKit
+import Security
 
 final class NativeBridge {
   private weak var controller: FlutterViewController?
@@ -27,6 +28,42 @@ final class NativeBridge {
     self.controller = nil
   }
   private func fail(_ reply: FlutterResult, _ code: String, _ message: String) { reply(FlutterError(code: code, message: message, details: nil)) }
+  private func controllerPairing(_ method: String, _ value: String?, _ reply: FlutterResult) {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: Bundle.main.bundleIdentifier ?? "pcflash",
+      kSecAttrAccount as String: "controller-pairing-v1",
+    ]
+    var status: OSStatus
+    switch method {
+    case "readControllerPairing":
+      var options = query
+      options[kSecReturnData as String] = true
+      var item: CFTypeRef?
+      status = SecItemCopyMatching(options as CFDictionary, &item)
+      if status == errSecSuccess || status == errSecItemNotFound {
+        reply((item as? Data).flatMap { String(data: $0, encoding: .utf8) })
+        return
+      }
+    case "saveControllerPairing":
+      guard let value, let data = value.data(using: .utf8), data.count <= 1024 else {
+        fail(reply, "pairing_storage", "本机配对格式无效")
+        return
+      }
+      let attrs: [String: Any] = [kSecValueData as String: data,
+        kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+      status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
+      if status == errSecItemNotFound {
+        status = SecItemAdd(query.merging(attrs) { _, new in new } as CFDictionary, nil)
+      }
+    default:
+      status = SecItemDelete(query as CFDictionary)
+      if status == errSecItemNotFound { status = errSecSuccess }
+    }
+    if status == errSecSuccess { reply(nil) }
+    else { fail(reply, "pairing_storage", "无法访问本机配对存储") }
+  }
+
   private func handle(_ channel: String, _ call: FlutterMethodCall, _ reply: @escaping FlutterResult) {
     let args = call.arguments as? [String: Any] ?? [:]
     if channel == "usb" {
@@ -35,6 +72,8 @@ final class NativeBridge {
     }
     if channel == "app" {
       switch call.method {
+      case "readControllerPairing", "saveControllerPairing", "clearControllerPairing":
+        controllerPairing(call.method, args["value"] as? String, reply)
       case "appearance": reply(UserDefaults.standard.string(forKey: "appearance") ?? "system")
       case "setAppearance":
         guard let mode = args["mode"] as? String, ["system", "light", "dark"].contains(mode) else { fail(reply,"invalid_mode","主题设置无效"); return }

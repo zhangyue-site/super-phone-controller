@@ -4,6 +4,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'controller_pair_screen.dart';
+import 'controller_pairing_store.dart';
+import 'control_client.dart';
+import 'diagnostics.dart';
+import 'control_screen.dart';
 import 'device_screen.dart';
 import 'role_home.dart';
 import 'theme.dart';
@@ -92,6 +96,7 @@ class _RoleRouter extends StatefulWidget {
 
 class _RoleRouterState extends State<_RoleRouter> {
   bool _selected = false, _sharing = false;
+  int _routeRevision = 0;
   Timer? _sharingTimer;
   @override
   void initState() {
@@ -135,19 +140,49 @@ class _RoleRouterState extends State<_RoleRouter> {
   }
 
   Future<void> _checkAttachedTarget() async {
+    final revision = _routeRevision;
     try {
       final attachment = await UsbLaunch.snapshot();
-      if (mounted && !_selected && attachment != null) _openTarget();
+      if (!mounted || _selected || revision != _routeRevision) return;
+      if (attachment != null) {
+        _openTarget();
+        return;
+      }
     } catch (_) {
-      /* Role selection remains available when USB is unavailable. */
+      // Role selection remains available when USB is unavailable.
     }
+    final pairing = await ControllerPairingStore.read();
+    if (pairing == null || !mounted || _selected || revision != _routeRevision) {
+      return;
+    }
+    final client = ControlClient();
+    try {
+      await client.restorePairing(pairing);
+    } on ControlHttpFailure catch (error) {
+      client.close();
+      if (error.status == 403 && mounted && revision == _routeRevision) {
+        await ControllerPairingStore.clear();
+      }
+      return;
+    } catch (_) {
+      client.close();
+      return;
+    }
+    if (!mounted || _selected || revision != _routeRevision) {
+      client.close();
+      return;
+    }
+    await _open(ControlScreen(client: client),
+        onExit: ControllerPairingStore.clear);
   }
 
-  Future<void> _open(Widget screen) async {
+  Future<void> _open(Widget screen, {Future<void> Function()? onExit}) async {
     if (_selected) return;
     _selected = true;
+    _routeRevision++;
     await Navigator.of(context)
         .push(MaterialPageRoute<void>(builder: (_) => screen));
+    await onExit?.call();
     if (mounted) {
       _selected = false;
       await _refreshSharing();

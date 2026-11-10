@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'control_client.dart';
+import 'controller_pairing_store.dart';
 import 'controller_gateway_screen.dart';
 import 'control_screen.dart';
 
@@ -71,6 +72,7 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
           builder: (_) =>
               widget.connectedBuilder?.call(client) ??
               ControlScreen(client: client)));
+      await ControllerPairingStore.clear();
     } catch (_) {
       client.close();
       if (mounted && generation == _generation) {
