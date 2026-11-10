@@ -1,7 +1,6 @@
 import Flutter
 import UIKit
 import ReplayKit
-import Security
 
 final class NativeBridge {
   private weak var controller: FlutterViewController?
@@ -29,39 +28,40 @@ final class NativeBridge {
   }
   private func fail(_ reply: FlutterResult, _ code: String, _ message: String) { reply(FlutterError(code: code, message: message, details: nil)) }
   private func controllerPairing(_ method: String, _ value: String?, _ reply: FlutterResult) {
-    let query: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: Bundle.main.bundleIdentifier ?? "pcflash",
-      kSecAttrAccount as String: "controller-pairing-v1",
-    ]
-    var status: OSStatus
-    switch method {
-    case "readControllerPairing":
-      var options = query
-      options[kSecReturnData as String] = true
-      var item: CFTypeRef?
-      status = SecItemCopyMatching(options as CFDictionary, &item)
-      if status == errSecSuccess || status == errSecItemNotFound {
-        reply((item as? Data).flatMap { String(data: $0, encoding: .utf8) })
-        return
+    do {
+      let files = FileManager.default
+      let support = try files.url(for: .applicationSupportDirectory, in: .userDomainMask,
+        appropriateFor: nil, create: true)
+      var directory = support.appendingPathComponent("ControllerPairing", isDirectory: true)
+      let record = directory.appendingPathComponent("v1")
+      switch method {
+      case "readControllerPairing":
+        do {
+          let data = try Data(contentsOf: record)
+          reply(data.count <= 1024 ? String(data: data, encoding: .utf8) : nil)
+        } catch CocoaError.fileReadNoSuchFile {
+          reply(nil)
+        }
+      case "saveControllerPairing":
+        guard let value, let data = value.data(using: .utf8), data.count <= 1024 else {
+          fail(reply, "pairing_storage", "本机配对格式无效")
+          return
+        }
+        try files.createDirectory(at: directory, withIntermediateDirectories: true)
+        var resources = URLResourceValues()
+        resources.isExcludedFromBackup = true
+        try directory.setResourceValues(resources)
+        try data.write(to: record, options: [.atomic, .completeFileProtection])
+        reply(nil)
+      default:
+        do {
+          try files.removeItem(at: record)
+        } catch CocoaError.fileNoSuchFile {}
+        reply(nil)
       }
-    case "saveControllerPairing":
-      guard let value, let data = value.data(using: .utf8), data.count <= 1024 else {
-        fail(reply, "pairing_storage", "本机配对格式无效")
-        return
-      }
-      let attrs: [String: Any] = [kSecValueData as String: data,
-        kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
-      status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
-      if status == errSecItemNotFound {
-        status = SecItemAdd(query.merging(attrs) { _, new in new } as CFDictionary, nil)
-      }
-    default:
-      status = SecItemDelete(query as CFDictionary)
-      if status == errSecItemNotFound { status = errSecSuccess }
+    } catch {
+      fail(reply, "pairing_storage", "无法访问本机配对存储")
     }
-    if status == errSecSuccess { reply(nil) }
-    else { fail(reply, "pairing_storage", "无法访问本机配对存储") }
   }
 
   private func handle(_ channel: String, _ call: FlutterMethodCall, _ reply: @escaping FlutterResult) {
