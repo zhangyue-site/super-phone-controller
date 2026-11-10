@@ -80,10 +80,15 @@ class _LocalAutoLoopCardState extends State<LocalAutoLoopCard> {
       if (mounted) {
         setState(() {
           if (status != null) _ocrStatus = status;
-          _ocrActive = meta?['source'] == 'ocr' && meta?['active'] == true;
-          _received = (meta?['ocrReceived'] as int?) ?? 0;
-          _recognized = (meta?['ocrCount'] as int?) ?? 0;
-          _ocrPreview = (meta?['ocrPreview'] as String?) ?? '';
+          final currentIsOcr = meta?['source'] == 'ocr';
+          _ocrActive = currentIsOcr && meta?['active'] == true;
+          final legacyOcr = currentIsOcr ? meta : null;
+          _received =
+              ((meta?['ocrReceived'] ?? legacyOcr?['received']) as int?) ?? 0;
+          _recognized =
+              ((meta?['ocrCount'] ?? legacyOcr?['count']) as int?) ?? 0;
+          _ocrPreview =
+              ((meta?['ocrPreview'] ?? legacyOcr?['preview']) as String?) ?? '';
         });
         final epoch = meta?['autoEpoch'];
         if (epoch is int && !_busy && !_ocrPending && !_ocrActive) {
