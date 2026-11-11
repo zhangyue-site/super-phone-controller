@@ -379,7 +379,7 @@ class ScreenShareService: Service() {
      if(running && ticket==requestTicket){
       RecognitionEvidence.acknowledge(data.optJSONObject("recognitionReceipt"))
       RecognitionEvidence.acknowledgeLocal(data.optJSONArray("localResultsReceipt"))
-      supportsLocalResults=data.optInt("localResultsProtocol")==1;taskStatus=data.toString();supportsAccessibilityFrames=data.optInt("accessibilityProtocol")==1
+      supportsLocalResults=data.optInt("localResultsProtocol")==1;taskStatus=data.toString();supportsAccessibilityFrames=data.optInt("accessibilityProtocol")==1;supportsOcrFrames=data.optInt("ocrProtocol")==1
       captureState=data.optString("state").let{if(it in setOf("idle","thinking","running","planning","plan","verifying","capturing","done","error","stopped"))it else "unknown"}
       statusOkAt=SystemClock.elapsedRealtime();hasStatusBarrier=Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
       frameDemand=data.optString("state") in setOf("thinking","running","planning","plan","verifying","capturing") && Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
@@ -411,6 +411,8 @@ class ScreenShareService: Service() {
   bytes
  }
 
+ private val phoneFrameOcr=PhoneFrameOcr()
+ @Volatile private var supportsOcrFrames=false
  @Volatile private var supportsAccessibilityFrames=false
  @Volatile private var supportsLocalResults=false
  private inner class FrameTask(private val bitmap: Bitmap,private val capturedAt: Long,
@@ -436,12 +438,13 @@ class ScreenShareService: Service() {
     }
     if(bytes.size>524288){endCapture();status="画面过大，请降低屏幕分辨率后重新共享";stopSelf();return}
     val tree=if(supportsAccessibilityFrames && barrier.any {it!='0'})AccessibilityAssistService.snapshot(capturedAt,initialWidth,initialHeight,uiEpoch) else null
-    uploadFrame(bytes,capturedAt,requestTicket,tree)
+    val ocr=if(supportsOcrFrames && frameDemand && barrier.any{it!='0'})phoneFrameOcr.scan(scaled!!,bytes,capturedAt) else null
+    uploadFrame(bytes,capturedAt,requestTicket,tree,ocr)
    } catch(_: Exception) {if(running && ticket==requestTicket)status="画面编码失败，正在重试"}
    finally {if(scaled!==cropped)scaled?.recycle();if(cropped!==bitmap)cropped?.recycle();bitmap.recycle()}
   }
  }
- private fun uploadFrame(bytes: ByteArray,capturedAt: Long,requestTicket: String,tree: JSONObject?) {
+ private fun uploadFrame(bytes: ByteArray,capturedAt: Long,requestTicket: String,tree: JSONObject?,ocr: JSONObject?) {
   val requestBarrier: String
   val requestSequence: Int
   synchronized(this) {
@@ -451,8 +454,12 @@ class ScreenShareService: Service() {
   }
   // Negotiate optional metadata via /status; old servers continue receiving JPEG.
   // No second request can mix a UI tree with a different frame or barrier.
-  val body=if(tree==null)bytes else JSONObject().put("jpegBase64",android.util.Base64.encodeToString(bytes,android.util.Base64.NO_WRAP)).put("accessibility",tree).toString().toByteArray(Charsets.UTF_8)
-  val contentType=if(tree==null)"image/jpeg" else "application/vnd.pcflash.screen+json"
+  val envelope=if(tree==null && ocr==null)null else JSONObject().put("jpegBase64",android.util.Base64.encodeToString(bytes,android.util.Base64.NO_WRAP)).also{
+   if(tree!=null)it.put("accessibility",tree)
+   if(ocr!=null)it.put("ocr",ocr)
+  }
+  val body=envelope?.toString()?.toByteArray(Charsets.UTF_8)?:bytes
+  val contentType=if(envelope==null)"image/jpeg" else "application/vnd.pcflash.screen+json"
   val uploadStarted=SystemClock.elapsedRealtime()
   var uploadOutcome=0
   try {
@@ -565,6 +572,7 @@ class ScreenShareService: Service() {
   super.onTaskRemoved(rootIntent)
  }
  override fun onDestroy() {
+  phoneFrameOcr.close()
   synchronized(encodedLock) {
    encodedEpoch=-1L
    encodedFrame?.recycle();encodedFrame=null;encodedBytes=null
