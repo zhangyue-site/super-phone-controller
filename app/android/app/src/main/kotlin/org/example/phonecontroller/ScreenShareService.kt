@@ -387,7 +387,7 @@ class ScreenShareService: Service() {
     } else if(CaptureRecoveryGuard.authorizationFailure(statusHttp)) {statusErrors.incrementAndGet();pauseCloud(requestTicket)}
     else if(running){statusErrors.incrementAndGet();status="云端暂不可用，保留共享并重试"}
    } catch(_: Exception) {statusErrors.incrementAndGet();if(running)taskStatus=""} finally {c?.disconnect();statusConnection=null}
-   if(running)statusHandler?.postDelayed(this,2000)
+   if(running)statusHandler?.postDelayed(this,if(hasDemand(SystemClock.elapsedRealtime()))250L else 2000L)
   }
  }
  private val encodedLock=Any()
