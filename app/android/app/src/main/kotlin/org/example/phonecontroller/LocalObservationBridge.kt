@@ -40,6 +40,7 @@ class LocalObservationBridge {
   external=if(value!=null && value.optString("barrier")==barrier && value.optInt("width")==w && value.optInt("height")==h && value.optInt("requiredFrames")==10)value else null
   tracker.configure(scope,width,height,targets())
  }
+ @Synchronized fun wantsFastSamples(currentScope: String): Boolean = scope==currentScope && external!=null
  @Synchronized fun sample(value: String,seq: Long,capturedAt: Long,pixels: ByteBuffer,sourceW: Int,sourceH: Int,pixelStride: Int,rowStride: Int,w: Int,h: Int){
   ensureScope(value,w,h)
   tracker.observe(value,seq,capturedAt,pixels,sourceW,sourceH,pixelStride,rowStride)

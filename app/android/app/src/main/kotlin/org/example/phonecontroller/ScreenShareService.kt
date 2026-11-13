@@ -122,7 +122,8 @@ class ScreenShareService: Service() {
   synchronized(this) {
    if(!running || source!==reader)return
    val now=SystemClock.elapsedRealtime();sourceCallbacks.incrementAndGet();lastCallbackAt=now
-   val wait=(last+(if(now<fastFramesUntil)100L else 800L)-now).coerceIn(0L,800L)
+   val localFast=supportsLocalObservation && frameDemand && localObservation.wantsFastSamples(observationScope())
+   val wait=(last+(if(now<fastFramesUntil || localFast)100L else 800L)-now).coerceIn(0L,800L)
    if(wait>0)deferredCallbacks.incrementAndGet()
    // Leave the latest real Image queued until the absolute throttle deadline.
    // New callbacks cannot postpone that deadline or discard the final image.
