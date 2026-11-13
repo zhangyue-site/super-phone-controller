@@ -78,9 +78,19 @@ jobs:
           python3 -m unittest discover -s ../tools -p test_capture_lifecycle_contract.py
           python3 -m unittest discover -s ../tools -p test_app_build_workflow.py
 
+      - name: Cache pinned public model
+        uses: actions/cache@v4
+        with:
+          path: app/assets/bt_v10_int8.onnx
+          key: ${{ runner.os }}-controller-model-45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2
+
       - name: Restore pinned bundled model
         run: |
           set -euo pipefail
+          if [ -f assets/bt_v10_int8.onnx ]; then
+            python3 -c 'import hashlib; from pathlib import Path; assert hashlib.sha256(Path("assets/bt_v10_int8.onnx").read_bytes()).hexdigest()=="45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2"'
+            exit 0
+          fi
           apk=$(mktemp "$RUNNER_TEMP/model-source.XXXXXX")
           model=$(mktemp "$RUNNER_TEMP/bundled-model.XXXXXX")
           trap 'rm -f "$apk" "$model"' EXIT
@@ -104,7 +114,7 @@ jobs:
       - name: Native capture and USB session regressions
         run: |
           mkdir -p "$RUNNER_TEMP/capture-jvm"
-          javac -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/{CaptureStateHeaders,CaptureRecoveryGuard,UsbSessionLease,UsbModeWindow,DiagnosticSchema,UsbInterfaceClaim,UsbControllerProfile,LocalRegionStability}.java android/app/src/test/java/org/example/phonecontroller/{CaptureStateHeadersTest,CaptureRecoveryGuardTest,UsbModeWindowTest,DiagnosticSchemaTest,UsbInterfaceClaimTest,UsbControllerProfileTest,LocalRegionStabilityTest}.java
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/{CaptureStateHeaders,CaptureRecoveryGuard,UsbSessionLease,UsbModeWindow,DiagnosticSchema,UsbInterfaceClaim,UsbControllerProfile,LocalRegionStability}.java android/app/src/test/java/org/example/phonecontroller/{CaptureStateHeadersTest,CaptureRecoveryGuardTest,UsbModeWindowTest,DiagnosticSchemaTest,UsbInterfaceClaimTest,UsbControllerProfileTest,LocalRegionStabilityTest}.java
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.CaptureStateHeadersTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.CaptureRecoveryGuardTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.UsbModeWindowTest
@@ -112,6 +122,11 @@ jobs:
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.UsbInterfaceClaimTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.UsbControllerProfileTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.LocalRegionStabilityTest
+
+      - name: Source burst boundary regressions (experiment disabled in review APK)
+        run: |
+          javac -encoding UTF-8 --release 8 -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/SourceBurst.java android/app/src/test/java/org/example/phonecontroller/SourceBurstTest.java
+          java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.SourceBurstTest
 
       - name: Build signed APK
         env:
@@ -126,6 +141,7 @@ jobs:
           BUILD_NAME: ${{ inputs.build_name }}
           BUILD_NUMBER: ${{ inputs.build_number }}
           PCFLASH_REMOTE_DIAGNOSTICS: '1'
+          PCFLASH_SOURCE_BURST: '0'
         run: |
           set -euo pipefail
           test -n "$PRIVATE_ARTIFACT_PASSWORD" || { echo "Private artifact encryption is required"; exit 1; }
@@ -179,9 +195,19 @@ jobs:
           flutter-version: '3.44.0'
           channel: stable
           cache: true
+      - name: Cache pinned public model
+        uses: actions/cache@v4
+        with:
+          path: app/assets/bt_v10_int8.onnx
+          key: ${{ runner.os }}-controller-model-45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2
+
       - name: Restore pinned bundled model
         run: |
           set -euo pipefail
+          if [ -f assets/bt_v10_int8.onnx ]; then
+            python3 -c 'import hashlib; from pathlib import Path; assert hashlib.sha256(Path("assets/bt_v10_int8.onnx").read_bytes()).hexdigest()=="45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2"'
+            exit 0
+          fi
           apk=$(mktemp "$RUNNER_TEMP/model-source.XXXXXX")
           model=$(mktemp "$RUNNER_TEMP/bundled-model.XXXXXX")
           trap 'rm -f "$apk" "$model"' EXIT

@@ -38,4 +38,26 @@ void main() {
     expect(find.text('结果已核验'), findsNothing);
     expect(find.textContaining('已发动作结果仍需确认'), findsOneWidget);
   });
+  testWidgets(
+      'returned verification phase is visible without exposing wire value',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: TargetProgressCard(
+                status: const ScreenTaskStatus(
+                    capture: '共享中',
+                    cloudTask: CloudTaskProgress(
+                        taskId: 't',
+                        source: 'android-app',
+                        state: 'running',
+                        stage: 'verification',
+                        description: '',
+                        verified: false,
+                        terminal: false)),
+                connected: true,
+                now: DateTime.utc(2026)))));
+    expect(find.text('当前阶段：正在核验新画面'), findsOneWidget);
+    expect(find.textContaining('verification'), findsNothing);
+    expect(find.text('结果已核验'), findsNothing);
+  });
 }

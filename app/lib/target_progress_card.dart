@@ -51,7 +51,7 @@ class TargetProgressCard extends StatelessWidget {
               if (task?.stage.isNotEmpty == true)
                 Padding(
                     padding: const EdgeInsets.only(top: 8),
-                    child: Text('当前阶段：${task!.label}')),
+                    child: Text('当前阶段：${task!.phaseLabel}')),
               if (task == null && status.state.isNotEmpty)
                 Padding(
                     padding: const EdgeInsets.only(top: 12),

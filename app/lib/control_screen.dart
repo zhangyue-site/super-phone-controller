@@ -8,6 +8,7 @@ import 'controller_model_status.dart';
 import 'product_widgets.dart';
 import 'product_settings.dart';
 import 'controller_task_context.dart';
+import 'task_frame_preview.dart';
 
 class ControlScreen extends StatefulWidget {
   final BleOtaService? service;
@@ -439,6 +440,7 @@ class _ControlScreenState extends State<ControlScreen>
   @override
   Widget build(BuildContext context) {
     final state = _task['state'];
+    final previewTaskId = _task['task_id'];
     final labels = {
       'pending': '等待你的确认',
       'queued': '已确认，等待控制板',
@@ -509,6 +511,27 @@ class _ControlScreenState extends State<ControlScreen>
                                 connected:
                                     _client.authorized && _error == null),
                             const Divider(),
+                            if (_client.isPaired &&
+                                _client.authorized &&
+                                state == 'running' &&
+                                !_visionStopped &&
+                                !_stopping)
+                              TaskFramePreview(
+                                source: _client,
+                                taskId: _task['task_id'] as String? ?? '',
+                                sourceLabel: '当前已绑定被控手机',
+                                isCurrent: () =>
+                                    mounted &&
+                                    _foreground &&
+                                    _visible &&
+                                    !_stopping &&
+                                    !_visionStopped &&
+                                    _client.authorized &&
+                                    _task['state'] == 'running' &&
+                                    _task['task_id'] == previewTaskId,
+                              ),
+                            if (state == 'done')
+                              const Text('结果由服务核验，本端未提供关联结果图'),
                           ]))),
             const Text('发给龙虾',
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),

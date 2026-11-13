@@ -47,6 +47,8 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   bool _pointerReady = false, _lost = false, _externalGateway = false;
   bool _boardVerified = false;
   int _generation = 0;
+  int? _captureStartErrorGeneration;
+  String? _captureStartErrorMessage;
   String _capture = '等待屏幕共享授权', _relay = '尚未连接';
   String? _error, _code;
   final _checkErrors = TargetCheckErrors();
@@ -116,8 +118,15 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
           await TargetSession.maintainCapture(widget.attachment,
               clock: widget.captureClock, renew: widget.renewCapture);
           if (_current(generation)) {
-            setState(() =>
-                _checkErrors.succeed(TargetCheckPhase.capture, generation));
+            setState(() {
+              _checkErrors.succeed(TargetCheckPhase.capture, generation);
+              if (_captureStartErrorGeneration == generation &&
+                  _error == _captureStartErrorMessage) {
+                _error = null;
+                _captureStartErrorGeneration = null;
+                _captureStartErrorMessage = null;
+              }
+            });
           }
         } catch (e) {
           if (_current(generation)) {
@@ -315,6 +324,9 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     _manuallyStopped.remove(widget.attachment.serial);
     _stopNotes.remove(widget.attachment.session);
     final generation = ++_generation;
+    _captureStartErrorGeneration = null;
+    _captureStartErrorMessage = null;
+    var captureStage = false;
     _checkErrors.reset(generation);
     setState(() {
       _busy = true;
@@ -330,6 +342,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       final identity = await _usbIdentity();
       if (!_current(generation)) return;
       setState(() => _boardVerified = true);
+      captureStage = true;
       var freshCapture = false;
       if (!await ScreenShare.isActive()) {
         if (!allowConsent) throw StateError('屏幕共享已结束，请主动开始共享');
@@ -355,6 +368,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
             clock: widget.captureClock, renew: widget.renewCapture);
         if (!_current(generation)) return;
       }
+      captureStage = false;
       setState(() {
         _capture = '正在共享整个屏幕';
         _relay = '正在连接云端中继';
@@ -393,7 +407,13 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
               : e is TimeoutException
                   ? 2
                   : 3);
-      if (_current(generation)) setState(() => _error = '连接未完成：$e');
+      if (_current(generation)) {
+        setState(() {
+          _error = '连接未完成：$e';
+          _captureStartErrorGeneration = captureStage ? generation : null;
+          _captureStartErrorMessage = captureStage ? _error : null;
+        });
+      }
     } finally {
       if (mounted && generation == _generation) setState(() => _busy = false);
     }

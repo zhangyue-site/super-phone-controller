@@ -15,3 +15,21 @@ This is a review candidate, not a production rollout.
 App and backend changes form one candidate. New pairing/progress endpoints are not active until the backend is separately approved and deployed. Configure EPAPER_PAIRING_STATE to a private persistent SQLite path. Never publish the database or runtime credentials. Existing capture, HID permissions, firmware and STOP recovery mechanisms remain authoritative.
 
 A passing build is not device acceptance. No capture authorization, USB/HID/BLE action, phone installation, service restart, firmware update, release publication or update-pointer activation is performed by this change.
+
+## Sampling experiment integration
+
+The Android SourceBurst implementation and lifecycle cleanup from source revisions
+6e48598 and be86fb1 are retained, including their standalone boundary regression.
+PCFLASH_SOURCE_BURST is explicitly 0 in this UI review build. This does not
+activate the experiment or claim device acceptance. Existing observation
+freshness, exact scope/frame association and HID permissions remain unchanged.
+The separate sampling candidate used build number 70; the UI candidate uses 71.
+
+## Observation preview and result evidence
+
+A paired running task can request its current frame explicitly. The client
+validates task identity, sequence/barrier, size and JPEG SHA-256; stale async
+responses are discarded when the task changes or stops. This is a one-shot
+observation, not a final result image. No screenshot polling or phone input is
+introduced. The service does not yet expose an immutable final-result frame;
+completion therefore does not pretend the last preview is verification evidence.

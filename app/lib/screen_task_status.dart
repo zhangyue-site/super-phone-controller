@@ -137,11 +137,27 @@ class CloudTaskProgress {
   }
 
   bool get resultVerified =>
+      terminal &&
       verified &&
       const {'done', 'succeeded', 'success', 'completed', 'verified'}
           .contains(state);
   String get label =>
-      ScreenTaskStatus(capture: '', state: state, verified: verified).taskLabel;
+      ScreenTaskStatus(capture: '', state: state, verified: resultVerified)
+          .taskLabel;
+  String get phaseLabel => switch (stage) {
+        'execution' || 'running' => '正在操作手机',
+        'verification' || 'verifying' => '正在核验新画面',
+        'confirmation' => '等待任务确认',
+        'queue' || 'queued' => '等待执行',
+        'stopping' => '正在请求停止',
+        'understanding' || 'thinking' => '正在理解任务',
+        'planning' => '正在规划任务',
+        'local-recognition' || 'local_recognition' => '正在本地识别',
+        'local-loop' || 'local_loop' => '正在本地循环处理',
+        'ai-fallback' || 'ai_fallback' => '正在请求 AI 协助',
+        'recovery' || 'recovering' => '正在检查恢复条件',
+        _ => '阶段待更新',
+      };
   String get sourceLabel => switch (source) {
         'controller' || 'android-app' => '控制手机',
         'telegram' => 'Telegram',

@@ -44,6 +44,7 @@ android {
 
     buildFeatures { buildConfig = true }
     defaultConfig {
+        buildConfigField "boolean", "SOURCE_BURST_EXPERIMENT", (System.getenv("PCFLASH_SOURCE_BURST") == "1").toString()
         buildConfigField "boolean", "REMOTE_WORKBENCH_DIAGNOSTICS", (System.getenv("PCFLASH_REMOTE_DIAGNOSTICS") == "1").toString()
         buildConfigField "String", "CONTROLLER_BASE_URL", groovy.json.JsonOutput.toJson(configuredBase)
         buildConfigField "String", "DOWNLOAD_URL", groovy.json.JsonOutput.toJson(configuredDownload)
