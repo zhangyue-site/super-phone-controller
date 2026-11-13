@@ -382,6 +382,10 @@ class ScreenShareService: Service() {
       supportsLocalResults=data.optInt("localResultsProtocol")==1;taskStatus=data.toString();supportsAccessibilityFrames=data.optInt("accessibilityProtocol")==1;supportsOcrFrames=data.optInt("ocrProtocol")==1
       captureState=data.optString("state").let{if(it in setOf("idle","thinking","running","planning","plan","verifying","capturing","done","error","stopped"))it else "unknown"}
       statusOkAt=SystemClock.elapsedRealtime();hasStatusBarrier=Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
+      supportsLocalObservation=data.optInt("localObservationProtocol")==1
+      val observedBarrier=data.optString("barrier")
+      if(supportsLocalObservation && observedBarrier==barrier){val shot=screenshotSize();localObservation.request(data.optJSONObject("localObservationRequest"),observationScope(),shot.first,shot.second,barrier)}
+      if(!supportsLocalObservation)localObservation.clear()
       frameDemand=data.optString("state") in setOf("thinking","running","planning","plan","verifying","capturing") && Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
       demandAt=SystemClock.elapsedRealtime()}
     } else if(CaptureRecoveryGuard.authorizationFailure(statusHttp)) {statusErrors.incrementAndGet();pauseCloud(requestTicket)}
@@ -412,11 +416,15 @@ class ScreenShareService: Service() {
  }
 
  private val phoneFrameOcr=PhoneFrameOcr()
+ private val localObservation=LocalObservationBridge()
+ @Volatile private var supportsLocalObservation=false
+ private fun observationScope()="$captureGeneration:$barrier"
+ private fun screenshotSize(): Pair<Int,Int>{val f=minOf(1.0,720.0/initialWidth,1280.0/initialHeight);return Pair((initialWidth*f).toInt().coerceAtLeast(1),(initialHeight*f).toInt().coerceAtLeast(1))}
  @Volatile private var supportsOcrFrames=false
  @Volatile private var supportsAccessibilityFrames=false
  @Volatile private var supportsLocalResults=false
  private inner class FrameTask(private val bitmap: Bitmap,private val capturedAt: Long,
-  private val requestTicket: String,private val uiEpoch: Long,private val localEpoch: Long): Runnable {
+  private val requestTicket: String,private val uiEpoch: Long,private val localEpoch: Long,private val frameObservationScope: String): Runnable {
   fun discard() { bitmap.recycle() }
   override fun run() {
    var cropped: Bitmap?=null
@@ -439,6 +447,9 @@ class ScreenShareService: Service() {
     if(bytes.size>524288){endCapture();status="画面过大，请降低屏幕分辨率后重新共享";stopSelf();return}
     val tree=if(supportsAccessibilityFrames && barrier.any {it!='0'})AccessibilityAssistService.snapshot(capturedAt,initialWidth,initialHeight,uiEpoch) else null
     val ocr=if(supportsOcrFrames && frameDemand && barrier.any{it!='0'})phoneFrameOcr.scan(scaled!!,bytes,capturedAt) else null
+    if(ocr!=null && supportsLocalObservation && frameObservationScope==observationScope()){
+     localObservation.report(ocr,capturedAt,frameObservationScope)?.let{ocr.put("v",2).put("local",it)}
+    }
     uploadFrame(bytes,capturedAt,requestTicket,tree,ocr)
    } catch(_: Exception) {if(running && ticket==requestTicket)status="画面编码失败，正在重试"}
    finally {if(scaled!==cropped)scaled?.recycle();if(cropped!==bitmap)cropped?.recycle();bitmap.recycle()}
@@ -514,9 +525,14 @@ class ScreenShareService: Service() {
      val requestTicket=ticket
      last=now
      val plane=image.planes[0];val padding=plane.rowStride-plane.pixelStride*image.width
+     val frameObservationScope=observationScope()
+     if(supportsLocalObservation && frameDemand && barrier.any{it!='0'}){
+      val shot=screenshotSize()
+      try{localObservation.sample(frameObservationScope,eligibleFrames.get(),image.timestamp,plane.buffer.duplicate(),image.width,image.height,plane.pixelStride,plane.rowStride,shot.first,shot.second)}catch(_: Exception){localObservation.clear()}
+     }else localObservation.clear()
      bitmap=Bitmap.createBitmap(image.width+padding/plane.pixelStride,image.height,Bitmap.Config.ARGB_8888)
      bitmap!!.copyPixelsFromBuffer(plane.buffer)
-     frameWorker.execute(FrameTask(bitmap!!,image.timestamp,requestTicket,AccessibilityAssistService.epoch(),captureGeneration))
+     frameWorker.execute(FrameTask(bitmap!!,image.timestamp,requestTicket,AccessibilityAssistService.epoch(),captureGeneration,frameObservationScope))
      bitmap=null // Ownership moved to the bounded uploader; rejected frames are recycled.
 
     } catch(e: Exception) {if(running)status="画面上传失败，正在重试"}
@@ -572,7 +588,7 @@ class ScreenShareService: Service() {
   super.onTaskRemoved(rootIntent)
  }
  override fun onDestroy() {
-  phoneFrameOcr.close()
+  phoneFrameOcr.close();localObservation.clear()
   synchronized(encodedLock) {
    encodedEpoch=-1L
    encodedFrame?.recycle();encodedFrame=null;encodedBytes=null
