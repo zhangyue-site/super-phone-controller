@@ -363,7 +363,7 @@ class ScreenShareService: Service() {
   SafeDiagnostics.record(mapOf("event" to "capture_pause","phase" to "capture","reason" to "cloud_auth","generation" to recovery.generation()))
   autoStep="done";autoRun="";RecognitionEvidence.clearResults();recovery.pause();latestLoopFrame=null;taskStatus="";frameDemand=false;status="云端授权暂不可用，保留屏幕共享并自动恢复连接"
  }
- @Synchronized private fun endCapture() { handler?.removeCallbacks(burstTick);if(burstPrimary!=null || burstSecondary!=null){display?.release();display=null;closeBurstReaders()};RecognitionEvidence.finish(localRecognitionId,"capture_changed");localRecognitionId="";localRecognitionUntil=0L;captureGeneration++;RecognitionEvidence.clearResults();recovery.stop();running=false;active=false;latestLoopFrame=null;frameDemand=false }
+ @Synchronized private fun endCapture() { handler?.removeCallbacks(burstTick);if(burstPrimary!=null || burstSecondary!=null){display?.release();display=null;closeBurstReaders();reader?.close();reader=null};RecognitionEvidence.finish(localRecognitionId,"capture_changed");localRecognitionId="";localRecognitionUntil=0L;captureGeneration++;RecognitionEvidence.clearResults();recovery.stop();running=false;active=false;latestLoopFrame=null;frameDemand=false }
  private fun renewalValid(session: String, capability: String, expectedProjection: MediaProjection?): Boolean =
   current===this && active && running && expectedProjection!=null && projection===expectedProjection &&
   ticket==capability && capability.isNotEmpty() && usbOwnerSession==session &&
