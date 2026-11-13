@@ -84,7 +84,7 @@ jobs:
           apk=$(mktemp "$RUNNER_TEMP/model-source.XXXXXX")
           model=$(mktemp "$RUNNER_TEMP/bundled-model.XXXXXX")
           trap 'rm -f "$apk" "$model"' EXIT
-          curl --fail --silent --show-error --proto '=https' --max-time 180 \
+          curl --fail --silent --show-error --proto '=https' --connect-timeout 30 --retry 2 --retry-delay 2 --max-time 600 \
             https://d.zhangyue.site/apps/phone-controller-flash/releases/1.3.17/phone-controller-flash-1.3.17-vc60.apk -o "$apk"
           echo "263c8120640db90889073a23cfd3e77dd64f5ca068ac23eea27185f5eaa4be13  $apk" | sha256sum -c -
           unzip -p "$apk" assets/flutter_assets/assets/bt_v10_int8.onnx > "$model"
@@ -185,7 +185,7 @@ jobs:
           apk=$(mktemp "$RUNNER_TEMP/model-source.XXXXXX")
           model=$(mktemp "$RUNNER_TEMP/bundled-model.XXXXXX")
           trap 'rm -f "$apk" "$model"' EXIT
-          curl --fail --silent --show-error --proto '=https' --max-time 180 \
+          curl --fail --silent --show-error --proto '=https' --connect-timeout 30 --retry 2 --retry-delay 2 --max-time 600 \
             https://d.zhangyue.site/apps/phone-controller-flash/releases/1.3.17/phone-controller-flash-1.3.17-vc60.apk -o "$apk"
           echo "263c8120640db90889073a23cfd3e77dd64f5ca068ac23eea27185f5eaa4be13  $apk" | shasum -a 256 -c -
           unzip -p "$apk" assets/flutter_assets/assets/bt_v10_int8.onnx > "$model"
