@@ -9,8 +9,47 @@ class AppTheme {
   static ThemeData build() => _theme(Brightness.dark);
 
   static ThemeData _theme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    final background = Color(dark ? 0xFF101925 : 0xFFF3F5F9);
+    final card = Color(dark ? 0xFF1C2939 : 0xFFFFFFFF);
+    final ink = Color(dark ? 0xFFE5EBF5 : 0xFF18263A);
+    final muted = Color(dark ? 0xFFB4C0D1 : 0xFF59677A);
+    final blue = Color(dark ? 0xFFA5C8FF : 0xFF1764D9);
+    final soft = Color(dark ? 0xFF213C60 : 0xFFEAF1FD);
+    final onBlue = Color(dark ? 0xFF142D50 : 0xFFFFFFFF);
     final scheme = ColorScheme.fromSeed(
-        seedColor: const Color(0xFF1764D9), brightness: brightness);
+            seedColor: const Color(0xFF1764D9), brightness: brightness)
+        .copyWith(
+      primary: blue,
+      onPrimary: onBlue,
+      primaryContainer: soft,
+      onPrimaryContainer: ink,
+      secondary: blue,
+      onSecondary: onBlue,
+      secondaryContainer: soft,
+      onSecondaryContainer: ink,
+      tertiary: blue,
+      onTertiary: onBlue,
+      tertiaryContainer: soft,
+      onTertiaryContainer: ink,
+      surface: background,
+      onSurface: ink,
+      onSurfaceVariant: muted,
+      surfaceContainerLowest: background,
+      surfaceContainerLow: card,
+      surfaceContainer: card,
+      surfaceContainerHigh: soft,
+      surfaceContainerHighest: Color(dark ? 0xFF253449 : 0xFFE5EAF2),
+      surfaceBright: card,
+      surfaceDim: background,
+      surfaceTint: Colors.transparent,
+      outline: Color(dark ? 0xFF50627B : 0xFFB7C4D7),
+      outlineVariant: Color(dark ? 0xFF344254 : 0xFFDDE3ED),
+      error: Color(dark ? 0xFFFFB2B8 : 0xFFB32B35),
+      onError: Color(dark ? 0xFF3E242C : 0xFFFFFFFF),
+      errorContainer: Color(dark ? 0xFF3E242C : 0xFFFFF0F0),
+      onErrorContainer: Color(dark ? 0xFFFFC0C7 : 0xFF8F2430),
+    );
     final base = ThemeData(
         useMaterial3: true,
         brightness: brightness,
@@ -31,11 +70,15 @@ class AppTheme {
       filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
               minimumSize: const Size(48, 48),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
               padding:
                   const EdgeInsets.symmetric(horizontal: 20, vertical: 14))),
       outlinedButtonTheme: OutlinedButtonThemeData(
           style: OutlinedButton.styleFrom(
               minimumSize: const Size(48, 48),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
               padding:
                   const EdgeInsets.symmetric(horizontal: 20, vertical: 14))),
       inputDecorationTheme: InputDecorationTheme(

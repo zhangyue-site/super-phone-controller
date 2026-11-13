@@ -602,7 +602,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         for (final message in _checkErrors.messages) ProductError(message),
         TargetProgressCard(
             status: _feedback,
-            connected: connected && _active,
+            connected: (connected || _externalGateway) && _active,
             now: DateTime.now()),
         const Card(
             child: ExpansionTile(

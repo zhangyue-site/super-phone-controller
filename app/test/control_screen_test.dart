@@ -87,6 +87,7 @@ void main() {
     await tester.tap(find.text('发给龙虾，查看计划'));
     await tester.pumpAndSettle();
     expect(operations, ['prepare']);
+    expect(tester.getTopLeft(find.text('等待你的确认')).dy, lessThan(220));
     await tester.tap(find.byTooltip('设备与设置'));
     await tester.pumpAndSettle();
     expect(find.text('停止手机操作'), findsOneWidget);

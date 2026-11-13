@@ -143,7 +143,7 @@ void main() {
     await tester.scrollUntilVisible(find.text('发给龙虾，查看计划'), 150,
         scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text('发给龙虾，查看计划'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('确认执行'), 150,
         scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text('确认执行'));
@@ -169,7 +169,7 @@ void main() {
     await tester.scrollUntilVisible(find.text('发给龙虾，查看计划'), 150,
         scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text('发给龙虾，查看计划'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('确认执行'), 150,
         scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text('确认执行'));
@@ -210,10 +210,10 @@ void main() {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump(const Duration(milliseconds: 700));
     expect(vision.prepares, stoppedPrepares);
-    await tester.scrollUntilVisible(find.text('发给龙虾，查看计划'), -150,
+    await tester.scrollUntilVisible(find.text('发给龙虾，查看计划'), 150,
         scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text('发给龙虾，查看计划'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(vision.prepares, greaterThan(stoppedPrepares));
     await tester.pumpWidget(const SizedBox());
   });

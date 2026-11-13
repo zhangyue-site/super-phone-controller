@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 String productError(Object error) {
   var text = error.toString().replaceFirst(
-      RegExp(r'^(FormatException|Bad state|Unsupported operation):\s*'), '');
+      RegExp(r'(FormatException|StateError|Bad state|Unsupported operation):\s*'), '');
   if (text.contains('usb_window') || text.contains('USB窗口')) {
     return '控制板连接检查暂不可用。画面共享会保留，请稍后重新检查。';
   }
