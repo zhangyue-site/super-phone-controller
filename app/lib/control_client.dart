@@ -105,7 +105,8 @@ class ControlClient implements LocalVisionSource {
   Timer? _healTimer, _healWatch;
   String? _boardRemoteId;
   final Duration Function(int attempt) _healDelay;
-  ControlClient({http.Client? client, Duration Function(int attempt)? healDelay})
+  ControlClient(
+      {http.Client? client, Duration Function(int attempt)? healDelay})
       : _http = client,
         _healDelay = healDelay ?? RelaySelfHeal.delayBefore;
   @override
@@ -514,7 +515,8 @@ class ControlClient implements LocalVisionSource {
         if (_closed || _healing) return;
         _healAttempts = 0;
       });
-      SafeDiagnostics.record('relay_selfheal', phase: 'poll', reason: 'recovered');
+      SafeDiagnostics.record('relay_selfheal',
+          phase: 'poll', reason: 'recovered');
     } catch (error) {
       if (_closed) return;
       _healReason = RelaySelfHeal.reasonText(error);
@@ -561,7 +563,8 @@ class ControlClient implements LocalVisionSource {
       final expires = _expires;
       if (expires == null || DateTime.now().isBefore(expires)) return;
       _stopHealWatch();
-      _beginSelfHeal(ControlHttpFailure(401, 'ticket expired', relayDenial: true));
+      _beginSelfHeal(
+          ControlHttpFailure(401, 'ticket expired', relayDenial: true));
     });
   }
 
@@ -622,8 +625,8 @@ class ControlClient implements LocalVisionSource {
       throw const FormatException('授权挑战无效');
     }
     final proof = await board.signDownloadChallenge(Uint8List.fromList(
-        List.generate(
-            32, (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16))));
+        List.generate(32,
+            (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16))));
     checkOpen();
     if (proof.length != 32) {
       throw const FormatException('控制板授权证明无效');
@@ -676,16 +679,27 @@ class ControlClient implements LocalVisionSource {
     checkOpen();
   }
 
+  bool get canRecoverStoppedTask =>
+      !_closed &&
+      !_paired &&
+      !_healing &&
+      _relayBoard != null &&
+      deviceId != null &&
+      _relay?.taskStopAcknowledged == true;
+
   bool get canRecoverGateway =>
       !_closed &&
       !_paired &&
-      canReadStatus &&
+      (canReadStatus || canRecoverStoppedTask) &&
       _relayBoard != null &&
       _relay?.isClosed == true &&
       _relay?.closeFinished == true &&
-      _relay?.recoverableNetworkFailure == true;
+      (_relay?.recoverableNetworkFailure == true || canRecoverStoppedTask);
   bool get gatewayRecoveryNeedsPairing =>
-      !_closed && _relay?.recoverableNetworkFailure == true && !canReadStatus;
+      !_closed &&
+      _relay?.recoverableNetworkFailure == true &&
+      !canReadStatus &&
+      !canRecoverStoppedTask;
 
   Future<void> recoverGateway(
       {required Future<void> Function() reconnect,
@@ -694,31 +708,50 @@ class ControlClient implements LocalVisionSource {
     final oldRelay = _relay!;
     final board = _relayBoard!, retired = oldRelay.connectionNonce;
     Future<void> current() async {
-      if (_closed || !canReadStatus) throw StateError('授权已过期，请重新连接并配对控制手机');
+      if (_closed || (!canReadStatus && !canRecoverStoppedTask)) {
+        throw StateError('授权已过期，请重新连接并配对控制手机');
+      }
       await check();
-      if (_closed || !canReadStatus) throw StateError('连接恢复已取消');
+      if (_closed || (!canReadStatus && !canRecoverStoppedTask)) {
+        throw StateError('连接恢复已取消');
+      }
     }
 
-    var connected = false;
+    var connected = false, reauthorized = false;
+    final taskStopped = oldRelay.taskStopAcknowledged;
     CloudRelay? next;
     try {
       await current();
-      // Reconcile the old task before any new BLE handshake. Never replay a packet.
-      final stopped = await command('stop');
-      await current();
-      if (stopped['state'] != 'stopped') throw StateError('旧任务停止尚未确认');
-      if (retired != null) {
-        try {
-          await _post('relay:detach', {'nonce': retired}, auth: true);
-        } on ControlHttpFailure catch (error) {
-          if (error.status != 403) rethrow;
-        }
+      // Only an acknowledged task STOP may re-prove an expired parent here.
+      // Other network-recovery rules remain unchanged.
+      if (taskStopped && !canReadStatus) {
+        connected = true;
+        await reconnect();
+        await current();
+        await _authorizeStoppedRecovery(board, current);
+        reauthorized = true;
+        await current();
       }
-      await current();
+      // Reconcile the old task before any new BLE handshake. Never replay a packet.
+      if (!taskStopped) {
+        final stopped = await command('stop');
+        await current();
+        if (stopped['state'] != 'stopped') throw StateError('旧任务停止尚未确认');
+        if (retired != null) {
+          try {
+            await _post('relay:detach', {'nonce': retired}, auth: true);
+          } on ControlHttpFailure catch (error) {
+            if (error.status != 403) rethrow;
+          }
+        }
+        await current();
+      }
       // reconnect() may open BLE and then fail its trailing check(); from
       // here on this owner disconnects whatever link it may have opened.
-      connected = true;
-      await reconnect();
+      if (!connected) {
+        connected = true;
+        await reconnect();
+      }
       await current();
       final info = await board.readInfo();
       await current();
@@ -728,33 +761,37 @@ class ControlClient implements LocalVisionSource {
         throw StateError('控制板身份或协议已改变，自动恢复已停止');
       }
       _boardRemoteId = board.device?.remoteId.str ?? _boardRemoteId;
-      final challenge = await _post('challenge', {'device': info.device});
-      await current();
-      final nonce = challenge['challenge'];
-      if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
-        throw const FormatException('授权挑战无效');
+      if (!reauthorized) {
+        final challenge = await _post('challenge', {'device': info.device});
+        await current();
+        final nonce = challenge['challenge'];
+        if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
+          throw const FormatException('授权挑战无效');
+        }
+        final proof = await board.signDownloadChallenge(Uint8List.fromList(
+            List.generate(
+                32,
+                (i) =>
+                    int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16))));
+        await current();
+        if (proof.length != 32) {
+          throw const FormatException('控制板授权证明无效');
+        }
+        final result = await _post(
+            'renew',
+            {
+              'device': info.device,
+              'challenge': nonce,
+              'proof':
+                  proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+            },
+            auth: true);
+        await current();
+        if (result['scope'] != 'phone-commands' || result['expiresIn'] != 300) {
+          throw const FormatException('续期授权无效');
+        }
+        _expires = DateTime.now().add(const Duration(seconds: 300));
       }
-      final proof = await board.signDownloadChallenge(Uint8List.fromList(
-          List.generate(32,
-              (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16))));
-      await current();
-      if (proof.length != 32) {
-        throw const FormatException('控制板授权证明无效');
-      }
-      final result = await _post(
-          'renew',
-          {
-            'device': info.device,
-            'challenge': nonce,
-            'proof':
-                proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
-          },
-          auth: true);
-      await current();
-      if (result['scope'] != 'phone-commands' || result['expiresIn'] != 300) {
-        throw const FormatException('续期授权无效');
-      }
-      _expires = DateTime.now().add(const Duration(seconds: 300));
       next = CloudRelay(
         retiredNonce: retired,
         beforeModeChange: onModeChange,
@@ -782,6 +819,45 @@ class ControlClient implements LocalVisionSource {
       }
       rethrow;
     }
+  }
+
+  Future<void> _authorizeStoppedRecovery(
+      BleOtaService board, Future<void> Function() check) async {
+    final info = await board.readInfo();
+    await check();
+    if (info == null ||
+        info.device != deviceId ||
+        !board.supportsLocalControl) {
+      throw StateError('控制板身份或协议已改变，自动恢复已停止');
+    }
+    final challenge = await _post('challenge', {'device': info.device});
+    await check();
+    final nonce = challenge['challenge'];
+    if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
+      throw const FormatException('授权挑战无效');
+    }
+    final proof = await board.signDownloadChallenge(Uint8List.fromList(
+        List.generate(32,
+            (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16))));
+    await check();
+    if (proof.length != 32) throw const FormatException('控制板授权证明无效');
+    final grant = await _post('authorize', {
+      'device': info.device,
+      'challenge': nonce,
+      'proof': proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+    });
+    await check();
+    final ticket = grant['ticket'], ttl = grant['expiresIn'];
+    if (grant['scope'] != 'phone-commands' ||
+        ticket is! String ||
+        !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket) ||
+        ttl is! int ||
+        ttl < 1 ||
+        ttl > 300) {
+      throw const FormatException('授权范围无效');
+    }
+    _ticket = ticket;
+    _expires = DateTime.now().add(Duration(seconds: ttl));
   }
 
   Future<Map<String, dynamic>> command(String operation,

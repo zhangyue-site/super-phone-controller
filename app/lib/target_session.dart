@@ -118,7 +118,7 @@ class TargetSession {
     Future<bool> guard() async {
       if (!identical(_client, client) ||
           _usb?.session != usb.session ||
-          !client.canReadStatus) {
+          (!client.canReadStatus && !client.canRecoverStoppedTask)) {
         return false;
       }
       final current = await UsbLaunch.snapshot();

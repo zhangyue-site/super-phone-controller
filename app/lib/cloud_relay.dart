@@ -3,6 +3,12 @@ import 'diagnostics.dart';
 import "dart:async";
 import 'relay_phase_trace.dart';
 
+/// A confirmed cloud STOP revokes only the old input session. No input retry.
+class TaskRelayStopped implements Exception {
+  @override
+  String toString() => '旧任务已停止，等待恢复被动新任务监听';
+}
+
 /// Opaque signed packets only. No device key, action planning or ADB fallback.
 class CloudRelay {
   final Future<Map<String, dynamic>> Function(String, Map<String, dynamic>)
@@ -13,6 +19,7 @@ class CloudRelay {
   final void Function(Object) onError;
   final Future<void> Function(bool hid)? beforeModeChange;
   bool recoverableNetworkFailure = false;
+  bool taskStopAcknowledged = false;
   bool closeFinished = false;
   bool _attaching = false;
   String? get connectionNonce => _nonce;
@@ -43,19 +50,29 @@ class CloudRelay {
       required this.onError,
       this.beforeModeChange,
       this.retiredNonce,
-      void Function(Map<String,Object>)? onTrace,
-      bool tracePhases=false}) {
-    _trace=RelayPhaseTrace(onEvent:onTrace ?? (row) {
-      if(!tracePhases)return; // Enable only for a bounded diagnostic window.
-      SafeDiagnostics.record('relay_phase',phase:row['phase'] as String,
-        reason:row['reason'] as String,op:row['op'] as int?,seq:row['seq'] as int?,
-        attempt:row['attempt'] as int,stageMs:row['stage_ms'] as int,
-        writeStarted:row['write_started'] as bool,
-        failureKind:row['failure_kind'] as String?,errorType:row['error_type'] as String?);
-    });
+      void Function(Map<String, Object>)? onTrace,
+      bool tracePhases = false}) {
+    _trace = RelayPhaseTrace(
+        onEvent: onTrace ??
+            (row) {
+              if (!tracePhases) {
+                return; // Enable only for a bounded diagnostic window.
+              }
+              SafeDiagnostics.record('relay_phase',
+                  phase: row['phase'] as String,
+                  reason: row['reason'] as String,
+                  op: row['op'] as int?,
+                  seq: row['seq'] as int?,
+                  attempt: row['attempt'] as int,
+                  stageMs: row['stage_ms'] as int,
+                  writeStarted: row['write_started'] as bool,
+                  failureKind: row['failure_kind'] as String?,
+                  errorType: row['error_type'] as String?);
+            });
   }
   bool get isClosed => _closed;
-  bool get supportsMaintenance => _maintenanceSupported && _wifiUpgradeSupported;
+  bool get supportsMaintenance =>
+      _maintenanceSupported && _wifiUpgradeSupported;
 
   Future<void> start({Future<void> Function()? beforePolling}) async {
     if (_closed || _timer != null) throw StateError("控制会话不可重复启动");
@@ -86,7 +103,8 @@ class CloudRelay {
     if (_closed) throw StateError("控制连接已结束");
     _lastPoll = DateTime.now(); // Keep the existing idle/startup cadence.
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => _tick());
-    _watchdog ??= Timer.periodic(const Duration(seconds: 5), (_) => _watchdogTick());
+    _watchdog ??=
+        Timer.periodic(const Duration(seconds: 5), (_) => _watchdogTick());
   }
 
   Future<void> _tick() async {
@@ -94,7 +112,8 @@ class CloudRelay {
     final now = DateTime.now();
     final fast = _lastControl != null &&
         now.difference(_lastControl!).inMilliseconds < 3000;
-    if (!fast && _lastPoll != null &&
+    if (!fast &&
+        _lastPoll != null &&
         now.difference(_lastPoll!).inMilliseconds < 500) {
       return;
     }
@@ -111,7 +130,7 @@ class CloudRelay {
                   ? 12
                   : null;
       _phase = maintenance == null ? 'poll' : 'maintenance';
-      _trace.begin(_phase,op:maintenance);
+      _trace.begin(_phase, op: maintenance);
       _activeOp = maintenance;
       _activeSeq = null;
       var requestClock = Stopwatch()..start();
@@ -121,7 +140,7 @@ class CloudRelay {
               .timeout(const Duration(seconds: 15));
       if (command["state"] == "busy") {
         _phase = 'poll';
-        _trace.phase('poll',clearAction:true);
+        _trace.phase('poll', clearAction: true);
         _activeOp = null;
         requestClock = Stopwatch()..start();
         command = await post("poll", {"nonce": _nonce});
@@ -141,7 +160,7 @@ class CloudRelay {
       }
       _activeOp = op;
       _activeSeq = seq;
-      _trace.setAction(op,seq);
+      _trace.setAction(op, seq);
       SafeDiagnostics.record('relay_action', phase: _phase, op: op, seq: seq);
       final maintenanceAction = op == 11 || op == 12;
       final ttl = command['expiresIn'];
@@ -177,7 +196,10 @@ class CloudRelay {
       _phase = 'write';
       dispatched = true; // dispatch-fence: 写出去了就不能再当"可安全重连"处理
       _trace.phase('write');
-      await bounded(() { _trace.markWriteStarted();return write(bytes); }, const Duration(seconds: 5));
+      await bounded(() {
+        _trace.markWriteStarted();
+        return write(bytes);
+      }, const Duration(seconds: 5));
       checkActive();
       final until = requestClock.elapsed + const Duration(seconds: 10);
       _phase = 'read';
@@ -221,7 +243,11 @@ class CloudRelay {
       SafeDiagnostics.record('relay_ack', phase: 'ack', op: op, seq: seq);
       if (op == 12) _heartbeat = DateTime.now();
       if (op == 11) _upgradeRequested = false;
-      if (op == 5) await close(reason: 'opcode_stop');
+      if (op == 5) {
+        taskStopAcknowledged = true;
+        await close(reason: 'opcode_stop');
+        onError(TaskRelayStopped());
+      }
     } catch (error) {
       if (_closed) return; // Late completions belong to the closed session.
       _trace.fail(error);
@@ -234,7 +260,10 @@ class CloudRelay {
       final denial = error is ControlHttpFailure &&
           error.relayDenial &&
           !error.relayLeaseExpired;
-      recoverableNetworkFailure = !dispatched || denial || _phase == 'ack'; // ackrecov: 板端回执已确认(receipt!=null 后才置 _phase='ack')，仅服务端记账不确定——恢复握手会 STOP->detach->fresh-nonce，服务端把 issued 动作置 uncertain 不再重发，故无重放风险
+      recoverableNetworkFailure = !dispatched ||
+          denial ||
+          _phase ==
+              'ack'; // ackrecov: 板端回执已确认(receipt!=null 后才置 _phase='ack')，仅服务端记账不确定——恢复握手会 STOP->detach->fresh-nonce，服务端把 issued 动作置 uncertain 不再重发，故无重放风险
       await close(reason: 'error', error: error);
       onError(error);
     } finally {
@@ -257,7 +286,8 @@ class CloudRelay {
         phase: 'stale_heartbeat', remainingMs: stale * 1000);
     recoverableNetworkFailure = true;
     await close(reason: 'stale_heartbeat');
-    onError(TimeoutException('控制板回执 ${stale}s 未更新', const Duration(seconds: 45)));
+    onError(
+        TimeoutException('控制板回执 ${stale}s 未更新', const Duration(seconds: 45)));
   }
 
   Future<void> close({String reason = 'explicit', Object? error}) async {
@@ -291,7 +321,11 @@ class CloudRelay {
       SafeDiagnostics.record('relay_disconnect',
           phase: 'shutdown', reason: 'disconnect_done');
     } finally {
-      if (_nonce != null && !_attaching) {
+      // The acknowledged STOP already removed this cloud session. A late
+      // detach would cancel a newly approved task on the same device.
+      if (_nonce != null &&
+          !_attaching &&
+          !(taskStopAcknowledged && reason == 'opcode_stop')) {
         try {
           await post("detach", {"nonce": _nonce});
         } catch (_) {}
