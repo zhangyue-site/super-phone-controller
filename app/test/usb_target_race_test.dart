@@ -6,8 +6,8 @@ import 'package:pcflash/usb_launch.dart';
 import 'package:pcflash/screen_share.dart';
 
 void main() {
+  Finder connectButton() => find.ancestor(of: find.byIcon(Icons.link), matching: find.byType(FilledButton));
   const serial = 'STOPTEST001';
-  final connect = find.widgetWithIcon(FilledButton, Icons.link);
   Map<String, dynamic> info(String value) =>
       {'protocol': 1, 'device': 'test-board', 'usbSerial': value};
   testWidgets(
@@ -53,10 +53,14 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
     expect(identities, 1);
     expect(starts, 0);
-    await tester.ensureVisible(connect);
+    await tester.scrollUntilVisible(find.text('开始屏幕共享并连接'), 200);
+    await tester.drag(find.byType(ListView), const Offset(0, -200));
     await tester.pumpAndSettle();
-    expect(tester.widget<FilledButton>(connect).onPressed, isNotNull);
-    await tester.tap(connect);
+    final button = tester.widget<FilledButton>(connectButton());
+    expect(button.onPressed, isNotNull);
+    await tester.scrollUntilVisible(find.text('开始屏幕共享并连接'), 160,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('开始屏幕共享并连接'));
     await tester.pump();
     expect(identities, 2);
     await tester.pumpWidget(const SizedBox());
@@ -165,18 +169,25 @@ void main() {
     await tester.tap(find.text('停止控制与共享'));
     await tester.pumpAndSettle();
     expect(find.text('正在停止…'), findsOneWidget);
-    await tester.ensureVisible(connect);
-    expect(tester.widget<FilledButton>(connect).onPressed, isNull);
+    await tester.scrollUntilVisible(connectButton(), 160,
+        scrollable: find.byType(Scrollable).first);
+    expect(tester.widget<FilledButton>(connectButton()).onPressed,
+        isNull);
     first.complete(info('SAMEWIDGETTEST'));
     await tester.pumpAndSettle();
     expect(find.text('正在停止…'), findsNothing);
-    await tester.ensureVisible(connect);
+    await tester.drag(find.byType(ListView), const Offset(0, -250));
     await tester.pumpAndSettle();
-    await tester.tap(connect);
+    await tester.scrollUntilVisible(find.text('开始屏幕共享并连接'), 160,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('开始屏幕共享并连接'));
     await tester.pump();
     expect(identities, 2);
     await tester.pumpAndSettle();
-    expect(tester.widget<FilledButton>(connect).onPressed, isNull);
+    await tester.scrollUntilVisible(connectButton(), 160,
+        scrollable: find.byType(Scrollable).first);
+    expect(tester.widget<FilledButton>(connectButton()).onPressed,
+        isNull);
     expect(find.text('正在请求授权或连接…'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     second.complete(info('SAMEWIDGETTEST'));

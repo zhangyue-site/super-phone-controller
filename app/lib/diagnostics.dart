@@ -13,8 +13,14 @@ class SafeDiagnostics {
       int? seq,
       int? lastOp,
       int? lastSeq,
-      int? remainingMs}) {
-    final type = error == null ? 'None' : error.runtimeType.toString();
+      int? remainingMs,
+      int? attempt,
+      int? stageMs,
+      bool? writeStarted,
+      String? failureKind,
+      String? errorType}) {
+    final type =
+        errorType ?? (error == null ? 'None' : error.runtimeType.toString());
     final kind = const {
       'TimeoutException',
       'StateError',
@@ -24,7 +30,7 @@ class SafeDiagnostics {
       'ClientException'
     }.contains(type)
         ? type
-        : error == null
+        : type == 'None'
             ? 'None'
             : 'Unknown';
     try {
@@ -39,6 +45,18 @@ class SafeDiagnostics {
         if (lastOp != null) 'last_op': lastOp,
         if (lastSeq != null) 'last_seq': lastSeq,
         if (remainingMs != null) 'remaining_ms': remainingMs,
+        if (attempt != null) 'attempt': attempt,
+        if (stageMs != null) 'stage_ms': stageMs,
+        if (writeStarted != null) 'write_started': writeStarted,
+        if (const {
+          'maintenance_unconfirmed',
+          'ota_unconfirmed',
+          'input_outcome_unknown',
+          'input_not_dispatched',
+          'control_unconfirmed',
+          'transport_unconfirmed'
+        }.contains(failureKind))
+          'failure_kind': failureKind,
       }).catchError((_) {}));
     } catch (_) {/* Pure tests or a detached engine have no messenger. */}
   }
@@ -50,7 +68,12 @@ class SafeDiagnostics {
 class ControlHttpFailure extends FormatException {
   final int status;
   final bool relayLeaseExpired;
+
+  /// Set only when a relay data path (attach/poll/ack/maintenance) was denied
+  /// for a capability reason. Such a denial is recoverable by re-authorizing
+  /// in place; every other 403 keeps its previous terminal meaning.
+  final bool relayDenial;
   ControlHttpFailure(this.status, String message,
-      {this.relayLeaseExpired = false})
+      {this.relayLeaseExpired = false, this.relayDenial = false})
       : super(message);
 }

@@ -80,7 +80,6 @@ jobs:
 
       - name: Regression tests
         id: android_regressions
-        continue-on-error: true
         run: flutter test --dart-define=CONTROLLER_BASE_URL=https://controller.test
 
       - name: Native capture and USB session regressions

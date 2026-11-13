@@ -39,7 +39,7 @@ class HeartbeatBoard extends fixture.RecoveryBoard {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   for (final op in [1, 3, 4, 6, 7, 12]) {
-    test('ACK transport failure op$op reconnect eligibility is heartbeat-only',
+    test('ACK transport failure op$op reconnect eligibility: receipt-confirmed ack is recoverable',
         () async {
       var writes = 0, disconnects = 0, acks = 0;
       final ended = Completer<void>();
@@ -89,7 +89,7 @@ void main() {
       );
       await relay.start();
       await ended.future.timeout(const Duration(seconds: 3));
-      expect(relay.recoverableNetworkFailure, op == 12);
+      expect(relay.recoverableNetworkFailure, true, reason: 'ackrecov: 回执确认后的 ACK 失败应可恢复');
       expect(relay.closeFinished, true);
       expect(writes, 1);
       expect(acks, 1);

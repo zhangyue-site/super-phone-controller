@@ -45,7 +45,7 @@ class RecoveryBoard extends BleOtaService {
 }
 
 Future<void> until(bool Function() ready) async {
-  for (var i = 0; i < 50 && !ready(); i++) {
+  for (var i = 0; i < 400 && !ready(); i++) {
     await Future<void>.delayed(const Duration(milliseconds: 50));
   }
   expect(ready(), true);
@@ -191,32 +191,47 @@ void main() {
     });
   }
 
-  test('forbidden poll keeps existing denial and never auto-recovers',
+  test('forbidden poll re-authorizes in place with a bounded budget (vc60)',
       () async {
     final board = RecoveryBoard();
-    final client = ControlClient(client: MockClient((request) async {
-      final op = request.url.path.split('/').last;
-      if (op == 'poll') return http.Response('{}', 403);
-      return http.Response(
-          jsonEncode(switch (op) {
-            'challenge' => {'challenge': 'a' * 64},
-            'authorize' => {
-                'ticket': 't' * 43,
-                'expiresIn': 300,
-                'scope': 'phone-commands'
-              },
-            _ => {'state': 'connected'},
-          }),
-          200);
-    }));
+    var authorizations = 0;
+    final client = ControlClient(
+        healDelay: (_) => const Duration(milliseconds: 1),
+        client: MockClient((request) async {
+          final op = request.url.path.split('/').last;
+          if (op == 'poll') {
+            return http.Response(
+                jsonEncode({'reply': 'relay expired; reconcile first'}), 403);
+          }
+          if (op == 'detach') return http.Response('{}', 403);
+          if (op == 'authorize') authorizations++;
+          return http.Response(
+              jsonEncode(switch (op) {
+                'challenge' => {'challenge': 'a' * 64},
+                'authorize' => {
+                    'ticket': 't' * 43,
+                    'expiresIn': 300,
+                    'scope': 'phone-commands'
+                  },
+                _ => {'state': 'connected'},
+              }),
+              200);
+        }));
     await client.authorize(board);
-    await until(() => !client.canReadStatus);
+    await until(() => client.selfHealExhausted);
+    // One initial handshake plus the whole bounded budget, then idle.
+    expect(authorizations, 9);
     expect(client.canRecoverGateway, false);
     expect(client.authorized, false);
+    expect(client.connectionStatus, contains('自动重连已停止'));
     expect(board.writes, 0);
     await client.shutdown();
   });
-  test('unknown ACK network error cannot opt into automatic recovery',
+  // ackrecov: 回执已本地确认（write 成功后才进 ack phase），未知 ACK 网络错误可恢复。
+// 安全依据（服务端 hid_relay.py 实证）：stop 只把 queued/issued→uncertain，
+// poll 只投 queued，uncertain 永不重发——恢复不产生重执行；回执 HMAC 按旧
+// nonce 校验，新会话无法也不需要重放，uncertain 动作由任务侧保守放弃。
+test('unknown ACK network error can opt into automatic recovery',
       () async {
     var writes = 0, disconnects = 0;
     final stopped = Completer<void>();
@@ -261,7 +276,8 @@ void main() {
     await stopped.future.timeout(const Duration(seconds: 3));
     expect(writes, 1);
     expect(disconnects, 1);
-    expect(relay.recoverableNetworkFailure, false);
+    expect(relay.recoverableNetworkFailure, true,
+        reason: 'ackrecov: 回执确认后的未知 ACK 失败应可恢复');
     expect(events, ['prepare:false', 'disconnect']);
   });
   test('fresh connection rejects retired nonce before attach or writes',

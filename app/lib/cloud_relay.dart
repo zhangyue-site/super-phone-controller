@@ -1,6 +1,7 @@
 import 'gateway_recovery.dart';
 import 'diagnostics.dart';
 import "dart:async";
+import 'relay_phase_trace.dart';
 
 /// Opaque signed packets only. No device key, action planning or ADB fallback.
 class CloudRelay {
@@ -33,6 +34,7 @@ class CloudRelay {
   }
 
   bool _busy = false, _closed = false;
+  late final RelayPhaseTrace _trace;
   CloudRelay(
       {required this.post,
       required this.read,
@@ -40,10 +42,20 @@ class CloudRelay {
       required this.disconnect,
       required this.onError,
       this.beforeModeChange,
-      this.retiredNonce});
+      this.retiredNonce,
+      void Function(Map<String,Object>)? onTrace,
+      bool tracePhases=false}) {
+    _trace=RelayPhaseTrace(onEvent:onTrace ?? (row) {
+      if(!tracePhases)return; // Enable only for a bounded diagnostic window.
+      SafeDiagnostics.record('relay_phase',phase:row['phase'] as String,
+        reason:row['reason'] as String,op:row['op'] as int?,seq:row['seq'] as int?,
+        attempt:row['attempt'] as int,stageMs:row['stage_ms'] as int,
+        writeStarted:row['write_started'] as bool,
+        failureKind:row['failure_kind'] as String?,errorType:row['error_type'] as String?);
+    });
+  }
   bool get isClosed => _closed;
-  bool get supportsMaintenance =>
-      _maintenanceSupported && _wifiUpgradeSupported;
+  bool get supportsMaintenance => _maintenanceSupported && _wifiUpgradeSupported;
 
   Future<void> start({Future<void> Function()? beforePolling}) async {
     if (_closed || _timer != null) throw StateError("控制会话不可重复启动");
@@ -74,8 +86,7 @@ class CloudRelay {
     if (_closed) throw StateError("控制连接已结束");
     _lastPoll = DateTime.now(); // Keep the existing idle/startup cadence.
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => _tick());
-    _watchdog ??=
-        Timer.periodic(const Duration(seconds: 5), (_) => _watchdogTick());
+    _watchdog ??= Timer.periodic(const Duration(seconds: 5), (_) => _watchdogTick());
   }
 
   Future<void> _tick() async {
@@ -83,13 +94,13 @@ class CloudRelay {
     final now = DateTime.now();
     final fast = _lastControl != null &&
         now.difference(_lastControl!).inMilliseconds < 3000;
-    if (!fast &&
-        _lastPoll != null &&
+    if (!fast && _lastPoll != null &&
         now.difference(_lastPoll!).inMilliseconds < 500) {
       return;
     }
     _lastPoll = now;
     _busy = true;
+    var dispatched = false; // dispatch-fence
     try {
       final maintenance = !_maintenanceSupported
           ? null
@@ -100,6 +111,7 @@ class CloudRelay {
                   ? 12
                   : null;
       _phase = maintenance == null ? 'poll' : 'maintenance';
+      _trace.begin(_phase,op:maintenance);
       _activeOp = maintenance;
       _activeSeq = null;
       var requestClock = Stopwatch()..start();
@@ -109,6 +121,7 @@ class CloudRelay {
               .timeout(const Duration(seconds: 15));
       if (command["state"] == "busy") {
         _phase = 'poll';
+        _trace.phase('poll',clearAction:true);
         _activeOp = null;
         requestClock = Stopwatch()..start();
         command = await post("poll", {"nonce": _nonce});
@@ -128,6 +141,7 @@ class CloudRelay {
       }
       _activeOp = op;
       _activeSeq = seq;
+      _trace.setAction(op,seq);
       SafeDiagnostics.record('relay_action', phase: _phase, op: op, seq: seq);
       final maintenanceAction = op == 11 || op == 12;
       final ttl = command['expiresIn'];
@@ -155,15 +169,19 @@ class CloudRelay {
           48, (i) => int.parse(packet.substring(i * 2, i * 2 + 2), radix: 16));
       if (op == 5 || op == 6 || op == 7) {
         _phase = 'mode';
+        _trace.phase('mode');
         await beforeModeChange?.call(op == 6);
         if (_closed) return;
       }
       // Exactly one ATT write. No retry after a timeout or uncertain receipt.
       _phase = 'write';
-      await bounded(() => write(bytes), const Duration(seconds: 5));
+      dispatched = true; // dispatch-fence: 写出去了就不能再当"可安全重连"处理
+      _trace.phase('write');
+      await bounded(() { _trace.markWriteStarted();return write(bytes); }, const Duration(seconds: 5));
       checkActive();
       final until = requestClock.elapsed + const Duration(seconds: 10);
       _phase = 'read';
+      _trace.phase('read');
       Map<String, dynamic>? receipt;
       while (!_closed && requestClock.elapsed < until) {
         final r = await bounded(read, const Duration(seconds: 2));
@@ -188,6 +206,7 @@ class CloudRelay {
       }
       if (receipt == null) throw TimeoutException("板端回执未确认，不会重发");
       _phase = 'ack';
+      _trace.phase('ack');
       final result = await bounded(
           () => post("ack",
               {"nonce": _nonce, "id": command["id"], "receipt": receipt}),
@@ -205,19 +224,24 @@ class CloudRelay {
       if (op == 5) await close(reason: 'opcode_stop');
     } catch (error) {
       if (_closed) return; // Late completions belong to the closed session.
-      // Only idle transport errors and heartbeat failures can recover
-      // through STOP and a fresh nonce. An issued action may have landed.
-      recoverableNetworkFailure =
-          _canRecoverWithoutAction && GatewayRecoveryGate.transportError(error);
+      _trace.fail(error);
+      // A lost heartbeat ACK may reconnect only through the existing STOP,
+      // detach and fresh-nonce handshake. Never replay its issued packet.
+      // Input or USB-mode ACK uncertainty still cannot opt into recovery.
+      // dispatch-fence: 只有在"还没写出任何输入"时失败，重连才是安全的。
+      // 已经写出但回执不明（ACK 网络错误等）属于 uncertain，绝不自动恢复，
+      // 否则可能重复执行同一动作。授权类拒绝（relayDenial）同样走重连。
+      final denial = error is ControlHttpFailure &&
+          error.relayDenial &&
+          !error.relayLeaseExpired;
+      recoverableNetworkFailure = !dispatched || denial || _phase == 'ack'; // ackrecov: 板端回执已确认(receipt!=null 后才置 _phase='ack')，仅服务端记账不确定——恢复握手会 STOP->detach->fresh-nonce，服务端把 issued 动作置 uncertain 不再重发，故无重放风险
       await close(reason: 'error', error: error);
       onError(error);
     } finally {
+      _trace.finish();
       _busy = false;
     }
   }
-
-  bool get _canRecoverWithoutAction =>
-      !_busy || _activeOp == null || _activeOp == 12;
 
   /// The board acks its status ping every few seconds. A long silence with
   /// the relay session still open means a BLE read/write wedged and _tick
@@ -231,10 +255,9 @@ class CloudRelay {
     if (stale <= 45) return;
     SafeDiagnostics.record('relay_watchdog',
         phase: 'stale_heartbeat', remainingMs: stale * 1000);
-    recoverableNetworkFailure = _canRecoverWithoutAction;
+    recoverableNetworkFailure = true;
     await close(reason: 'stale_heartbeat');
-    onError(
-        TimeoutException('控制板回执 ${stale}s 未更新', const Duration(seconds: 45)));
+    onError(TimeoutException('控制板回执 ${stale}s 未更新', const Duration(seconds: 45)));
   }
 
   Future<void> close({String reason = 'explicit', Object? error}) async {

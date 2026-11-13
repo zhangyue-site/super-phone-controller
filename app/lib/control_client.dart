@@ -4,10 +4,13 @@ import 'controller_config.dart';
 import 'controller_pairing_store.dart';
 import 'dart:async';
 import 'cloud_relay.dart';
+import 'gateway_recovery.dart';
+import 'relay_selfheal.dart';
 import 'screen_share.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble_ota_service.dart';
 
 /// Ephemeral BLE possession capability, kept only in memory.
@@ -93,7 +96,18 @@ class ControlClient implements LocalVisionSource {
   Future<void>? _closing;
   String? deviceId;
   Future<void> Function(bool hid)? onModeChange;
-  ControlClient({http.Client? client}) : _http = client;
+
+  // Self-heal (vc60). Bounded in-place re-authorization after a relay
+  // capability denial. See RelaySelfHeal for the retry contract.
+  bool _healing = false, _healExhausted = false;
+  int _healAttempts = 0;
+  String? _healReason;
+  Timer? _healTimer, _healWatch;
+  String? _boardRemoteId;
+  final Duration Function(int attempt) _healDelay;
+  ControlClient({http.Client? client, Duration Function(int attempt)? healDelay})
+      : _http = client,
+        _healDelay = healDelay ?? RelaySelfHeal.delayBefore;
   @override
   bool get isPaired => _paired;
   bool get supportsSkillReplay => _board != null;
@@ -117,13 +131,28 @@ class ControlClient implements LocalVisionSource {
     _relay!.requestWifiUpgrade();
   }
 
-  String get connectionStatus => _relayError != null
-      ? '蓝牙网关已停止：$_relayError'
-      : _relay != null
-          ? (_relay!.isClosed ? '蓝牙网关已释放' : '此手机持有蓝牙网关；云端动作需回执确认')
-          : _paired
-              ? '已绑定目标；云端在线状态以任务回执为准'
-              : '等待控制板授权';
+  String get connectionStatus => _healing
+      ? '中继授权失效，正在自动重连（第 $_healAttempts/${RelaySelfHeal.maxAttempts} 次）'
+      : _healExhausted && _relayError != null
+          ? '自动重连已停止（${_healReason ?? '授权失效'}）；请重新连接控制板'
+          : _relayError != null
+              ? '蓝牙网关已停止：$_relayError'
+              : _relay != null
+                  ? (_relay!.isClosed ? '蓝牙网关已释放' : '此手机持有蓝牙网关；云端动作需回执确认')
+                  : _paired
+                      ? '已绑定目标；云端在线状态以任务回执为准'
+                      : '等待控制板授权';
+
+  /// Non-null while a bounded self-heal is running or after it gave up, so
+  /// the target screens can show the real reason instead of "re-pair".
+  String? get selfHealStatus => _healing
+      ? '中继授权失效，正在自动重连（第 $_healAttempts/${RelaySelfHeal.maxAttempts} 次）'
+      : _healExhausted
+          ? '自动重连已停止（${_healReason ?? '授权失效'}）；请重新连接控制板'
+          : null;
+  bool get selfHealing => _healing;
+  bool get selfHealExhausted => _healExhausted;
+  int get selfHealAttempts => _healAttempts;
 
   Future<void> renewCapture([String? usbSession]) async {
     if (!authorized || _paired || _relay == null || _ticket == null) {
@@ -318,8 +347,25 @@ class ControlClient implements LocalVisionSource {
         _ticket = null;
         _expires = null;
       }
+      final relayPath = path.startsWith('relay:');
+      final reply = decoded['reply'];
+      final code = decoded['code']?.toString();
+      // A relay data path denied for a capability reason (401/403, or a
+      // reply/code naming a lease, expiry or ticket) may re-authorize in
+      // place. detach and every non-relay path keep their exact meaning.
+      final denial = relayPath &&
+          path != 'relay:detach' &&
+          (response.statusCode == 401 ||
+              response.statusCode == 403 ||
+              RelaySelfHeal.denialText(reply is String ? reply : null) ||
+              RelaySelfHeal.denialText(code));
       throw ControlHttpFailure(
-          response.statusCode, decoded['reply'] as String? ?? '请求失败，请查询状态后重试');
+          response.statusCode,
+          reply as String? ??
+              (response.statusCode == 401 || response.statusCode == 403
+                  ? '中继授权已失效，正在重新授权'
+                  : '请求失败，请查询状态后重试'),
+          relayDenial: denial);
     }
     return decoded;
   }
@@ -342,6 +388,7 @@ class ControlClient implements LocalVisionSource {
     checkOpen();
     if (info == null) throw const FormatException('请先连接控制板');
     deviceId = info.device;
+    _boardRemoteId = service.device?.remoteId.str ?? _boardRemoteId;
     final challenge = await _post('challenge', {'device': info.device});
     checkOpen();
     final nonce = challenge['challenge'];
@@ -375,15 +422,15 @@ class ControlClient implements LocalVisionSource {
     if (service.supportsLocalControl) {
       _relayBoard = service;
       _relayError = null;
+      _healExhausted = false;
+      _healAttempts = 0;
       final relay = CloudRelay(
         beforeModeChange: onModeChange,
         post: (p, b) => _post('relay:$p', b, auth: true),
         read: service.readLocalControl,
         write: service.writeLocalControl,
         disconnect: service.disconnect,
-        onError: (e) {
-          _relayError = e;
-        },
+        onError: _relayErrorSink,
       );
       _relay = relay;
       await relay.start();
@@ -391,7 +438,242 @@ class ControlClient implements LocalVisionSource {
         await relay.close();
         checkOpen();
       }
+      _startHealWatch();
     }
+  }
+
+  /// Every relay failure enters here once. Only a capability denial starts a
+  /// bounded re-authorization; anything else keeps the old terminal stop.
+  void _relayErrorSink(Object error) {
+    if (_closed) return;
+    _relayError = error;
+    _stopHealWatch();
+    if (RelaySelfHeal.permissionError(error)) _beginSelfHeal(error);
+  }
+
+  DateTime? _lastHealAt;
+  Timer? _healResetTimer;
+
+  void _beginSelfHeal(Object cause) {
+    if (_closed || _paired || _relayBoard == null || _healing) return;
+    final now = DateTime.now();
+    final continuing = _lastHealAt != null &&
+        now.difference(_lastHealAt!) < const Duration(seconds: 5);
+    _healing = true;
+    _healExhausted = false;
+    if (!continuing) _healAttempts = 0;
+    _healReason = RelaySelfHeal.reasonText(cause);
+    SafeDiagnostics.record('relay_selfheal',
+        phase: 'attach',
+        reason: 'begin',
+        httpStatus: cause is ControlHttpFailure ? cause.status : null);
+    _scheduleHealAttempt();
+  }
+
+  void _scheduleHealAttempt() {
+    _healTimer?.cancel();
+    final attempt = _healAttempts + 1;
+    if (_closed || attempt > RelaySelfHeal.maxAttempts) {
+      _finishSelfHeal();
+      return;
+    }
+    _healAttempts = attempt;
+    final delay = _healDelay(attempt);
+    _healTimer = Timer(delay, () {
+      _healTimer = null;
+      if (!_closed && _healing) unawaited(_healOnce());
+    });
+  }
+
+  Future<void> _healOnce() async {
+    final board = _relayBoard;
+    if (board == null) {
+      _finishSelfHeal();
+      return;
+    }
+    try {
+      _relayError = null; // 清掉旧错误，下面的存活检查才有意义
+      await _reauthAndAttach(board);
+      if (_closed) return;
+      // healverify: 重连必须真的活了才算成功。CloudRelay 可能只把错误交给
+      // onError 而不抛异常，这里必须自己核对，否则会假装恢复、永不计满预算。
+      final relay = _relay;
+      if (_relayError != null || relay == null || relay.isClosed) {
+        throw StateError('重新授权后中继仍未建立');
+      }
+      _healing = false;
+      _lastHealAt = DateTime.now();
+      _healReason = null;
+      _healExhausted = false;
+      _relayError = null;
+      _startHealWatch();
+      // 计数不在这里清零：中继刚 attach 完最可能马上又被拒，清零会让重试
+      // 永远停在第 1 次、预算永远计不满。等 30 秒安静后再归零。
+      _healResetTimer?.cancel();
+      _healResetTimer = Timer(const Duration(seconds: 30), () {
+        if (_closed || _healing) return;
+        _healAttempts = 0;
+      });
+      SafeDiagnostics.record('relay_selfheal', phase: 'poll', reason: 'recovered');
+    } catch (error) {
+      if (_closed) return;
+      _healReason = RelaySelfHeal.reasonText(error);
+      SafeDiagnostics.record('relay_selfheal',
+          phase: 'attach',
+          reason: 'retry',
+          error: error,
+          attempt: _healAttempts,
+          httpStatus: error is ControlHttpFailure ? error.status : null);
+      if (!RelaySelfHeal.retryable(error)) {
+        _healAttempts = RelaySelfHeal.maxAttempts; // terminal, no more tries
+        _finishSelfHeal();
+        return;
+      }
+      if (_healAttempts >= RelaySelfHeal.maxAttempts) {
+        _finishSelfHeal();
+        return;
+      }
+      _scheduleHealAttempt();
+    }
+  }
+
+  void _finishSelfHeal() {
+    _healResetTimer?.cancel();
+    _healTimer?.cancel();
+    _healTimer = null;
+    _healing = false;
+    _healExhausted = true;
+    _relayError ??= _healReason;
+    SafeDiagnostics.record('relay_selfheal',
+        phase: 'idle', reason: 'exhausted', attempt: _healAttempts);
+  }
+
+  /// The control ticket can also lapse while the relay is still polling (an
+  /// idle UI never calls refresh). Re-authorize before the next poll denies.
+  void _startHealWatch() {
+    if (_closed || _healWatch != null || _paired || _relayBoard == null) return;
+    _healWatch = Timer.periodic(const Duration(seconds: 1), (_) {
+      final relay = _relay;
+      if (_closed || relay == null || relay.isClosed || _healing) {
+        _stopHealWatch();
+        return;
+      }
+      final expires = _expires;
+      if (expires == null || DateTime.now().isBefore(expires)) return;
+      _stopHealWatch();
+      _beginSelfHeal(ControlHttpFailure(401, 'ticket expired', relayDenial: true));
+    });
+  }
+
+  void _stopHealWatch() {
+    _healWatch?.cancel();
+    _healWatch = null;
+  }
+
+  /// Re-opens the same physical board after the failed relay released BLE.
+  /// Only the identity observed at authorize/recovery time is reused; without
+  /// one (pure tests, or a link the platform still holds) nothing is invented.
+  Future<void> _ensureBoardLink(BleOtaService board) async {
+    final id = _boardRemoteId;
+    if (id == null) return;
+    final device = board.device;
+    if (device != null && device.remoteId.str == id && device.isConnected) {
+      return;
+    }
+    try {
+      await board.connect(BluetoothDevice.fromId(id));
+    } on StateError {
+      rethrow;
+    } catch (error) {
+      throw BleReconnectFailure(error);
+    }
+  }
+
+  /// challenge -> authorize (full handshake, not renew: an invalidated ticket
+  /// cannot renew itself) -> fresh attach receipt -> poll resumes.
+  Future<void> _reauthAndAttach(BleOtaService board) async {
+    void checkOpen() {
+      if (_closed) throw StateError('控制连接已结束');
+    }
+
+    checkOpen();
+    final old = _relay;
+    _relay = null;
+    _stopHealWatch();
+    if (old != null) {
+      try {
+        await old.close(reason: 'self_heal');
+      } catch (_) {/* detach may itself be denied; the server lease expires. */}
+    }
+    checkOpen();
+    // The failed relay already released BLE, so the same board has to be
+    // re-opened before any challenge can be signed.
+    await _ensureBoardLink(board);
+    checkOpen();
+    final info = await board.readInfo();
+    checkOpen();
+    if (info == null || info.device != deviceId) {
+      throw StateError('控制板身份已改变，自动重连已停止');
+    }
+    final challenge = await _post('challenge', {'device': info.device});
+    checkOpen();
+    final nonce = challenge['challenge'];
+    if (nonce is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(nonce)) {
+      throw const FormatException('授权挑战无效');
+    }
+    final proof = await board.signDownloadChallenge(Uint8List.fromList(
+        List.generate(
+            32, (i) => int.parse(nonce.substring(i * 2, i * 2 + 2), radix: 16))));
+    checkOpen();
+    if (proof.length != 32) {
+      throw const FormatException('控制板授权证明无效');
+    }
+    final grant = await _post('authorize', {
+      'device': info.device,
+      'challenge': nonce,
+      'proof': proof.map((b) => b.toRadixString(16).padLeft(2, '0')).join()
+    });
+    checkOpen();
+    final ticket = grant['ticket'], ttl = grant['expiresIn'];
+    if (grant['scope'] != 'phone-commands' ||
+        ticket is! String ||
+        !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket) ||
+        ttl is! int ||
+        ttl < 1 ||
+        ttl > 300) {
+      throw const FormatException('授权范围无效');
+    }
+    _ticket = ticket;
+    _expires = DateTime.now().add(Duration(seconds: ttl));
+    _relayError = null;
+    SafeDiagnostics.record('control_grant',
+        phase: 'authorize', reason: 'grant_ok', remainingMs: ttl * 1000);
+    // Same physical session, same nonce: the server adopts it in place.
+    final next = CloudRelay(
+      beforeModeChange: onModeChange,
+      post: (p, b) => _post('relay:$p', b, auth: true),
+      read: board.readLocalControl,
+      write: board.writeLocalControl,
+      disconnect: board.disconnect,
+      onError: _relayErrorSink,
+    );
+    _relay = next;
+    try {
+      await next.start();
+    } catch (_) {
+      _relay = null;
+      try {
+        await next.close(reason: 'self_heal');
+      } catch (_) {}
+      rethrow;
+    }
+    checkOpen();
+    // Screen capture has its own capability; renew it with the new control
+    // ticket only while a capture is actually live. Failure here is not fatal.
+    try {
+      if (await ScreenShare.isActive()) await renewCapture();
+    } catch (_) {}
+    checkOpen();
   }
 
   bool get canRecoverGateway =>
@@ -445,6 +727,7 @@ class ControlClient implements LocalVisionSource {
           !board.supportsLocalControl) {
         throw StateError('控制板身份或协议已改变，自动恢复已停止');
       }
+      _boardRemoteId = board.device?.remoteId.str ?? _boardRemoteId;
       final challenge = await _post('challenge', {'device': info.device});
       await current();
       final nonce = challenge['challenge'];
@@ -479,14 +762,17 @@ class ControlClient implements LocalVisionSource {
         read: board.readLocalControl,
         write: board.writeLocalControl,
         disconnect: board.disconnect,
-        onError: (e) {
-          if (!_closed) _relayError = e;
-        },
+        onError: _relayErrorSink,
       );
       _relay = next;
       await next.start(beforePolling: current);
       if (_closed) throw StateError('连接恢复已取消');
       _relayError = null;
+      _healing = false;
+      _healExhausted = false;
+      _healAttempts = 0;
+      _healReason = null;
+      _startHealWatch();
     } catch (_) {
       if (!_closed) _relay = oldRelay;
       if (next != null) {
@@ -527,6 +813,10 @@ class ControlClient implements LocalVisionSource {
   Future<void> shutdown() {
     if (_closing != null) return _closing!;
     _closed = true;
+    _healing = false;
+    _healTimer?.cancel();
+    _healTimer = null;
+    _stopHealWatch();
     final relay = _relay;
     _relay = null;
     return _closing = () async {
