@@ -26,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: spc-app-${{ github.ref }}
@@ -60,17 +61,21 @@ jobs:
           python3 -m unittest discover -s ../tools -p test_capture_lifecycle_contract.py
 
       - name: Restore pinned bundled model
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRIVATE_ARTIFACT_PASSWORD: ${{ secrets.PRIVATE_ARTIFACT_PASSWORD }}
         run: |
           set -euo pipefail
-          apk=$(mktemp "$RUNNER_TEMP/model-source.XXXXXX")
-          model=$(mktemp "$RUNNER_TEMP/bundled-model.XXXXXX")
-          trap 'rm -f "$apk" "$model"' EXIT
-          curl --fail --silent --show-error --proto '=https' --max-time 180 \
-            https://cdn.zhangyue.site/apps/phone-controller-flash/releases/1.3.17/phone-controller-flash-1.3.17-vc60.apk -o "$apk"
-          echo "263c8120640db90889073a23cfd3e77dd64f5ca068ac23eea27185f5eaa4be13  $apk" | sha256sum -c -
-          unzip -p "$apk" assets/flutter_assets/assets/bt_v10_int8.onnx > "$model"
-          echo "45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2  $model" | sha256sum -c -
-          install -m 0644 "$model" assets/bt_v10_int8.onnx
+          modeldir=$(mktemp -d "$RUNNER_TEMP/pinned-model.XXXXXX")
+          trap 'rm -rf "$modeldir"' EXIT
+          gh run download 43384903782 --repo "${{ github.repository }}" --name controller-private-build --dir "$modeldir"
+          command -v 7z >/dev/null || sudo apt-get install -y p7zip-full
+          7z x -y -p"$PRIVATE_ARTIFACT_PASSWORD" -o"$modeldir/unpacked" "$modeldir/controller-private-build.7z" >/dev/null
+          apk="$modeldir/unpacked/build/app/outputs/flutter-apk/app-release.apk"
+          echo "519fac11018b87140fd4ad82689c459139c5a1af0241a4fd56fea39f53dd805b  $apk" | sha256sum -c -
+          unzip -p "$apk" assets/flutter_assets/assets/bt_v10_int8.onnx > "$modeldir/model.onnx"
+          echo "45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2  $modeldir/model.onnx" | sha256sum -c -
+          install -m 0644 "$modeldir/model.onnx" assets/bt_v10_int8.onnx
 
       - name: Resolve dependencies
         run: flutter pub get
