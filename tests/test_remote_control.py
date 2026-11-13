@@ -56,7 +56,7 @@ class RemoteTests(unittest.TestCase):
   ident=self.prepare();self.r.confirm(self.wx,ident)
   self.assertEqual(self.r.claim('board','a'*16,1,False,'absolute-v1')['op'],'wait')
   self.assertEqual(self.r.claim('board','a'*16,1,True,'old')['op'],'wait')
-  self.r.screen_ready=lambda _:False;self.assertEqual(self.claim()['op'],'wait');self.assertFalse(self.c.started)
+  self.r.screen_ready=lambda _:False;self.assertEqual(self.claim()['op'],'start');self.assertTrue(self.c.started)
  def test_restart_never_replays_confirmed_plan(self):
   ident=self.prepare();self.r.confirm(self.wx,ident)
   other=RemoteControl(self.c,self.path,clock=lambda:self.now[0],screen_ready=lambda _:True)
@@ -123,4 +123,18 @@ class RemoteTests(unittest.TestCase):
   self.assertEqual(self.r.status(self.wx,ident)['state'],'stopped')
  def test_idle_status_is_readable_on_both_origins(self):
   for owner in (self.wx,self.tg):self.assertEqual(self.r.status(owner)['state'],'idle')
-if __name__=='__main__':unittest.main()
+
+
+ def test_public_progress_keeps_running_task_over_new_pending(self):
+  first=self.prepare();self.r.confirm(self.wx,first);self.claim()
+  second=self.prepare(self.tg)
+  self.assertNotEqual(first,second)
+  self.assertEqual(self.r.public_device_status('board')['taskId'],first)
+ def test_cancel_without_board_receipt_is_not_stop_confirmation(self):
+  ident=self.prepare();self.r.confirm(self.wx,ident);self.claim()
+  result=self.r.stop(self.wx)
+  self.assertTrue(result['serverCancelled']);self.assertFalse(result['stopConfirmed'])
+  status=self.r.status(self.wx,ident)
+  self.assertTrue(status['serverCancelled']);self.assertFalse(status['stopConfirmed'])
+  progress=self.r.public_device_status('board')
+  self.assertEqual(progress['state'],'stopping');self.assertFalse(progress['stopConfirmed'])

@@ -17,7 +17,7 @@ class AppTheme {
         platform: TargetPlatform.android,
         colorScheme: scheme);
     return base.copyWith(
-      scaffoldBackgroundColor: scheme.surface,
+      scaffoldBackgroundColor: scheme.surfaceContainerLowest,
       appBarTheme: AppBarTheme(
           backgroundColor: scheme.surface,
           foregroundColor: scheme.onSurface,
@@ -26,7 +26,7 @@ class AppTheme {
           color: scheme.surfaceContainerLow,
           elevation: 0,
           shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(20),
               side: BorderSide(color: scheme.outlineVariant))),
       filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
@@ -40,7 +40,7 @@ class AppTheme {
                   const EdgeInsets.symmetric(horizontal: 20, vertical: 14))),
       inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: scheme.surfaceContainerHighest,
+          fillColor: scheme.surfaceContainerLow,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
       dividerTheme: DividerThemeData(color: scheme.outlineVariant),
     );

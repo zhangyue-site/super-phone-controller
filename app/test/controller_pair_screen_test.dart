@@ -31,6 +31,63 @@ class TrackedHttp extends MockClient {
 
 Finder get button => find.widgetWithText(FilledButton, '连接被控手机');
 void main() {
+  testWidgets('returning from connected route never clears persistent binding',
+      (tester) async {
+    var clears = 0;
+    const channel = MethodChannel('pcflash/app');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel,
+        (call) async {
+      if (call.method == 'clearControllerPairing') clears++;
+      return null;
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null));
+    final client = ControlClient(client: MockClient((_) async => grant()));
+    addTearDown(client.close);
+    await tester.pumpWidget(MaterialApp(
+        home: ControllerPairScreen(
+      clientFactory: () => client,
+      connectedBuilder: (_) =>
+          Scaffold(appBar: AppBar(title: const Text('已连接'))),
+    )));
+    await tester.enterText(find.byType(TextFormField), '2468');
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(clears, 0);
+    expect(
+        tester
+            .widget<TextFormField>(find.byType(TextFormField))
+            .controller!
+            .text,
+        '2468');
+  });
+
+  testWidgets('four digits reach pairing and failed request preserves draft',
+      (tester) async {
+    var requests = 0;
+    await tester.pumpWidget(MaterialApp(
+        home: ControllerPairScreen(
+      clientFactory: () => ControlClient(client: MockClient((request) async {
+        requests++;
+        expect(jsonDecode(request.body), {'code': '2468'});
+        return http.Response('{}', 403);
+      })),
+    )));
+    await tester.enterText(find.byType(TextFormField), '2468');
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(requests, 1);
+    expect(
+        tester
+            .widget<TextFormField>(find.byType(TextFormField))
+            .controller!
+            .text,
+        '2468');
+    expect(find.textContaining('持续有效'), findsOneWidget);
+  });
+
   testWidgets('validates locally and redeems trimmed code once then navigates',
       (tester) async {
     var requests = 0;
@@ -51,7 +108,7 @@ void main() {
             })));
     await tester.tap(button);
     await tester.pump();
-    expect(find.text('请粘贴完整的43位连接码'), findsOneWidget);
+    expect(find.text('请输入4位数字绑定码，或完整43位旧连接码'), findsOneWidget);
     expect(requests, 0);
     await tester.enterText(find.byType(TextFormField), ' $code ');
     await tester.tap(button);
@@ -138,7 +195,8 @@ void main() {
       expect(reads, 0);
       await tester.drag(find.byType(ListView), const Offset(0, -350));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('从剪贴板粘贴'));
+      await tester.scrollUntilVisible(find.text('从剪贴板粘贴'), 160,
+          scrollable: find.byType(Scrollable).first);
       await tester.pumpAndSettle();
       await tester.tap(find.text('从剪贴板粘贴'));
       await tester.pump();

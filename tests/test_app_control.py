@@ -94,7 +94,7 @@ class AppControlTests(http_tests.RemoteHttpTests):
   self.assertEqual(self.request('/remote/claim',{'ready':True})[1]['op'],'start')
   self.assertEqual(self.command(controller,'status')[1]['state'],'running')
   code,result=self.request('/app-control/pair-revoke',{},extra={'Authorization':'Bearer '+parent})
-  self.assertEqual((code,result['state']),(200,'stopped'))
+  self.assertEqual((code,result['state']),(200,'stopping'))
   self.assertEqual(self.command(controller,'status')[0],403)
   self.assertEqual(self.request('/remote/status')[1]['op'],'cancelled')
   self.assertIn(self.remote.records[plan['task_id']]['state'],('stopped','error'))
@@ -131,4 +131,63 @@ class AppControlTests(http_tests.RemoteHttpTests):
   self.assertEqual(self.command(ticket,'confirm')[0],409)
   self.assertEqual(self.command(ticket,'prepare',text='打开微信找到李洋',device='other')[0],409)
   self.assertEqual(self.request('/app-control/authorize',{'device':'epaper-01','challenge':'0'*64,'proof':'0'*64})[0],409)
-if __name__=='__main__':unittest.main()
+
+ def test_stable_code_rotate_and_public_summary_contract(self):
+  parent=self.grant();headers={'Authorization':'Bearer '+parent}
+  _,first=self.request('/app-control/pair-issue',{'format':'pin4'},extra=headers)
+  _,again=self.request('/app-control/pair-issue',{'format':'pin4'},extra=headers)
+  self.assertEqual(first['code'],again['code']);self.assertTrue(first['persistent'])
+  controller=self.paired(parent)
+  _,plan=self.command(controller,'prepare',text='打开微信找到李洋')
+  self.assertEqual(plan['cloudTask']['taskId'],plan['task_id'])
+  self.assertEqual(plan['cloudTask']['source'],'android-app')
+  self.assertFalse(plan['cloudTask']['verified'])
+  self.assertNotIn('owner',plan['cloudTask']);self.assertIn('observedAt',plan)
+  code,rotated=self.request('/app-control/pair-rotate',{},extra=headers)
+  self.assertEqual(code,200);self.assertNotEqual(first['code'],rotated['code'])
+  self.assertEqual(self.command(controller,'status')[0],403)
+
+ def test_screen_status_has_real_remote_task_and_safe_ai_summary(self):
+  parent=self.grant();_,plan=self.command(parent,'prepare',text='打开微信找到李洋')
+  code,data=self.request('/app-screen/status',kind='screen')
+  self.assertEqual(code,200);self.assertEqual(data['cloudTask']['taskId'],plan['task_id'])
+  self.assertEqual(data['cloudTask']['source'],'android-app');self.assertIsNotNone(data['cloudTask']['updatedAt'])
+  self.assertIn('observedAt',data);self.assertFalse(data['verified'])
+  self.remote.records.clear()
+  j=self.mailbox.create('epaper-01','a'*16,1);j.agent_job=True;j.reply='PRIVATE INTERNAL REASONING secret'
+  code,data=self.request('/app-screen/status',kind='screen')
+  self.assertEqual(code,200);self.assertEqual(data['cloudTask']['source'],'cloud-ai')
+  self.assertIsNone(data['cloudTask']['updatedAt']);self.assertFalse(data['cloudTask']['verified'])
+  self.assertNotIn('PRIVATE',json.dumps(data))
+
+ def test_legacy_issue_contract_and_revocation_is_unconfirmed(self):
+  parent=self.grant();headers={'Authorization':'Bearer '+parent}
+  code,legacy=self.request('/app-control/pair-issue',{},extra=headers)
+  self.assertEqual(code,200);self.assertRegex(legacy['code'],r'^[A-Za-z0-9_-]{43}$')
+  self.assertEqual(legacy['expiresIn'],120)
+  _,grant=self.request('/app-control/pair-redeem',{'code':legacy['code']})
+  code,result=self.request('/app-control/pair-revoke',{},extra=headers)
+  self.assertEqual(result['state'],'stopping');self.assertFalse(result['verified'])
+  self.assertEqual(self.command(grant['ticket'],'status')[0],403)
+
+ def test_persistent_restore_http_requires_online_parent_and_revokes(self):
+  parent=self.grant();headers={'Authorization':'Bearer '+parent}
+  _,pin=self.request('/app-control/pair-issue',{'format':'pin4'},extra=headers)
+  _,grant=self.request('/app-control/pair-redeem',{'code':pin['code']})
+  binding=grant['bindingToken']
+  code,restored=self.request('/app-control/pair-restore',{'bindingToken':binding})
+  self.assertEqual(code,200);self.assertEqual(restored['bindingToken'],binding)
+  self.assertEqual(restored['scope'],'phone-commands')
+  self.request('/app-control/pair-revoke',{},extra=headers)
+  self.assertEqual(self.request('/app-control/pair-restore',{'bindingToken':binding})[0],403)
+
+ def test_new_target_authorization_restores_binding_without_reissuing_code(self):
+  parent=self.grant();headers={'Authorization':'Bearer '+parent}
+  _,pin=self.request('/app-control/pair-issue',{'format':'pin4'},extra=headers)
+  _,grant=self.request('/app-control/pair-redeem',{'code':pin['code']})
+  new_parent=self.grant()
+  self.assertNotEqual(parent,new_parent)
+  self.assertEqual(self.command(grant['ticket'],'status')[0],403)
+  code,restored=self.request('/app-control/pair-restore',{'bindingToken':grant['bindingToken']})
+  self.assertEqual(code,200);self.assertEqual(restored['bindingToken'],grant['bindingToken'])
+  self.assertEqual(self.command(restored['ticket'],'status')[0],200)

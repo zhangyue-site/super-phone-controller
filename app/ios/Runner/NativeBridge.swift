@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import ReplayKit
+import Security
 
 final class NativeBridge {
   private weak var controller: FlutterViewController?
@@ -35,6 +36,16 @@ final class NativeBridge {
     }
     if channel == "app" {
       switch call.method {
+      case "readControllerPairing", "saveControllerPairing", "clearControllerPairing":
+        do {
+          switch call.method {
+          case "readControllerPairing": reply(try ControllerBindingStorage.read())
+          case "saveControllerPairing":
+            guard let value = args["value"] as? String else { fail(reply,"pairing_storage","绑定内容无效"); return }
+            try ControllerBindingStorage.save(value); reply(nil)
+          default: try ControllerBindingStorage.clear(); reply(nil)
+          }
+        } catch { fail(reply,"pairing_storage","无法访问本机安全绑定存储") }
       case "appearance": reply(UserDefaults.standard.string(forKey: "appearance") ?? "system")
       case "setAppearance":
         guard let mode = args["mode"] as? String, ["system", "light", "dark"].contains(mode) else { fail(reply,"invalid_mode","主题设置无效"); return }
@@ -145,4 +156,48 @@ final class CaptureConsentController: UIViewController {
   func cancel() { complete(false) }
   private func complete(_ success: Bool) { guard let callback = finished else { return }; finished = nil; timer?.invalidate(); timer = nil; dismiss(animated:true); callback(success) }
   deinit { timer?.invalidate() }
+}
+
+// Controller binding capability stays in this app's Keychain, never defaults,
+// screen payloads or diagnostics.
+private enum ControllerBindingStorage {
+  private static var query: [String: Any] {
+    [kSecClass as String: kSecClassGenericPassword,
+     kSecAttrService as String: "\(Bundle.main.bundleIdentifier ?? "controller").controller-binding.v1",
+     kSecAttrAccount as String: "current",
+     kSecAttrSynchronizable as String: false]
+  }
+  private static func check(_ status: OSStatus) throws {
+    guard status == errSecSuccess else { throw NSError(domain: "ControllerBindingStorage", code: Int(status)) }
+  }
+  static func read() throws -> String? {
+    var q = query
+    q[kSecReturnData as String] = true
+    q[kSecMatchLimit as String] = kSecMatchLimitOne
+    var item: CFTypeRef?
+    let status = SecItemCopyMatching(q as CFDictionary, &item)
+    if status == errSecItemNotFound { return nil }
+    try check(status)
+    guard let data = item as? Data, data.count <= 1024,
+      let value = String(data: data, encoding: .utf8) else {
+      throw NSError(domain: "ControllerBindingStorage", code: -1)
+    }
+    return value
+  }
+  static func save(_ value: String) throws {
+    let data = Data(value.utf8)
+    guard data.count <= 1024 else { throw NSError(domain: "ControllerBindingStorage", code: -2) }
+    let attributes: [String: Any] = [kSecValueData as String: data,
+      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+    let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+    if status == errSecItemNotFound {
+      var q = query
+      attributes.forEach { q[$0.key] = $0.value }
+      try check(SecItemAdd(q as CFDictionary, nil))
+    } else { try check(status) }
+  }
+  static func clear() throws {
+    let status = SecItemDelete(query as CFDictionary)
+    if status != errSecItemNotFound { try check(status) }
+  }
 }

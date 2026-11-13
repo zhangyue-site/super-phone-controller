@@ -37,7 +37,7 @@ void main() {
         ThemeMode.system);
     await tester.tap(find.text('控制手机'));
     await tester.pumpAndSettle();
-    expect(find.text('输入被控手机的连接码'), findsOneWidget);
+    expect(find.text('让两台手机连接起来'), findsOneWidget);
     expect(bluetooth.adapterReads, 0);
     await tester.pumpWidget(const SizedBox());
   });
@@ -113,7 +113,7 @@ void main() {
     FlutterBluePlusPlatform.instance = bluetooth;
     await tester.pumpWidget(const PcFlashApp());
     await tester.pumpAndSettle();
-    expect(find.text('控制板连接'), findsOneWidget);
+    expect(find.text('控制板与 USB'), findsOneWidget);
     expect(find.text('正在连接'), findsOneWidget);
     expect(find.byType(TextFormField), findsNothing);
     expect(bluetooth.adapterReads, 0);

@@ -6,6 +6,8 @@ import 'control_client.dart';
 import 'gateway_recovery.dart';
 import 'screen_share.dart';
 import 'screen_task_status.dart';
+import 'target_progress_card.dart';
+import 'product_widgets.dart';
 
 /// iOS uses explicit BLE possession and system broadcast consent.
 /// It never invents a USB CDC attachment or claims HID phone compatibility.
@@ -29,7 +31,7 @@ class _IosTargetScreenState extends State<IosTargetScreen> {
   bool _disposing = false;
   bool get _alive => mounted && !_disposing;
   Future<void>? _stopping;
-  String? _error, _code;
+  String? _error, _code, _stopNote;
   DateTime? _renewed, _codeExpiry;
   ScreenTaskStatus _feedback = const ScreenTaskStatus(capture: '尚未共享');
 
@@ -67,6 +69,7 @@ class _IosTargetScreenState extends State<IosTargetScreen> {
     setState(() {
       _busy = true;
       _error = null;
+      _stopNote = null;
     });
     final client = ControlClient();
     _client = client;
@@ -92,7 +95,9 @@ class _IosTargetScreenState extends State<IosTargetScreen> {
       setState(() {
         _active = true;
         _code = pairing['code'] as String?;
-        _codeExpiry = DateTime.now().add(const Duration(seconds: 120));
+        _codeExpiry = pairing['persistent'] == true
+            ? null
+            : DateTime.now().add(const Duration(seconds: 120));
       });
     } catch (e) {
       if (_current(generation)) {
@@ -104,21 +109,64 @@ class _IosTargetScreenState extends State<IosTargetScreen> {
     }
   }
 
-  Future<void> _newCode() async {
+  Future<void> _newCode({bool rotate = false}) async {
     final client = _client;
     if (_busy || !_active || client == null) return;
     final generation = _generation;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
-      final pairing = await client.pairingCode();
+      final pairing = rotate
+          ? await client.rotatePairingCode()
+          : await client.pairingCode();
       if (_current(generation)) {
         setState(() {
           _code = pairing['code'] as String?;
-          _codeExpiry = DateTime.now().add(const Duration(seconds: 120));
+          _codeExpiry = pairing['persistent'] == true
+              ? null
+              : DateTime.now().add(const Duration(seconds: 120));
           _error = null;
         });
       }
     } catch (e) {
-      if (_current(generation)) setState(() => _error = '连接码未生成：$e');
+      if (_current(generation)) setState(() => _error = '绑定码未更新：$e');
+    } finally {
+      if (_current(generation)) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _manageBinding(bool rotate) async {
+    final approved = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+                title: Text(rotate ? '更换绑定码？' : '解除控制手机？'),
+                content: Text(rotate
+                    ? '旧绑定码失效，已连接的控制手机将解除。系统屏幕广播保持。'
+                    : '解除已连接的控制手机，保留固定绑定码。系统屏幕广播保持。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(c, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(c, true),
+                      child: const Text('确认'))
+                ]));
+    if (approved != true || !_alive) return;
+    if (rotate) {
+      await _newCode(rotate: true);
+      return;
+    }
+    final client = _client;
+    if (client == null || _busy) return;
+    setState(() => _busy = true);
+    try {
+      await client.revokeControllers();
+    } catch (e) {
+      if (_alive) setState(() => _error = '解除控制手机未确认：$e');
+    } finally {
+      if (_alive) setState(() => _busy = false);
     }
   }
 
@@ -181,7 +229,8 @@ class _IosTargetScreenState extends State<IosTargetScreen> {
     }
   }
 
-  Future<void> _stop() => _stopping ??= _stopNow().whenComplete(() => _stopping = null);
+  Future<void> _stop() =>
+      _stopping ??= _stopNow().whenComplete(() => _stopping = null);
 
   Future<void> _stopNow() async {
     ++_generation;
@@ -191,11 +240,16 @@ class _IosTargetScreenState extends State<IosTargetScreen> {
     _active = false;
     _code = null;
     _renewed = null;
-    if (_alive) setState(() => _busy = true);
+    if (_alive) {
+      setState(() {
+        _busy = true;
+        _stopNote = '本机停止请求已发出；云端停止与已发动作结果仍需确认。';
+      });
+    }
     try {
       await ScreenShare.stop();
     } catch (_) {
-      /* System capture termination is also visible in native state. */
+      _stopNote = '系统屏幕广播停止未确认，请检查 iOS 广播状态；已发动作结果未知。';
     }
     try {
       await client?.shutdown();
@@ -242,12 +296,39 @@ class _IosTargetScreenState extends State<IosTargetScreen> {
         },
         child: Scaffold(
           appBar: AppBar(title: const Text('被控 iPhone')),
+          bottomNavigationBar: SafeArea(
+              child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: OutlinedButton.icon(
+                      onPressed: _stop,
+                      icon: const Icon(Icons.stop_circle_outlined),
+                      label: Text(_busy ? '正在处理…' : '停止共享与控制')))),
           body: ListView(padding: const EdgeInsets.all(24), children: [
-            Text('连接控制板并共享本机屏幕',
+            Text(_active ? '系统屏幕广播中' : '连接控制板并共享本机屏幕',
                 style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 12),
             const Text(
                 '通过蓝牙核验控制板身份，由 iOS 系统确认屏幕广播。控制板仍需通过 USB 连接本机才能执行 HID；蓝牙连接不代表 USB 或实际点击已通过。'),
+            TargetStatusOverview(
+                board: _client?.authorized == true
+                    ? '蓝牙身份已核验；USB 实际连接未自动核验'
+                    : '等待蓝牙身份核验；USB 实际连接未自动核验',
+                capture: _active ? _feedback.capture : '等待 iOS 系统广播授权',
+                network: _client?.authorized == true
+                    ? '手机中转授权已建立；云端新鲜度见下方'
+                    : '服务连接待确认',
+                permission: 'iOS 不提供 Android USB 会话核验；实际 HID 兼容性须实机检查'),
+            TargetProgressCard(
+                status: _feedback,
+                connected: _client?.authorized == true && _active,
+                now: DateTime.now()),
+            const Card(
+                child: ListTile(
+                    leading: Icon(Icons.text_snippet_outlined),
+                    title: Text('本地 OCR · iOS 暂无支持'),
+                    subtitle:
+                        Text('本版本未接入 iOS 本地文字与按钮识别，不将 Android 模型状态视为本机可用。'))),
+            if (_stopNote != null) ProductError(_stopNote!),
             CheckboxListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('我已将所选控制板的 USB 连接到这台 iPhone'),
@@ -281,18 +362,23 @@ class _IosTargetScreenState extends State<IosTargetScreen> {
                   child: LinearProgressIndicator()),
             if (_active) ...[
               const SizedBox(height: 20),
-              Text(_feedback.capture),
-              Text(_feedback.taskLabel),
-              if (_feedback.reply.isNotEmpty) Text(_feedback.reply),
-              const SizedBox(height: 16),
               if (_code != null)
-                SelectableText(_code!, semanticsLabel: '控制手机连接码'),
+                TargetBindingCode(
+                    code: _code!, persistent: _codeExpiry == null),
               TextButton(
-                  onPressed: _busy ? null : _newCode,
-                  child: const Text('生成新的连接码')),
+                  onPressed: _busy ? null : () => _newCode(),
+                  child: const Text('查看绑定码')),
+              if (_code != null && _codeExpiry == null)
+                ExpansionTile(title: const Text('管理绑定'), children: [
+                  TextButton(
+                      onPressed: _busy ? null : () => _manageBinding(true),
+                      child: const Text('更换绑定码并解除控制手机')),
+                  TextButton(
+                      onPressed: _busy ? null : () => _manageBinding(false),
+                      child: const Text('解除控制手机，保留绑定码')),
+                ]),
             ],
-            if (_client != null || _active)
-              OutlinedButton(onPressed: _stop, child: const Text('停止共享与控制')),
+            const Text('返回时会询问是否停止系统广播；恢复连接不会重放旧操作。'),
           ]),
         ),
       );

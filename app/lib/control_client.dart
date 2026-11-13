@@ -89,7 +89,7 @@ class ControlClient implements LocalVisionSource {
   bool _closed = false;
   Object? _relayError;
   BleOtaService? _board;
-  String? _ticket;
+  String? _ticket, _bindingToken;
   DateTime? _expires;
   BleOtaService? _relayBoard;
   bool _paired = false, _refreshing = false;
@@ -168,8 +168,9 @@ class ControlClient implements LocalVisionSource {
   Future<void> pair(String code) async {
     if (_closed ||
         _ticket != null ||
-        !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(code)) {
-      throw const FormatException('请粘贴被控手机生成的完整连接码');
+        !(RegExp(r'^[0-9]{4}$').hasMatch(code) ||
+            RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(code))) {
+      throw const FormatException('请输入被控手机的4位绑定码，或粘贴旧版完整连接码');
     }
     _http ??= http.Client();
     final grant = await _post('pair-redeem', {'code': code});
@@ -180,10 +181,15 @@ class ControlClient implements LocalVisionSource {
         !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket) ||
         device is! String ||
         !RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(device) ||
-        grant['expiresIn'] != 300) {
+        grant['expiresIn'] != 300 ||
+        (grant['bindingToken'] != null &&
+            (grant['bindingToken'] is! String ||
+                !RegExp(r'^[A-Za-z0-9_-]{43}$')
+                    .hasMatch(grant['bindingToken'] as String)))) {
       throw const FormatException('连接授权无效');
     }
     _paired = true;
+    _bindingToken = grant['bindingToken'] as String?;
     _ticket = ticket;
     deviceId = device;
     _expires = DateTime.now().add(const Duration(seconds: 300));
@@ -198,7 +204,8 @@ class ControlClient implements LocalVisionSource {
         expires == null) {
       return null;
     }
-    return ControllerPairing(ticket, device, expires);
+    return ControllerPairing(ticket, device, expires,
+        bindingToken: _bindingToken);
   }
 
   Future<void> restorePairing(ControllerPairing pairing) async {
@@ -206,16 +213,37 @@ class ControlClient implements LocalVisionSource {
       throw StateError('配对已失效');
     }
     _http ??= http.Client();
-    _paired = true;
-    _ticket = pairing.ticket;
-    deviceId = pairing.device;
-    _expires = pairing.expires;
     try {
-      await _refresh(force: true);
-      if (!authorized) throw StateError('配对已失效');
+      if (pairing.hasPersistentBinding) {
+        final grant =
+            await _post('pair-restore', {'bindingToken': pairing.bindingToken});
+        final ticket = grant['ticket'];
+        if (_closed ||
+            grant['scope'] != 'phone-commands' ||
+            ticket is! String ||
+            !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket) ||
+            grant['expiresIn'] != 300 ||
+            grant['device'] != pairing.device ||
+            grant['bindingToken'] != pairing.bindingToken) {
+          throw const FormatException('恢复绑定的目标或授权无效');
+        }
+        _paired = true;
+        _ticket = ticket;
+        _bindingToken = pairing.bindingToken;
+        deviceId = pairing.device;
+        _expires = DateTime.now().add(const Duration(seconds: 300));
+      } else {
+        _paired = true;
+        _ticket = pairing.ticket;
+        deviceId = pairing.device;
+        _expires = pairing.expires;
+        await _refresh(force: true);
+        if (!authorized) throw StateError('配对已失效');
+      }
     } catch (_) {
       _ticket = null;
       _expires = null;
+      _bindingToken = null;
       _paired = false;
       deviceId = null;
       rethrow;
@@ -226,7 +254,16 @@ class ControlClient implements LocalVisionSource {
     if (!authorized || _paired || _relay == null) {
       throw StateError('请先建立被控手机中继');
     }
-    return _post('pair-issue', {}, auth: true);
+    return _post('pair-issue', {'format': 'pin4'}, auth: true);
+  }
+
+  /// Rotating a fixed binding code invalidates existing controller grants.
+  /// It never requests a phone action or starts/replays a task.
+  Future<Map<String, dynamic>> rotatePairingCode() async {
+    if (!authorized || _paired || _relay == null) {
+      throw StateError('请先建立被控手机中继');
+    }
+    return _post('pair-rotate', {}, auth: true);
   }
 
   Future<void> revokeControllers() async {

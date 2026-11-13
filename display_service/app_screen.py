@@ -127,6 +127,9 @@ def handle(handler,config):
     raw=handler.rfile.read(size)
     if len(raw)!=size:raise ValueError('truncated')
     payload=json.loads(raw)
+   from .cloud_progress import utc_now,job_summary
+   from .remote_http import REMOTE
+   cloud_task=REMOTE.public_device_status(device)
    # Recheck while holding the capture authority lock, then mailbox: revoke
    # and authorize use the same lock order. Never cache a terminal globally.
    with AUTHORITY.lock:
@@ -151,6 +154,13 @@ def handle(handler,config):
       'frame':j.video_sequence if j else 0,'pointerReady':bool(j and j.pointer_protocol=='absolute-v1'),
       'skills':STORE.catalog(device),'barrier':j.video_barrier if j else '',
       'verified':bool(j and j.done and j.state=='done' and getattr(j,'navigation_verified',False) is True)}
+   if j and (cloud_task is None or (not j.done and not j.cancelled and not getattr(j,'remote_task_id','') and cloud_task['terminal'])):
+    cloud_task=job_summary(j)
+   if j and getattr(j,'agent_job',False):result['reply']=job_summary(j)['description']
+   result['serverCancelled']=bool(cloud_task and cloud_task.get('serverCancelled'))
+   result['stopConfirmed']=False
+   result['cloudTask']=cloud_task
+   result['observedAt']=utc_now()
    result['localResultsProtocol']=1
    if results_ack:result['localResultsReceipt']=results_ack
    handler.reply(200,json.dumps(result,ensure_ascii=False).encode());return True

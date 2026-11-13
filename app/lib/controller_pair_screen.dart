@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'control_client.dart';
-import 'controller_pairing_store.dart';
 import 'controller_gateway_screen.dart';
 import 'control_screen.dart';
 
-/// Controller phone A redeems a short-lived code explicitly shared by phone B.
+/// Controller redeems the binding code explicitly shared by the target.
 class ControllerPairScreen extends StatefulWidget {
   const ControllerPairScreen(
       {super.key, this.clientFactory, this.connectedBuilder});
@@ -66,20 +65,18 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
         return;
       }
       _pending = null; // The connected route now owns this client.
-      _code.clear();
       setState(() => _busy = false);
       await Navigator.of(context).push(MaterialPageRoute<void>(
           builder: (_) =>
               widget.connectedBuilder?.call(client) ??
               ControlScreen(client: client)));
-      await ControllerPairingStore.clear();
     } catch (_) {
       client.close();
       if (mounted && generation == _generation) {
         _pending = null;
         setState(() {
           _busy = false;
-          _error = '连接失败。请确认网络正常，并在被控手机重新生成连接码后重试。';
+          _error = '连接失败。请确认网络、绑定码及被控端连接；旧连接码失效时请重新生成连接码。输入已保留。';
         });
       }
     }
@@ -97,9 +94,9 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('连接被控手机')),
         body: ListView(padding: const EdgeInsets.all(24), children: [
-          Text('输入被控手机的连接码', style: Theme.of(context).textTheme.headlineSmall),
+          Text('让两台手机连接起来', style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 12),
-          const Text('在被控手机连接控制板后生成连接码。连接码为一次性使用，2分钟后过期。'),
+          const Text('在被控手机连接控制板并共享整屏，再输入4位绑定码。绑定码持续有效，主动更换后失效。'),
           const SizedBox(height: 12),
           const Text('此手机用于发送任务和查看进度，无需共享此手机的屏幕。'),
           const SizedBox(height: 16),
@@ -119,19 +116,39 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
                 enabled: !_busy,
                 autocorrect: false,
                 enableSuggestions: false,
-                keyboardType: TextInputType.visiblePassword,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(
+                    fontSize: 28,
+                    letterSpacing: 6,
+                    fontFeatures: [FontFeature.tabularFigures()]),
                 textInputAction: TextInputAction.done,
                 onFieldSubmitted: (_) => _connect(),
                 decoration: const InputDecoration(
-                    labelText: '一次性连接码',
-                    hintText: '粘贴43位连接码',
-                    helperText: '连接码仅用于本次连接，不会保存',
+                    labelText: '4位绑定码',
+                    hintText: '输入4位数字',
+                    helperText: '也可粘贴完整43位旧连接码；返回页面保留绑定',
                     helperMaxLines: 2),
                 validator: (value) =>
-                    RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(value?.trim() ?? '')
+                    RegExp(r'^(?:[0-9]{4}|[A-Za-z0-9_-]{43})$')
+                            .hasMatch(value?.trim() ?? '')
                         ? null
-                        : '请粘贴完整的43位连接码',
+                        : '请输入4位数字绑定码，或完整43位旧连接码',
               )),
+          TextButton(
+              onPressed: _busy
+                  ? null
+                  : () => showDialog<void>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                              title: const Text('使用旧连接码'),
+                              content: const Text(
+                                  '将完整43位旧连接码粘贴到同一个输入框即可。旧码仍遵循原有有效期。'),
+                              actions: [
+                                TextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: const Text('知道了'))
+                              ])),
+              child: const Text('使用43位旧连接码')),
           const SizedBox(height: 8),
           Align(
               alignment: Alignment.centerLeft,
@@ -148,11 +165,20 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
                     style:
                         TextStyle(color: Theme.of(context).colorScheme.error))),
           ],
-          const SizedBox(height: 24),
-          FilledButton(
-              onPressed: _busy ? null : _connect,
-              child: Text(_busy ? '正在连接…' : '连接被控手机')),
-          if (_busy) TextButton(onPressed: _cancel, child: const Text('取消连接')),
         ]),
+        bottomNavigationBar: SafeArea(
+            child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                FilledButton(
+                    onPressed: _busy ? null : _connect,
+                    child: Text(_busy ? '正在连接…' : '连接被控手机')),
+                if (_busy)
+                  TextButton(onPressed: _cancel, child: const Text('取消连接')),
+              ]),
+        )),
       );
 }

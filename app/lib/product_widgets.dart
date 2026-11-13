@@ -54,24 +54,38 @@ class TargetStatusOverview extends StatelessWidget {
   final String board, capture, permission, network;
   final String? error;
   @override
-  Widget build(BuildContext context) =>
-      Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        for (final item in [
-          (Icons.usb, '控制板连接', board),
-          (Icons.screen_share_outlined, '屏幕画面', capture),
-          (Icons.touch_app_outlined, '操作许可', permission),
-          (Icons.cloud_outlined, '联网方式', network)
-        ])
-          Card(
-              child: ListTile(
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  leading: Icon(item.$1),
-                  title: Text(item.$2,
-                      style: Theme.of(context).textTheme.titleSmall),
-                  subtitle: Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(item.$3)))),
+  Widget build(BuildContext context) => Column(children: [
+        Card(
+            child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(children: [
+                  for (final item in [
+                    (Icons.usb, '控制板与 USB', board),
+                    (Icons.screen_share_outlined, '整屏共享', capture),
+                    (Icons.cloud_outlined, '云端任务服务', network),
+                    (Icons.touch_app_outlined, '操作许可', permission),
+                  ])
+                    Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(item.$1, size: 22),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                    Text(item.$2,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleSmall),
+                                    const SizedBox(height: 4),
+                                    Text(item.$3),
+                                  ])),
+                            ])),
+                ]))),
         if (error != null) ProductError(error!),
       ]);
 }

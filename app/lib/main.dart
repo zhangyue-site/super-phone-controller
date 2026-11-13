@@ -152,7 +152,10 @@ class _RoleRouterState extends State<_RoleRouter> {
       // Role selection remains available when USB is unavailable.
     }
     final pairing = await ControllerPairingStore.read();
-    if (pairing == null || !mounted || _selected || revision != _routeRevision) {
+    if (pairing == null ||
+        !mounted ||
+        _selected ||
+        revision != _routeRevision) {
       return;
     }
     final client = ControlClient();
@@ -160,7 +163,10 @@ class _RoleRouterState extends State<_RoleRouter> {
       await client.restorePairing(pairing);
     } on ControlHttpFailure catch (error) {
       client.close();
-      if (error.status == 403 && mounted && revision == _routeRevision) {
+      if (error.status == 403 &&
+          !pairing.hasPersistentBinding &&
+          mounted &&
+          revision == _routeRevision) {
         await ControllerPairingStore.clear();
       }
       return;
@@ -172,8 +178,7 @@ class _RoleRouterState extends State<_RoleRouter> {
       client.close();
       return;
     }
-    await _open(ControlScreen(client: client),
-        onExit: ControllerPairingStore.clear);
+    await _open(ControlScreen(client: client));
   }
 
   Future<void> _open(Widget screen, {Future<void> Function()? onExit}) async {
@@ -189,6 +194,32 @@ class _RoleRouterState extends State<_RoleRouter> {
     }
   }
 
+  Future<void> _openController() async {
+    if (_selected) return;
+    final revision = _routeRevision;
+    final saved = await ControllerPairingStore.read();
+    if (!mounted || _selected || revision != _routeRevision) return;
+    if (saved != null) {
+      final client = ControlClient();
+      try {
+        await client.restorePairing(saved);
+        if (!mounted || _selected || revision != _routeRevision) {
+          client.close();
+          return;
+        }
+        await _open(ControlScreen(client: client));
+        return;
+      } catch (_) {
+        client.close();
+        // Offline or revoked binding never authorizes actions. Keep the saved
+        // binding for an explicit later retry instead of silently discarding it.
+      }
+    }
+    if (mounted && !_selected && revision == _routeRevision) {
+      await _open(const ControllerPairScreen());
+    }
+  }
+
   void _openTarget() => _open(Platform.isIOS
       ? const IosTargetScreen()
       : const DeviceScreen(targetOnly: true));
@@ -197,7 +228,7 @@ class _RoleRouterState extends State<_RoleRouter> {
         sharingActive: _sharing,
         themeMode: widget.themeMode,
         onThemeChanged: widget.onThemeChanged,
-        onController: () => _open(const ControllerPairScreen()),
+        onController: _openController,
         onTarget: _openTarget,
         onMaintenance: _openMaintenance,
       );

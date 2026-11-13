@@ -7,6 +7,7 @@ import 'controller_local_vision.dart';
 import 'controller_model_status.dart';
 import 'product_widgets.dart';
 import 'product_settings.dart';
+import 'controller_task_context.dart';
 
 class ControlScreen extends StatefulWidget {
   final BleOtaService? service;
@@ -28,6 +29,7 @@ class _ControlScreenState extends State<ControlScreen>
   bool _busy = false, _polling = false, _stopping = false;
   Timer? _timer, _visionTimer;
   ControllerLocalVision? _vision;
+  bool _stopUnconfirmed = false;
   bool _foreground = true, _visionActive = false, _visionStopped = false;
   bool get _taskTerminal =>
       _task["terminal"] == true ||
@@ -208,6 +210,9 @@ class _ControlScreenState extends State<ControlScreen>
       if (mounted && generation == _generation) {
         setState(() {
           _task = result;
+          if (result['state'] == 'stopped' && result['stopConfirmed'] == true) {
+            _stopUnconfirmed = false;
+          }
           _error = null;
         });
       }
@@ -243,6 +248,9 @@ class _ControlScreenState extends State<ControlScreen>
       if (mounted && generation == _generation) {
         setState(() {
           _task = result;
+          if (result['state'] == 'stopped' && result['stopConfirmed'] == true) {
+            _stopUnconfirmed = false;
+          }
           _error = null;
         });
       }
@@ -259,6 +267,7 @@ class _ControlScreenState extends State<ControlScreen>
     _pauseVision();
     final generation = ++_generation;
     setState(() {
+      _stopUnconfirmed = true;
       _stopping = true;
       _busy = false;
       _error = null;
@@ -269,6 +278,9 @@ class _ControlScreenState extends State<ControlScreen>
       if (mounted && generation == _generation) {
         setState(() {
           _task = result;
+          if (result['state'] == 'stopped' && result['stopConfirmed'] == true) {
+            _stopUnconfirmed = false;
+          }
           _error = null;
         });
       }
@@ -376,6 +388,42 @@ class _ControlScreenState extends State<ControlScreen>
     super.dispose();
   }
 
+  Future<void> _openSettings() async {
+    _pauseVision();
+    var pending = false;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => StatefulBuilder(
+          builder: (settingsContext, update) => Scaffold(
+                body:
+                    ProductSettingsScreen(client: _client, diagnostic: _error),
+                bottomNavigationBar: SafeArea(
+                    child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.error),
+                    icon: const Icon(Icons.stop_circle_outlined),
+                    label: Text(pending
+                        ? '正在请求停止…'
+                        : _stopUnconfirmed
+                            ? '停止未确认 · 再次请求'
+                            : '停止手机操作'),
+                    onPressed: pending
+                        ? null
+                        : () async {
+                            update(() => pending = true);
+                            await _stop();
+                            if (settingsContext.mounted) {
+                              update(() => pending = false);
+                            }
+                          },
+                  ),
+                )),
+              )),
+    ));
+    if (mounted && !_taskTerminal && !_visionStopped) _prepareVision();
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = _task['state'];
@@ -385,7 +433,7 @@ class _ControlScreenState extends State<ControlScreen>
       'running': '控制板执行中',
       'done': _task['verified'] == true ? '结果已核验' : '执行结束，尚未核验',
       'error': '未完成',
-      'stopped': '已停止',
+      'stopped': _task['stopConfirmed'] == true ? '已停止' : '后续任务已取消，设备停止待确认',
       'stopping': '停止请求已发送，等待板端确认',
       'failed': '任务失败',
       'cancelled': '已取消',
@@ -398,22 +446,17 @@ class _ControlScreenState extends State<ControlScreen>
       appBar: AppBar(title: const Text('任务'), actions: [
         IconButton(
             tooltip: '设备与设置',
-            onPressed: () {
-              _pauseVision();
-              Navigator.of(context).push(MaterialPageRoute<void>(
-                  builder: (_) => ProductSettingsScreen(
-                      client: _client, diagnostic: _error)));
-            },
+            onPressed: _openSettings,
             icon: const Icon(Icons.settings_outlined))
       ]),
       body: ListView(padding: const EdgeInsets.all(16), children: [
-        const Text('输入任务，先看计划',
+        const Text('发给龙虾',
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         Text(_busy
             ? '正在连接…'
             : _client.authorized
-                ? '可生成计划，执行前将检查操作许可'
+                ? '直接描述手机任务，无需 /phone；龙虾先复述目标和计划，确认后执行'
                 : '控制连接已结束'),
         if (!_busy && !_client.authorized)
           OutlinedButton(onPressed: _connect, child: const Text('重新连接云端控制')),
@@ -477,13 +520,22 @@ class _ControlScreenState extends State<ControlScreen>
             maxLines: 4,
             enabled: !_busy && !_stopping,
             decoration: const InputDecoration(
-                labelText: '手机操作指令',
+                labelText: '发给龙虾的手机任务',
+                helperText: '操作目标是当前已绑定手机',
+                helperMaxLines: 2,
                 hintText: '打开设置 / 打开设置搜索电池',
                 border: OutlineInputBorder())),
         FilledButton(
             onPressed: _busy || _stopping ? null : () => _run('prepare'),
-            child: Text(_busy ? '正在请求…' : '生成计划')),
+            child: Text(_busy ? '正在请求…' : '发给龙虾，查看计划')),
         if (_error != null) ProductError(_error!),
+        if (_stopUnconfirmed)
+          Card(
+              child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Semantics(
+                      liveRegion: true,
+                      child: const Text('停止请求尚未确认。已发动作结果未知；必要时请使用板子上的停止按钮。')))),
         if (_task.isNotEmpty)
           Card(
               child: Padding(
@@ -513,6 +565,11 @@ class _ControlScreenState extends State<ControlScreen>
                                 ? null
                                 : () => _run('status'),
                             child: const Text('刷新状态')),
+                        ControllerTaskContext(
+                            task: _task,
+                            deviceId: _client.deviceId,
+                            connected: _client.authorized && _error == null),
+                        const Divider(),
                       ]))),
         const SizedBox(height: 12),
         const Text('确认计划后，控制板会操作被控手机。进入设置不会取消任务；停止按钮可请求立即停止，结果按真实回执更新。'),
@@ -525,7 +582,11 @@ class _ControlScreenState extends State<ControlScreen>
                       backgroundColor: Theme.of(context).colorScheme.error),
                   onPressed: _stopping ? null : _stop,
                   icon: const Icon(Icons.stop_circle_outlined),
-                  label: Text(_stopping ? '正在请求停止…' : '停止手机操作')))),
+                  label: Text(_stopping
+                      ? '正在请求停止…'
+                      : _stopUnconfirmed
+                          ? '停止未确认 · 再次请求'
+                          : '停止手机操作')))),
     );
   }
 }

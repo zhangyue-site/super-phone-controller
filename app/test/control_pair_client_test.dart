@@ -66,9 +66,76 @@ class RenewalBoard extends BleOtaService {
 }
 
 void main() {
-  test('restore verifies a saved grant before it can be reused', () async {
+  test(
+      'persistent binding restores after short ticket expiry without resending PIN',
+      () async {
     final saved = ControllerPairing('t' * 43, 'test-board',
-        DateTime.now().add(const Duration(minutes: 4)));
+        DateTime.now().subtract(const Duration(minutes: 10)),
+        bindingToken: 'b' * 43);
+    expect(saved.valid, isTrue);
+    var requests = 0;
+    final client = ControlClient(client: MockClient((request) async {
+      requests++;
+      expect(request.url.path, endsWith('/pair-restore'));
+      expect(jsonDecode(request.body), {'bindingToken': 'b' * 43});
+      expect(request.headers.containsKey('Authorization'), isFalse);
+      return http.Response(
+          jsonEncode({...grant(), 'bindingToken': 'b' * 43}), 200);
+    }));
+    addTearDown(client.shutdown);
+    await client.restorePairing(saved);
+    expect(requests, 1);
+    expect(client.authorized, isTrue);
+    expect(client.restorablePairing!.bindingToken, 'b' * 43);
+  });
+  test('restore cannot change the bound target device', () async {
+    final saved = ControllerPairing('t' * 43, 'test-board',
+        DateTime.now().subtract(const Duration(minutes: 10)),
+        bindingToken: 'b' * 43);
+    final client = ControlClient(
+        client: MockClient((_) async => http.Response(
+            jsonEncode({
+              ...grant(),
+              'device': 'other-board',
+              'bindingToken': 'b' * 43
+            }),
+            200)));
+    addTearDown(client.shutdown);
+    await expectLater(client.restorePairing(saved), throwsFormatException);
+    expect(client.authorized, isFalse);
+  });
+
+  test(
+      'four digit binding code grants a command ticket without weakening ticket validation',
+      () async {
+    final paths = <String>[];
+    final client = ControlClient(client: MockClient((request) async {
+      paths.add(request.url.path.split('/').last);
+      expect(jsonDecode(request.body), {'code': '0246'});
+      return http.Response(jsonEncode(grant()), 200);
+    }));
+    addTearDown(client.shutdown);
+    await client.pair('0246');
+    expect(client.isPaired, isTrue);
+    expect(client.authorized, isTrue);
+    expect(paths, ['pair-redeem']);
+    await expectLater(client.rotatePairingCode(), throwsStateError);
+  });
+  test('malformed short codes never reach the service', () async {
+    var requests = 0;
+    final client = ControlClient(client: MockClient((_) async {
+      requests++;
+      return http.Response(jsonEncode(grant()), 200);
+    }));
+    addTearDown(client.shutdown);
+    for (final invalid in ['123', '12345', '12a4', '１２３４', ' 1234 ']) {
+      await expectLater(client.pair(invalid), throwsFormatException);
+    }
+    expect(requests, 0);
+  });
+  test('restore verifies a saved grant before it can be reused', () async {
+    final saved = ControllerPairing(
+        't' * 43, 'test-board', DateTime.now().add(const Duration(minutes: 4)));
     for (final status in [200, 403]) {
       var requests = 0;
       final client = ControlClient(client: MockClient((request) async {
@@ -79,10 +146,11 @@ void main() {
       }));
       if (status == 200) {
         await client.restorePairing(saved);
-        expect(client.restorablePairing!.expires.isAfter(saved.expires), isTrue);
+        expect(
+            client.restorablePairing!.expires.isAfter(saved.expires), isTrue);
       } else {
-        await expectLater(client.restorePairing(saved),
-            throwsA(isA<ControlHttpFailure>()));
+        await expectLater(
+            client.restorePairing(saved), throwsA(isA<ControlHttpFailure>()));
         expect(client.authorized, isFalse);
         expect(client.restorablePairing, isNull);
       }

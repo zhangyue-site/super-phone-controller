@@ -98,7 +98,7 @@ void main() {
               .attachment
               .serial,
           'AABBCCDDEEFF');
-      expect(find.text('已识别控制板'), findsOneWidget);
+      expect(find.text('USB 已连接，控制板身份待核验'), findsOneWidget);
       expect(bluetooth.reads, 0);
       expect(infoCalls, 1);
       await tester.pump(const Duration(seconds: 6));
@@ -116,7 +116,7 @@ void main() {
               .attachment
               .serial,
           'AABBCCDDEEFF');
-      expect(find.text('已识别控制板'), findsOneWidget);
+      expect(find.text('USB 已连接，控制板身份待核验'), findsOneWidget);
       expect(find.textContaining('首次连接：'), findsNothing);
       expect(find.text('请打开手机蓝牙，开启后会自动寻找控制板'), findsNothing);
       expect(find.text('被控手机'), findsOneWidget);

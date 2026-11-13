@@ -12,7 +12,15 @@ class PairingsTests(unittest.TestCase):
    if token not in self.parents:raise PermissionError('expired parent')
    return self.parents[token]
   self.p=Pairings(parent_device,clock=lambda:self.now)
- def code(self,parent='parent'):return self.p.issue(parent)['code']
+ def code(self,parent='parent'):
+  import secrets
+  device=self.p.parent_device(parent)
+  self.p._prune()
+  if len(self.p.codes)>=256:raise ValueError('capacity')
+  self.p.issue(parent)
+  generation=self.p.db.execute('SELECT generation FROM pairings WHERE device=?',(device,)).fetchone()[0]
+  code=secrets.token_urlsafe(32);self.p.codes[code]=(self.now+120,device,parent,generation)
+  return code
  def ticket(self):return self.p.redeem(self.code())['ticket']
  def test_code_expires_at_exact_120_second_boundary(self):
   code=self.code();self.now+=119.999
@@ -53,10 +61,14 @@ class PairingsTests(unittest.TestCase):
   self.now+=120;self.code('overflow')
   self.assertEqual(len(self.p.codes),1)
   self.p.codes.clear()
-  for _ in range(256):self.ticket()
+  for _ in range(256):
+   self.p.attempts.clear();self.ticket()
+  self.p.attempts.clear()
   with self.assertRaises(ValueError):self.p.redeem(self.code())
   self.assertEqual(len(self.p.tickets),256)
   self.now+=300
+  # Persistent controller binding capacity is distinct from expiring tickets.
+  self.p.revoke('parent')
   self.assertIn('ticket',self.p.redeem(self.code()))
   self.assertEqual(len(self.p.tickets),1)
  def test_parent_invalidation_and_list_identity_fail_closed(self):

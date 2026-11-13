@@ -44,11 +44,13 @@ class RoleHome extends StatelessWidget {
           padding: const EdgeInsets.all(24),
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text('选择这台手机的用途',
+            Text('让两台手机连接起来',
                 style: Theme.of(context).textTheme.headlineMedium),
             const SizedBox(height: 12),
             const Text('控制手机发送任务，被控手机提供画面，控制板负责操作。连接建立后，每次执行仍会检查画面与许可。'),
             const SizedBox(height: 24),
+            Text('选择这台手机的用途', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
             if (sharingActive)
               Card(
                   child: ListTile(

@@ -57,7 +57,7 @@ void main() {
       'error': '任务失败',
       'waiting': '等待控制板或新画面',
       'idle': '等待新任务',
-      'stopped': '任务已停止',
+      'stopped': '后续任务已取消，设备停止待确认',
     };
     for (final entry in labels.entries) {
       final status =

@@ -16,6 +16,15 @@ void main() {
         .timeout(const Duration(seconds: 10));
     expect(info?['versionName'], isNotEmpty);
     expect(info?['versionCode'], isA<int>());
+    const storage = MethodChannel('pcflash/app');
+    await storage.invokeMethod<void>('clearControllerPairing');
+    const fixture = '{"bindingToken":"simulator-fixture-only"}';
+    await storage
+        .invokeMethod<void>('saveControllerPairing', {'value': fixture});
+    expect(
+        await storage.invokeMethod<String>('readControllerPairing'), fixture);
+    await storage.invokeMethod<void>('clearControllerPairing');
+    expect(await storage.invokeMethod<String>('readControllerPairing'), isNull);
     final usb = await const MethodChannel('pcflash/usb')
         .invokeMethod<dynamic>('snapshot')
         .timeout(const Duration(seconds: 10));

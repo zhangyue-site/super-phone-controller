@@ -163,7 +163,7 @@ void main() {
         await tester.pumpAndSettle();
         if (page == 'task') {
           await tester.enterText(find.byType(TextField), '打开设置');
-          await tester.tap(find.text('生成计划'));
+          await tester.tap(find.text('发给龙虾，查看计划'));
           await tester.pumpAndSettle();
           tester.testTextInput.hide();
           await tester.pump();
@@ -212,8 +212,8 @@ void main() {
     await tester.scrollUntilVisible(find.byType(TextField), 160,
         scrollable: find.byType(Scrollable).first);
     await tester.enterText(find.byType(TextField), '检查输入框');
-    await tester.ensureVisible(find.text('生成计划'));
-    await tester.tap(find.text('生成计划'));
+    await tester.ensureVisible(find.text('发给龙虾，查看计划'));
+    await tester.tap(find.text('发给龙虾，查看计划'));
     await tester.pumpAndSettle();
     expect(find.text('停止手机操作'), findsOneWidget);
     expect(tester.takeException(), isNull);

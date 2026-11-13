@@ -11,6 +11,7 @@ def authorize_target(obj,config):
   with AUTHORITY.lock:
    for ticket,item in list(AUTHORITY.tickets.items()):
     if item[1]==obj['device'] and ticket!=grant['ticket']:AUTHORITY.tickets.pop(ticket,None)
+  PAIRINGS.attach(grant['ticket'])
   return grant
 def renew_target(ticket,obj,config):
  with SESSION_LOCK:
@@ -22,6 +23,7 @@ def renew_target(ticket,obj,config):
    old=AUTHORITY.tickets.get(ticket)
    if old is None or old[0]<=AUTHORITY.clock():raise PermissionError('expired')
    AUTHORITY.tickets[ticket]=new
+  PAIRINGS.attach(ticket)
   return {'expiresIn':grant['expiresIn'],'scope':'phone-commands'}
 def renew_screen(target_ticket,screen_ticket):
  # Serialize target supersession, but never nest the two Authority locks or call
@@ -49,7 +51,7 @@ def owner(ticket):
   device=item[1]
  principal=hashlib.sha256(ticket.encode()).hexdigest()
  return ('android-app',principal,principal,device)
-PAIRINGS=Pairings(lambda ticket:owner(ticket)[3])
+PAIRINGS=Pairings(lambda ticket:owner(ticket)[3],path=os.environ.get('EPAPER_PAIRING_STATE','/var/lib/phone-controller/pairings.sqlite3'))
 def controller_owner(ticket):
  try:return owner(ticket)
  except PermissionError:return PAIRINGS.owner(ticket)
@@ -65,7 +67,7 @@ def binding_allowed(identity):
  return found or PAIRINGS.allowed(identity)
 def handle(handler,config):
  path=handler.path
- if path not in ('/app-control/challenge','/app-control/authorize','/app-control/command','/app-control/renew','/app-control/pair-issue','/app-control/pair-redeem','/app-control/pair-renew','/app-control/pair-revoke','/app-control/screen-renew'):return False
+ if path not in ('/app-control/challenge','/app-control/authorize','/app-control/command','/app-control/renew','/app-control/pair-issue','/app-control/pair-redeem','/app-control/pair-restore','/app-control/pair-renew','/app-control/pair-revoke','/app-control/pair-rotate','/app-control/screen-renew'):return False
  try:
   if handler.command!='POST':handler.reply(405,b'{}');return True
   if os.environ.get('EPAPER_REMOTE_CONTROL')!='1':handler.reply(503,b'{}');return True
@@ -84,19 +86,26 @@ def handle(handler,config):
    if set(obj)!={'device','challenge','proof'}:raise ValueError('fields')
    result=renew_target(bearer(handler),obj,config)
   elif path.endswith('/pair-issue'):
-   if obj:raise ValueError('fields')
-   result=PAIRINGS.issue(bearer(handler))
+   if obj not in ({},{'format':'pin4'}):raise ValueError('fields')
+   result=PAIRINGS.issue(bearer(handler)) if obj else PAIRINGS.issue_legacy(bearer(handler))
   elif path.endswith('/pair-redeem'):
    if set(obj)!={'code'}:raise ValueError('fields')
-   result=PAIRINGS.redeem(obj['code'])
+   result=PAIRINGS.redeem(obj['code'],client=handler.client_address[0] if hasattr(handler,'client_address') else 'unknown')
+  elif path.endswith('/pair-restore'):
+   if set(obj)!={'bindingToken'}:raise ValueError('fields')
+   result=PAIRINGS.restore(obj['bindingToken'])
   elif path.endswith('/pair-renew'):
    if obj:raise ValueError('fields')
    result=PAIRINGS.renew(bearer(handler))
+  elif path.endswith('/pair-rotate'):
+   if obj:raise ValueError('fields')
+   result=PAIRINGS.rotate(bearer(handler))
+   remote_http.REMOTE.stop_device(result['device'])
   elif path.endswith('/pair-revoke'):
    if obj:raise ValueError('fields')
    device=PAIRINGS.revoke(bearer(handler))
    remote_http.REMOTE.stop_device(device)
-   result={'state':'stopped','verified':False,'reply':'已撤销控制手机的连接并停止设备任务。'}
+   result={'state':'stopping','verified':False,'serverCancelled':True,'stopConfirmed':False,'reply':'已撤销控制端授权并请求停止任务；尚未获得设备停止确认。'}
   else:
    header=handler.headers.get('Authorization','')
    if not header.startswith('Bearer '):raise PermissionError('auth')
