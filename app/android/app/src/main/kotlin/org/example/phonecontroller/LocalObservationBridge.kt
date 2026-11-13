@@ -75,6 +75,7 @@ class LocalObservationBridge {
   if(scope!=currentScope || width!=ocr.optInt("width") || height!=ocr.optInt("height"))return null
   // Snapshot lookup precedes OCR configuration: no future count is put on an old JPEG.
   val snapshot=tracker.snapshotAt(capturedAt)
+  updateOcr(ocr)
   val age=(System.nanoTime()-capturedAt)/1_000_000L
   val output=if(snapshot!=null && snapshot.valid && snapshot.scope==currentScope && snapshot.sourceTimestampNs==capturedAt && age in 0..2500){
    val regions=JSONArray()
@@ -83,7 +84,6 @@ class LocalObservationBridge {
    }
    JSONObject().put("v",1).put("scopeHash",digest(currentScope)).put("sourceSequence",snapshot.sourceSeq).put("sourceTimestampNs",snapshot.sourceTimestampNs).put("sourceWidth",snapshot.sourceWidth).put("sourceHeight",snapshot.sourceHeight).put("ageMs",age).put("requiredFrames",10).put("minStableMs",600).put("regions",regions).put("layoutHints",JSONArray(latestHints.toString()))
   } else null
-  updateOcr(ocr)
   return output
  }
 }
