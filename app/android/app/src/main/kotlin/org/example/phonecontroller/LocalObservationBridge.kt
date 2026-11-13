@@ -41,6 +41,21 @@ class LocalObservationBridge {
   tracker.configure(scope,width,height,targets())
  }
  @Synchronized fun wantsFastSamples(currentScope: String): Boolean = scope==currentScope && external!=null
+ // Only a validated external target set can request a bounded source burst.
+ @Synchronized fun burstRequestKey(currentScope: String): String? {
+  if(scope!=currentScope || external==null)return null
+  val requested=targets().filter{it.role=="agent_target"}
+  if(requested.isEmpty())return null
+  return digest(currentScope+requested.joinToString(";"){"${it.id}:${it.label}:${it.left},${it.top},${it.right},${it.bottom}"})
+ }
+ @Synchronized fun burstReady(currentScope: String,capturedAt: Long): Boolean {
+  if(burstRequestKey(currentScope)==null)return false
+  val snapshot=tracker.snapshotAt(capturedAt) ?: return false
+  if(!snapshot.valid || snapshot.scope!=currentScope || snapshot.sourceTimestampNs!=capturedAt ||
+    System.nanoTime()-capturedAt !in 0L..250_000_000L)return false
+  val ids=targets().filter{it.role=="agent_target"}.map{it.id}
+  return ids.isNotEmpty() && ids.all{id->snapshot.regions.any{it.id==id && it.ready}}
+ }
  @Synchronized fun sample(value: String,seq: Long,capturedAt: Long,pixels: ByteBuffer,sourceW: Int,sourceH: Int,pixelStride: Int,rowStride: Int,w: Int,h: Int){
   ensureScope(value,w,h)
   tracker.observe(value,seq,capturedAt,pixels,sourceW,sourceH,pixelStride,rowStride)

@@ -94,6 +94,11 @@ jobs:
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.UsbControllerProfileTest
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.LocalRegionStabilityTest
 
+      - name: Source burst boundary regressions
+        run: |
+          javac --release 8 -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/SourceBurst.java android/app/src/test/java/org/example/phonecontroller/SourceBurstTest.java
+          java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.SourceBurstTest
+
       - name: Build signed APK
         env:
           CONTROLLER_BASE_URL: ${{ secrets.CONTROLLER_BASE_URL }}
@@ -107,6 +112,7 @@ jobs:
           BUILD_NAME: ${{ inputs.build_name }}
           BUILD_NUMBER: ${{ inputs.build_number }}
           PCFLASH_REMOTE_DIAGNOSTICS: '1'
+          PCFLASH_SOURCE_BURST: '1'
         run: |
           set -euo pipefail
           test -n "$PRIVATE_ARTIFACT_PASSWORD" || { echo "Private artifact encryption is required"; exit 1; }

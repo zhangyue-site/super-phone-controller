@@ -113,6 +113,67 @@ class ScreenShareService: Service() {
  @Volatile private var captureState="unknown"
  @Volatile private var hasStatusBarrier=false
  private val drain=Runnable { drainSource() }
+ // Handler-confined transport experiment. Never changes native observation thresholds.
+ private var sourceBurst: SourceBurst?=null
+ private var burstPrimary: ImageReader?=null
+ private var burstSecondary: ImageReader?=null
+ private var burstScope=""
+ private var burstKey=""
+ private val attemptedBursts=linkedSetOf<String>()
+ private fun burstInFlight()=sourceBurst?.state() in setOf(SourceBurst.State.BURST,SourceBurst.State.RESTORING)
+ private fun burstAuthorized()=recognitionAvailable() && !recovery.needsAuthorization()
+ private fun burstDiagnostic(event: String) {
+  SafeDiagnostics.record(mapOf("event" to "source_burst","phase" to "frame","reason" to event,
+   "switches" to (sourceBurst?.switches() ?: 0),"acquired_candidates" to (sourceBurst?.accepted() ?: 0),
+   "source_frames" to sourceFrames.get(),"eligible_frames" to eligibleFrames.get()))
+ }
+ private val burstTick=object: Runnable {
+  override fun run() { synchronized(this@ScreenShareService) {
+   if(!BuildConfig.SOURCE_BURST_EXPERIMENT || !running)return
+   val scope=observationScope()
+   val key=if(supportsLocalObservation && hasDemand(SystemClock.elapsedRealtime()))localObservation.burstRequestKey(scope) else null
+   if(sourceBurst==null && key!=null && key !in attemptedBursts && burstAuthorized() && retiredReader==null) {
+    // Bound replay memory per capture: saturation disables additional attempts.
+    if(attemptedBursts.size>=128)return
+    attemptedBursts.add(key);burstScope=scope;burstKey=key;burstPrimary=reader
+    val adapter=object: SourceBurst.Adapter {
+     override fun allocate(){check(retiredReader==null && burstAuthorized());burstSecondary=newReader()}
+     override fun discardQueued(secondary: Boolean) {
+      val target=(if(secondary)burstSecondary else burstPrimary) ?: error("missing source")
+      repeat(2){target.acquireLatestImage()?.close()}
+     }
+     override fun switchTo(secondary: Boolean,requestedAt: Long): Long {
+      check(burstAuthorized() && observationScope()==burstScope)
+      val target=(if(secondary)burstSecondary else burstPrimary) ?: error("missing source")
+      handler?.removeCallbacks(drain)
+      display!!.surface=target.surface;reader=target
+      return System.nanoTime()
+     }
+     override fun closeSecondary(){
+      check(reader===burstPrimary)
+      burstSecondary?.setOnImageAvailableListener(null,null);burstSecondary?.close();burstSecondary=null
+      burstDiagnostic("restored")
+     }
+     override fun stopCapture(){burstDiagnostic("failed");surfaceFailed()}
+    }
+    sourceBurst=SourceBurst(adapter,scope,System.nanoTime())
+    sourceBurst!!.begin(System.nanoTime(),false);burstDiagnostic("begin")
+   }
+   val burst=sourceBurst ?: return
+   if(burstInFlight())burst.tick(System.nanoTime(),scope,burstAuthorized(),key==burstKey,locked(),localObservation.burstReady(scope,lastEligibleTimestamp))
+   if(burstInFlight())handler?.postDelayed(this,50L)
+   else if(burst.state()==SourceBurst.State.DONE){sourceBurst=null;burstPrimary=null}
+  } }
+ }
+ private fun closeBurstReaders(){
+  handler?.removeCallbacks(burstTick)
+  // Called after VirtualDisplay release; no surface can still be attached.
+  val activeReader=reader
+  listOfNotNull(burstPrimary,burstSecondary).distinct().filter{it!==activeReader}.forEach{
+   try{it.setOnImageAvailableListener(null,null);it.close()}catch(_: Exception){}
+  }
+  burstPrimary=null;burstSecondary=null;sourceBurst=null;attemptedBursts.clear()
+ }
  private fun newReader(): ImageReader {
   val r=ImageReader.newInstance(initialWidth,initialHeight,PixelFormat.RGBA_8888,2)
   try {r.setOnImageAvailableListener({ source -> scheduleDrain(source) },handler);return r}
@@ -236,7 +297,7 @@ class ScreenShareService: Service() {
     val holdDisplay=physical && demand && !recovery.needsAuthorization() && now<until
     displayAwake?.let { if(holdDisplay){if(!it.isHeld)it.acquire(20000L)}else if(it.isHeld)it.release() }
     if(retiredReader!=null && now>=swapDeadline){sampling.restored();surfaceFailed();return}
-    if(sampling.begin(now,enabled,demand,physical,(!recovery.needsAuthorization() && (now < until)),
+    if(!burstInFlight() && sampling.begin(now,enabled,demand,physical,(!recovery.needsAuthorization() && (now < until)),
       (frameWorker.activeCount > 0 || frameWorker.queue.isNotEmpty()),lastEligibleAt)) {
      var next: ImageReader?=null
      try {
@@ -302,7 +363,7 @@ class ScreenShareService: Service() {
   SafeDiagnostics.record(mapOf("event" to "capture_pause","phase" to "capture","reason" to "cloud_auth","generation" to recovery.generation()))
   autoStep="done";autoRun="";RecognitionEvidence.clearResults();recovery.pause();latestLoopFrame=null;taskStatus="";frameDemand=false;status="云端授权暂不可用，保留屏幕共享并自动恢复连接"
  }
- @Synchronized private fun endCapture() { RecognitionEvidence.finish(localRecognitionId,"capture_changed");localRecognitionId="";localRecognitionUntil=0L;captureGeneration++;RecognitionEvidence.clearResults();recovery.stop();running=false;active=false;latestLoopFrame=null;frameDemand=false }
+ @Synchronized private fun endCapture() { handler?.removeCallbacks(burstTick);if(burstPrimary!=null || burstSecondary!=null){display?.release();display=null;closeBurstReaders()};RecognitionEvidence.finish(localRecognitionId,"capture_changed");localRecognitionId="";localRecognitionUntil=0L;captureGeneration++;RecognitionEvidence.clearResults();recovery.stop();running=false;active=false;latestLoopFrame=null;frameDemand=false }
  private fun renewalValid(session: String, capability: String, expectedProjection: MediaProjection?): Boolean =
   current===this && active && running && expectedProjection!=null && projection===expectedProjection &&
   ticket==capability && capability.isNotEmpty() && usbOwnerSession==session &&
@@ -388,7 +449,9 @@ class ScreenShareService: Service() {
       if(supportsLocalObservation && observedBarrier==barrier){val shot=screenshotSize();localObservation.request(data.optJSONObject("localObservationRequest"),observationScope(),shot.first,shot.second,barrier)}
       if(!supportsLocalObservation)localObservation.clear()
       frameDemand=data.optString("state") in setOf("thinking","running","planning","plan","verifying","capturing") && Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
-      demandAt=SystemClock.elapsedRealtime()}
+      demandAt=SystemClock.elapsedRealtime()
+      if(BuildConfig.SOURCE_BURST_EXPERIMENT)handler?.post { synchronized(this@ScreenShareService){handler?.removeCallbacks(burstTick);burstTick.run()} }
+     }
     } else if(CaptureRecoveryGuard.authorizationFailure(statusHttp)) {statusErrors.incrementAndGet();pauseCloud(requestTicket)}
     else if(running){statusErrors.incrementAndGet();status="云端暂不可用，保留共享并重试"}
    } catch(_: Exception) {statusErrors.incrementAndGet();if(running)taskStatus=""} finally {c?.disconnect();statusConnection=null}
@@ -520,6 +583,16 @@ class ScreenShareService: Service() {
       retiredReader?.close();retiredReader=null;swapStartedNanos=0L;sampling.restored();refreshOk.incrementAndGet()
      }
      if(!frameGate.accept(image.timestamp,System.nanoTime()) || image.timestamp<=lastEligibleTimestamp){oldFrames.incrementAndGet();return}
+     if(burstInFlight()){
+      val burst=sourceBurst!!
+      val scope=observationScope()
+      if(scope!=burstScope || !burstAuthorized()){
+       burst.tick(System.nanoTime(),scope,false,false,locked(),false);return
+      }
+      // Admit an acquired valid image before the independently scheduled switch tick.
+      // image() enforces the absolute deadline even if the handler tick is delayed.
+      if(!running || source!==reader || !burst.image(source===burstSecondary,image.timestamp,System.nanoTime()))return
+     }
      lastEligibleTimestamp=image.timestamp;lastEligibleAt=now;eligibleFrames.incrementAndGet()
      if(now>=until)pauseCloud(ticket)
      if(recovery.needsAuthorization())return
@@ -603,7 +676,7 @@ class ScreenShareService: Service() {
   }
   renewalConnection?.disconnect();connection?.disconnect();statusConnection?.disconnect();frameWorker.shutdownNow().forEach { (it as? FrameTask)?.discard() }
   val old=synchronized(this) {
-   display?.release();display=null;reader?.close();reader=null
+   display?.release();display=null;closeBurstReaders();reader?.close();reader=null
    if(retiredReader!=null)refreshCancel.incrementAndGet();retiredReader?.close();retiredReader=null
    displayAwake?.let{if(it.isHeld)it.release()};displayAwake=null
    keepAwake?.let{if(it.isHeld)it.release()};keepAwake=null
