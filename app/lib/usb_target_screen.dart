@@ -14,6 +14,7 @@ import 'product_widgets.dart';
 import 'product_settings.dart';
 import 'screen_task_status.dart';
 import 'local_auto_loop.dart';
+import 'overlay_pill.dart';
 
 /// The target owns capture and the BLE relay, never command entry.
 class UsbTargetScreen extends StatefulWidget {
@@ -491,6 +492,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         ),
         for (final message in _checkErrors.messages) ProductError(message),
         const AccessibilityAssistCard(),
+        const OverlayPillCard(),
         const LocalAutoLoopCard(),
         Card(
             child: Padding(

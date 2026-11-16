@@ -71,6 +71,17 @@ class CloudRelay {
             });
   }
   bool get isClosed => _closed;
+
+  /// Most recent confirmed receipt time (board heartbeat or control ack);
+  /// null before the first receipt. Passive read for status surfaces only.
+  DateTime? get lastReceiptAt {
+    final hb = _heartbeat, control = _lastControl;
+    if (hb != null && control != null) {
+      return hb.isAfter(control) ? hb : control;
+    }
+    return hb ?? control;
+  }
+
   bool get supportsMaintenance =>
       _maintenanceSupported && _wifiUpgradeSupported;
 
