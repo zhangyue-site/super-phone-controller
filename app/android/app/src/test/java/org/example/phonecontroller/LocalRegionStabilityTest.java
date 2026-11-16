@@ -50,5 +50,32 @@ public final class LocalRegionStabilityTest {
    ok(r.snapshotAt(captured)==null,"scope changes still retire history");
  }
 
- public static void main(String[] args){Runnable[] tests={LocalRegionStabilityTest::asynchronousConfiguration,LocalRegionStabilityTest::tenFrames,LocalRegionStabilityTest::dynamicOutside,LocalRegionStabilityTest::targetChange,LocalRegionStabilityTest::surroundingChange,LocalRegionStabilityTest::duplicates,LocalRegionStabilityTest::fastFrames,LocalRegionStabilityTest::gapAndOrder,LocalRegionStabilityTest::epochs,LocalRegionStabilityTest::geometry,LocalRegionStabilityTest::jitterAndLost,LocalRegionStabilityTest::snapshots,LocalRegionStabilityTest::invalidBuffers,LocalRegionStabilityTest::alphaAndPosition,LocalRegionStabilityTest::limits,LocalRegionStabilityTest::exactDuration,LocalRegionStabilityTest::retainedHistory,LocalRegionStabilityTest::edgeAndStride,LocalRegionStabilityTest::invalidConfig,LocalRegionStabilityTest::clearAndNull};for(Runnable test:tests)test.run();System.out.println("PASS "+tests.length+" local source-region stability scenarios");}
+ static void trace(){
+   LocalRegionStability r=tracker();ByteBuffer b=image();
+   for(int i=1;i<=3;i++)frame(r,b,i);
+   LocalRegionStability.Trace idle=r.drainTrace();
+   ok(idle.frames==3&&idle.maxGapMs==80&&idle.bestCount==0&&idle.changeResets==0&&!idle.ready,"without a traced role only frame cadence is counted");
+   r.traceRole("skip");
+   long base=5_000_000_000L;
+   ok(region(r.observe(S,4,base,b,100,100,4,400)).count==1,"the tracker itself still resets after the idle gap");
+   for(int i=1;i<=3;i++)r.observe(S,4+i,base+i*80_000_000L,b,100,100,4,400);
+   ok(region(r.observe(S,8,base+540_000_000L,b,100,100,4,400)).count==1,"300ms source gap resets the count");
+   b.put(30*400+30*4,(byte)44);
+   ok(region(r.observe(S,9,base+620_000_000L,b,100,100,4,400)).count==1,"target pixel change resets the count");
+   ok(!r.observe(S,9,base+700_000_000L,b,100,100,4,400).valid,"replayed source sequence is refused");
+   LocalRegionStability.Region last=null;
+   for(int i=1;i<=9;i++)last=region(r.observe(S,9+i,base+620_000_000L+i*80_000_000L,b,100,100,4,400));
+   ok(last.ready&&last.count==10,"tracing leaves readiness unchanged");
+   LocalRegionStability.Trace x=r.drainTrace();
+   ok(x.frames==15&&x.rejected==1,"accepted and refused source frames are counted apart");
+   ok(x.gapResets==1&&x.maxGapMs==300,"the idle gap before the window is not charged; the 300ms gap inside it is");
+   ok(x.changeResets==1,"only a pixel change of the traced target counts as a change reset");
+   ok(x.bestCount==10&&x.bestStableMs==720&&x.ready,"best run and readiness are reported");
+   LocalRegionStability.Trace empty=r.drainTrace();
+   ok(empty.frames==0&&empty.rejected==0&&empty.gapResets==0&&empty.changeResets==0&&empty.maxGapMs==0&&empty.bestCount==0&&empty.bestStableMs==0&&!empty.ready,"drain starts a new window");
+   r.clear();ok(!frame(r,b,40).valid,"cleared tracker refuses frames");
+   ok(r.drainTrace().rejected==1,"a frame refused after clear is still counted");
+ }
+
+ public static void main(String[] args){Runnable[] tests={LocalRegionStabilityTest::asynchronousConfiguration,LocalRegionStabilityTest::tenFrames,LocalRegionStabilityTest::dynamicOutside,LocalRegionStabilityTest::targetChange,LocalRegionStabilityTest::surroundingChange,LocalRegionStabilityTest::duplicates,LocalRegionStabilityTest::fastFrames,LocalRegionStabilityTest::gapAndOrder,LocalRegionStabilityTest::epochs,LocalRegionStabilityTest::geometry,LocalRegionStabilityTest::jitterAndLost,LocalRegionStabilityTest::snapshots,LocalRegionStabilityTest::invalidBuffers,LocalRegionStabilityTest::alphaAndPosition,LocalRegionStabilityTest::limits,LocalRegionStabilityTest::exactDuration,LocalRegionStabilityTest::retainedHistory,LocalRegionStabilityTest::edgeAndStride,LocalRegionStabilityTest::invalidConfig,LocalRegionStabilityTest::clearAndNull,LocalRegionStabilityTest::trace};for(Runnable test:tests)test.run();System.out.println("PASS "+tests.length+" local source-region stability scenarios");}
 }
