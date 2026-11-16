@@ -133,7 +133,7 @@ jobs:
         env:
           CONTROLLER_BASE_URL: ${{ secrets.CONTROLLER_BASE_URL }}
           CONTROLLER_DOWNLOAD_URL: ${{ secrets.CONTROLLER_DOWNLOAD_URL }}
-          CONTROLLER_APPLICATION_ID: org.example.phonecontroller
+          CONTROLLER_APPLICATION_ID: site.zhangyue.pcflash
           PRIVATE_ARTIFACT_PASSWORD: ${{ secrets.PRIVATE_ARTIFACT_PASSWORD }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
