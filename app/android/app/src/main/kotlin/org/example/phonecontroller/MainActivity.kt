@@ -274,11 +274,27 @@ class MainActivity: FlutterActivity() {
     else -> result.notImplemented()
    }
   }
+  // 悬浮状态条（pill）：Flutter 计算状态，原生只负责窗口与手势。
+  val pill = MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/pill")
+  OverlayPill.setNotifier(pill)
+  pill.setMethodCallHandler { call,result ->
+   when(call.method) {
+    "canShow" -> result.success(OverlayPill.canShow(this))
+    "openSettings" -> if(OverlayPill.openSettings(this))result.success(null) else result.error("settings_unavailable","无法打开悬浮窗权限设置，请从系统设置 → 应用 → 显示在其他应用上层 手动开启",null)
+    "battery" -> result.success(OverlayPill.battery(this))
+    "show" -> if(OverlayPill.show(this,call.arguments as? Map<*,*> ?: emptyMap<Any,Any>()))result.success(null) else result.error("overlay_unavailable","无法显示悬浮状态条，请确认已授予悬浮窗权限",null)
+    "update" -> result.success(OverlayPill.update(this,call.arguments as? Map<*,*> ?: emptyMap<Any,Any>()))
+    "hide" -> {OverlayPill.hide();result.success(null)}
+    else -> result.notImplemented()
+   }
+  }
  }
  override fun onDestroy() {
   billTextLoop.close()
   usbProof?.close();usbProof=null
   UsbLaunchBridge.detachOwner(this)
+  // Flutter 引擎随 Activity 一起销毁，pill 不再刷新；必须摘掉窗口避免残留。
+  OverlayPill.hide();OverlayPill.setNotifier(null)
   ticket?.let { ScreenShareService.revoke(it) };ticket=null
   pending?.error("cancelled","共享授权已中断，请重新开启",null);pending=null
   super.onDestroy()

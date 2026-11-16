@@ -60,6 +60,10 @@ class TargetSession {
 
   static ControlClient? clientFor(UsbAttachment usb) =>
       _usb?.session == usb.session ? _client : null;
+
+  /// Read-only view of the retained owner for passive status surfaces
+  /// (overlay pill). Never used to act on the session.
+  static ControlClient? get retainedClient => _client;
   static bool owns(ControlClient? client) =>
       client != null && identical(_client, client);
   static bool get hasGateway => _client?.authorized == true;

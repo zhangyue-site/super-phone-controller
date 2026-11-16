@@ -348,6 +348,10 @@ class ControlClient implements LocalVisionSource {
       canReadStatus &&
       _relayError == null &&
       (_relay == null || !_relay!.isClosed);
+
+  /// Last confirmed relay receipt time, for passive status displays only.
+  DateTime? get lastReceiptAt => _relay?.lastReceiptAt;
+
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
       {bool auth = false}) async {
     final response = await _http!

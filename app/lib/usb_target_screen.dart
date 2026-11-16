@@ -15,6 +15,7 @@ import 'product_settings.dart';
 import 'screen_task_status.dart';
 import 'target_progress_card.dart';
 import 'local_auto_loop.dart';
+import 'overlay_pill.dart';
 
 /// The target owns capture and the BLE relay, never command entry.
 class UsbTargetScreen extends StatefulWidget {
@@ -631,6 +632,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                 subtitle: Text('查看本地 OCR 真实状态与辅助选项'),
                 children: [
               AccessibilityAssistCard(),
+              const OverlayPillCard(),
               Padding(
                   padding: EdgeInsets.fromLTRB(8, 12, 8, 4),
                   child: Text('本地 OCR 与识别 · 状态未返回时保持待确认')),

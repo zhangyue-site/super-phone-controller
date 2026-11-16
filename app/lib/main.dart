@@ -9,6 +9,7 @@ import 'control_client.dart';
 import 'diagnostics.dart';
 import 'control_screen.dart';
 import 'device_screen.dart';
+import 'overlay_pill.dart';
 import 'role_home.dart';
 import 'theme.dart';
 import 'usb_launch.dart';
@@ -36,6 +37,7 @@ class _PcFlashAppState extends State<PcFlashApp> {
   void initState() {
     super.initState();
     TargetSession.startPolling();
+    overlayPill.start();
     unawaited(_restoreAppearance());
   }
 
