@@ -6,9 +6,9 @@ public final class SourceBurst {
  public interface Adapter { void allocate(); void discardQueued(boolean secondary); long switchTo(boolean secondary,long requestedAt); void closeSecondary(); void stopCapture(); }
  public enum State { IDLE, BURST, RESTORING, DONE, FAILED }
  private final Adapter adapter; private final String scope; private final long start, deadline;
- private State state=State.IDLE; private long switchedAt,lastAccepted=-1,lastSwitch; private int switches,accepted; private boolean secondary,attempted;
+ private State state=State.IDLE; private long switchedAt,lastAccepted=-1,lastSwitch; private int switches,accepted; private boolean secondary,attempted,restoredWithoutFrame; private long readySince=-1;
  public SourceBurst(Adapter a,String scope,long now){if(a==null||scope==null||scope.isEmpty())throw new IllegalArgumentException();adapter=a;this.scope=scope;start=now;deadline=Math.addExact(now,3_000_000_000L);}
- public State state(){return state;} public int accepted(){return accepted;} public int switches(){return switches;}
+ public boolean restoredWithoutFrame(){return restoredWithoutFrame;} public State state(){return state;} public int accepted(){return accepted;} public int switches(){return switches;}
  private void fail(){state=State.FAILED;adapter.stopCapture();}
  public void begin(long now,boolean recoveryActive){
   if(attempted||state!=State.IDLE)return;attempted=true;
@@ -24,8 +24,9 @@ public final class SourceBurst {
   if(state==State.DONE||state==State.FAILED||state==State.IDLE)return;
   if(now<lastSwitch||!scope.equals(currentScope)||!authorized||locked){fail();return;}
   try{
-   if(state==State.RESTORING){if(now-switchedAt>=1_000_000_000L)fail();return;}
-   if(ready||!requestActive||now>=deadline||switches>=20){state=State.RESTORING;switchReader(false,now);return;}
+   if(state==State.RESTORING){if(now-switchedAt>=1_000_000_000L){restoredWithoutFrame=true;adapter.closeSecondary();state=State.DONE;}return;}
+   if(ready){if(readySince<0)readySince=now;}else readySince=-1;
+   if((readySince>=0&&now-readySince>=750_000_000L)||!requestActive||now>=deadline||switches>=20){state=State.RESTORING;switchReader(false,now);return;}
    if(now-lastSwitch>=150_000_000L)switchReader(!secondary,now);
   }catch(RuntimeException e){fail();}
  }
@@ -37,7 +38,6 @@ public final class SourceBurst {
    try{state=State.RESTORING;switchReader(false,now);}catch(RuntimeException e){fail();}
    return false;
   }
-  if(state==State.RESTORING&&now-switchedAt>=1_000_000_000L){fail();return false;}
   if(fromSecondary!=secondary||timestamp<=switchedAt||timestamp<=lastAccepted||timestamp>now)return false;
   lastAccepted=timestamp;accepted++;
   if(state==State.RESTORING){

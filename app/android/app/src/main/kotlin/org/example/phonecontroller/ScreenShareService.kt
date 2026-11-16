@@ -152,7 +152,7 @@ class ScreenShareService: Service() {
      override fun closeSecondary(){
       check(reader===burstPrimary)
       burstSecondary?.setOnImageAvailableListener(null,null);burstSecondary?.close();burstSecondary=null
-      burstDiagnostic("restored")
+      burstDiagnostic(if (sourceBurst?.restoredWithoutFrame() == true) "restored_idle" else "restored")
      }
      override fun stopCapture(){burstDiagnostic("failed");surfaceFailed()}
     }
