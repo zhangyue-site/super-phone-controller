@@ -79,8 +79,13 @@ List<ButtonBox> decodeButtonOutput(Object? value) {
         cy = number(1, i),
         w = number(2, i),
         h = number(3, i),
-        score = number(4, i);
-    if (score < 0 || score > 1) throw const FormatException('按钮模型置信度无效');
+        rawScore = number(4, i);
+    // ARM ORT sigmoid may round just below zero (observed -5.96e-8).
+    // Accept only FP32 roundoff; malformed confidence still fails closed.
+    final score = rawScore.clamp(0.0, 1.0);
+    if (rawScore < -1e-6 || rawScore > 1 + 1e-6) {
+      throw const FormatException('按钮模型置信度无效');
+    }
     if (score < .45 || w <= 0 || h <= 0) continue;
     final left = ((cx - w / 2) / 320).clamp(0.0, 1.0),
         top = ((cy - h / 2) / 320).clamp(0.0, 1.0);

@@ -128,6 +128,8 @@ jobs:
         run: |
           javac -encoding UTF-8 --release 8 -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/SourceBurst.java android/app/src/test/java/org/example/phonecontroller/SourceBurstTest.java
           java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.SourceBurstTest
+          javac --release 8 -d "$RUNNER_TEMP/capture-jvm" android/app/src/main/java/org/example/phonecontroller/TaskWakePolicy.java android/app/src/test/java/org/example/phonecontroller/TaskWakePolicyTest.java
+          java -ea -cp "$RUNNER_TEMP/capture-jvm" org.example.phonecontroller.TaskWakePolicyTest
 
       - name: Build signed APK
         env:

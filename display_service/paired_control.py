@@ -117,7 +117,7 @@ class Pairings:
                 self.db.commit()
             except Exception:
                 self.db.rollback();raise
-            self.tickets[ticket]=(now+300,item[1],item[2],generation)
+            self.tickets[ticket]=(now+300,item[1],item[2],generation,hashlib.sha256(binding.encode()).hexdigest())
         return {'ticket':ticket,'expiresIn':300,'device':item[1],'scope':'phone-commands','bindingToken':binding}
 
     def restore(self,binding):
@@ -136,7 +136,7 @@ class Pairings:
             try:
                 if self.db.execute(query,(token_hash,)).fetchone()!=row:raise PermissionError('revoked binding')
                 ticket=secrets.token_urlsafe(32)
-                self.tickets[ticket]=(self.clock()+300,device,parent,generation)
+                self.tickets[ticket]=(self.clock()+300,device,parent,generation,token_hash)
                 self.db.commit()
             except Exception:
                 self.db.rollback();raise
@@ -153,7 +153,7 @@ class Pairings:
                 if row is None or row[0]!=item[3]:raise PermissionError('revoked pairing')
             if item is None or self.parent_device(item[2]) != item[1]:
                 raise PermissionError("expired pairing")
-        principal = hashlib.sha256(ticket.encode()).hexdigest()
+        principal = item[4] if len(item)>4 else hashlib.sha256(ticket.encode()).hexdigest()
         return ("android-app", principal, principal, item[1])
 
     def allowed(self, identity):
@@ -161,12 +161,10 @@ class Pairings:
             self._prune()
             tokens = list(self.tickets)
         for token in tokens:
-            if hashlib.sha256(token.encode()).hexdigest() != identity[1]:
-                continue
             try:
-                return self.owner(token) == tuple(identity)
+                if self.owner(token) == tuple(identity):return True
             except PermissionError:
-                return False
+                continue
         return False
 
     def renew(self,ticket):
@@ -176,7 +174,7 @@ class Pairings:
             self.db.execute('BEGIN IMMEDIATE')
             try:
                 row=self.db.execute('SELECT generation FROM pairings WHERE device=?',(item[1],)).fetchone()
-                if len(item)!=4 or row is None or row[0]!=item[3]:raise PermissionError('revoked pairing')
+                if len(item) not in (4,5) or row is None or row[0]!=item[3]:raise PermissionError('revoked pairing')
                 self.tickets[ticket]=(self.clock()+300,*item[1:])
                 self.db.commit()
             except Exception:

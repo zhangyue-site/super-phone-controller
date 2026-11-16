@@ -49,6 +49,18 @@ void main() {
     expect(boxes.single.width, .25);
     expect(boxes.single.height, .125);
   });
+  test(
+      'ARM FP32 sigmoid rounding near zero is accepted without admitting invalid confidence',
+      () {
+    final t = tensor();
+    t[0][4][0] =
+        -5.96046447754e-8; // Actual Android ORT 1.22 zero-input output.
+    expect(decodeButtonOutput(t), isEmpty);
+    t[0][4][0] = -0.001;
+    expect(() => decodeButtonOutput(t), throwsFormatException);
+    t[0][4][0] = 1.001;
+    expect(() => decodeButtonOutput(t), throwsFormatException);
+  });
   test('shape corruption non-finite values and invalid scores fail closed', () {
     expect(() => decodeButtonOutput([[]]), throwsFormatException);
     final t = tensor();

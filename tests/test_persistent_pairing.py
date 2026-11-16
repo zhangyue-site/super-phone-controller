@@ -106,3 +106,28 @@ class PersistentPairingTests(unittest.TestCase):
   self.parents["new-device-parent"]="unpaired"
   q.attach("new-device-parent")
   self.assertEqual(q.db.execute("SELECT count(*) FROM pairings").fetchone()[0],1)
+
+ def test_same_persistent_controller_keeps_task_owner_across_ticket_restore(self):
+  p=self.new();code=p.issue("p")["code"];grant=p.redeem(code)
+  before=p.owner(grant["ticket"])
+  restored=p.restore(grant["bindingToken"])
+  self.assertNotEqual(grant["ticket"],restored["ticket"])
+  self.assertEqual(before,p.owner(restored["ticket"]))
+  self.assertTrue(p.allowed(before))
+  other=p.redeem(code)
+  self.assertNotEqual(before,p.owner(other["ticket"]))
+  p.renew(restored["ticket"])
+  q=self.new();q.attach("p")
+  self.assertEqual(before,q.owner(q.restore(grant["bindingToken"])["ticket"]))
+
+ def test_restored_ticket_can_read_same_controller_pending_task_only(self):
+  from display_service.remote_control import RemoteControl
+  from test_remote_control import FakeConversation
+  p=self.new();code=p.issue("p")["code"];one=p.redeem(code);two=p.redeem(code)
+  c=FakeConversation();remote=RemoteControl(c,self.path.parent/"tasks.json",screen_ready=lambda _:True)
+  remote.binding_allowed=p.allowed
+  original=p.owner(one["ticket"]);task=remote.prepare(original,"打开设置")
+  recovered=p.owner(p.restore(one["bindingToken"])["ticket"])
+  self.assertEqual(task["task_id"],remote.status(recovered)["task_id"])
+  with self.assertRaises(ValueError):remote.status(p.owner(two["ticket"]),task["task_id"])
+  self.assertEqual(c.started,[])

@@ -343,6 +343,7 @@ class ScreenShareService: Service() {
  private var displayManager: DisplayManager?=null
  private var keepAwake: PowerManager.WakeLock?=null
  private var displayAwake: PowerManager.WakeLock?=null
+ private val taskWakePolicy=TaskWakePolicy()
  @Synchronized private fun projectionValid(session: String): Boolean =
   current===this && active && running && projection!=null && usbOwnerSession==session &&
   UsbLaunchBridge.matches(session) && usbOwnerSerial==UsbLaunchBridge.serialFor(session)
@@ -450,6 +451,11 @@ class ScreenShareService: Service() {
       if(!supportsLocalObservation)localObservation.clear()
       frameDemand=data.optString("state") in setOf("thinking","running","planning","plan","verifying","capturing") && Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
       demandAt=SystemClock.elapsedRealtime()
+      val cloud=data.optJSONObject("cloudTask")
+      if(cloud!=null && taskWakePolicy.request(captureGeneration.toString(),cloud.optString("taskId"),cloud.optString("state"),running && active && !recovery.needsAuthorization() && SystemClock.elapsedRealtime()<until,interactive(),locked())){
+       handler?.post { if(running && active && ticket==requestTicket)TaskWakeActivity.request(this@ScreenShareService) }
+      }
+
       if(BuildConfig.SOURCE_BURST_EXPERIMENT)handler?.post { synchronized(this@ScreenShareService){handler?.removeCallbacks(burstTick);burstTick.run()} }
      }
     } else if(CaptureRecoveryGuard.authorizationFailure(statusHttp)) {statusErrors.incrementAndGet();pauseCloud(requestTicket)}
