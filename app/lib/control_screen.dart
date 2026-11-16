@@ -29,6 +29,7 @@ class _ControlScreenState extends State<ControlScreen>
   String? _error;
   List<Map<String, dynamic>> _skills = [];
   bool _busy = false, _polling = false, _stopping = false;
+  bool _restoringTask = false, _latestTaskChecked = false;
   Timer? _timer, _visionTimer;
   ControllerLocalVision? _vision;
   bool _stopUnconfirmed = false;
@@ -151,6 +152,7 @@ class _ControlScreenState extends State<ControlScreen>
   }
 
   Future<void> _connect() async {
+    final generation = _generation;
     setState(() {
       _busy = true;
       _error = null;
@@ -158,11 +160,16 @@ class _ControlScreenState extends State<ControlScreen>
     try {
       await _authorize();
       _rememberPairing();
-      _prepareVision();
+      await _restoreLatestTask();
+      if (mounted && generation == _generation && !_taskTerminal) {
+        _prepareVision();
+      }
     } catch (e) {
-      if (mounted) setState(() => _error = '云端控制连接失败：$e');
+      if (mounted && generation == _generation) {
+        setState(() => _error = '云端控制连接失败：$e');
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && generation == _generation) setState(() => _busy = false);
     }
   }
 
@@ -182,6 +189,63 @@ class _ControlScreenState extends State<ControlScreen>
     unawaited(ControllerPairingStore.save(pairing));
   }
 
+  /// Restore display state only. This never prepares, confirms or replays an action.
+  Future<void> _restoreLatestTask() async {
+    if (_restoringTask ||
+        _latestTaskChecked ||
+        _task.isNotEmpty ||
+        !_foreground ||
+        _stopping ||
+        !_client.isPaired ||
+        !_client.authorized ||
+        !_client.canReadStatus) {
+      return;
+    }
+    final device = _client.deviceId;
+    if (device == null || !RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(device)) {
+      return;
+    }
+    final binding = _client.restorablePairing?.bindingToken;
+    final generation = _generation;
+    bool current() =>
+        mounted &&
+        _foreground &&
+        !_stopping &&
+        generation == _generation &&
+        _task.isEmpty &&
+        _client.isPaired &&
+        _client.authorized &&
+        _client.canReadStatus &&
+        _client.deviceId == device &&
+        _client.restorablePairing?.bindingToken == binding;
+    _restoringTask = true;
+    try {
+      // Omitting task_id asks for this authenticated owner's latest task.
+      // The service never selects another controller's task by device alone.
+      final result = await _client.command('status');
+      if (!current()) return;
+      if (result['state'] == 'idle') {
+        _latestTaskChecked = true;
+        return;
+      }
+      final ident = result['task_id'];
+      if (ident is! String ||
+          !RegExp(r'^[0-9a-f]{32}$').hasMatch(ident) ||
+          result['state'] is! String) {
+        throw const FormatException('任务恢复响应无效');
+      }
+      setState(() {
+        _task = Map<String, dynamic>.from(result);
+        _latestTaskChecked = true;
+        _error = null;
+      });
+    } catch (e) {
+      if (current()) setState(() => _error = '任务进度暂未恢复：$e');
+    } finally {
+      _restoringTask = false;
+    }
+  }
+
   Future<void> _poll() async {
     try {
       await _client.refresh();
@@ -194,6 +258,9 @@ class _ControlScreenState extends State<ControlScreen>
       }
     } catch (e) {
       if (mounted) setState(() => _error = '连接续期失败：$e');
+    }
+    if (!_busy && !_stopping && _task.isEmpty && !_latestTaskChecked) {
+      await _restoreLatestTask();
     }
     if (_polling ||
         _busy ||
@@ -539,24 +606,24 @@ class _ControlScreenState extends State<ControlScreen>
             Text(_busy
                 ? '正在生成任务确认信息…'
                 : _client.authorized
-                    ? '直接描述手机任务，无需 /phone；龙虾先复述目标和计划，确认后执行'
+                    ? '说说你想让手机做什么，核对任务后执行。'
                     : '控制连接已结束'),
             if (!_busy && !_client.authorized)
               OutlinedButton(
                   onPressed: _connect, child: const Text('重新连接云端控制')),
             if (_task.isEmpty)
-              Card(
-                  child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(_client.authorized ? '连接已建立' : '需要重新连接',
-                                style: Theme.of(context).textTheme.titleMedium),
-                            const SizedBox(height: 8),
-                            const Text(
-                                '本机仅发送任务，无需共享本机屏幕。生成计划后由你确认，执行时再检查被控画面与控制板许可。'),
-                          ]))),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Row(children: [
+                  Icon(
+                      _client.authorized
+                          ? Icons.check_circle_outline
+                          : Icons.link_off,
+                      size: 18),
+                  const SizedBox(width: 8),
+                  Text(_client.authorized ? '连接已建立' : '需要重新连接'),
+                ]),
+              ),
             if (_client.supportsSkillReplay)
               OutlinedButton(
                   onPressed: _busy || _stopping ? null : _loadSkills,
@@ -605,7 +672,7 @@ class _ControlScreenState extends State<ControlScreen>
                 enabled: !_busy && !_stopping,
                 decoration: const InputDecoration(
                     labelText: '想让被控手机做什么？',
-                    helperText: '操作目标是当前已绑定手机',
+                    helperText: '目标：当前已连接手机',
                     helperMaxLines: 2,
                     hintText: '打开设置 / 打开设置搜索电池',
                     border: OutlineInputBorder())),
@@ -616,7 +683,7 @@ class _ControlScreenState extends State<ControlScreen>
             if (_client.isPaired && _vision != null)
               ControllerModelStatus(vision: _vision!, onRetry: _prepareVision),
             const SizedBox(height: 12),
-            const Text('确认计划后，控制板会操作被控手机。进入设置不会取消任务；停止按钮可请求立即停止，结果按真实回执更新。'),
+            const Text('执行时可随时请求停止，结果以真实画面核验为准。'),
           ]),
       bottomNavigationBar: SafeArea(
           child: Padding(

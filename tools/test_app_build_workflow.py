@@ -12,10 +12,12 @@ class AppBuildWorkflow(unittest.TestCase):
         cls.android, cls.ios = cls.workflow.split('  android:\n', 1)[1].split('  ios:\n', 1)
 
     def test_both_platforms_restore_identical_pinned_asset_before_flutter(self):
-        for job, source_hash in ((self.android, '519fac11018b87140fd4ad82689c459139c5a1af0241a4fd56fea39f53dd805b'), (self.ios, '263c8120640db90889073a23cfd3e77dd64f5ca068ac23eea27185f5eaa4be13')):
+        for job in (self.android, self.ios):
             self.assertIn('Restore pinned bundled model', job)
-            self.assertIn(source_hash, job)
-            self.assertIn('45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2', job)
+            self.assertIn('7310ba7d56a24833297e5e128aaa9981090c45f7701889ad09c31fad4c971c37', job)
+            self.assertIn('45a522a4e47102e32aa6b447e470598012556ef0d37226fc3f793e162a0f8491', job)
+            self.assertIn('assets/controller-button.onnx', job)
+            self.assertNotIn('bt_v10_int8.onnx', job)
             self.assertLess(job.index('Restore pinned bundled model'), job.index('flutter pub get'))
 
     def test_no_failed_test_packaging_or_paid_runner(self):

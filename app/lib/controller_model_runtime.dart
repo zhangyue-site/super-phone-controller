@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:onnxruntime_plus/onnxruntime_plus.dart';
 import 'button_detector.dart';
+import 'model_diagnostics.dart';
+import 'diagnostics.dart';
 
 class ButtonInferenceResult {
   final List<ButtonBox> boxes;
@@ -68,7 +70,13 @@ class OrtButtonInference implements ButtonInference {
           }
           return;
         }
-        final error = FormatException(value['error'] as String);
+        final error = value['fatal'] == true
+            ? ModelLoadFailure.fromWire(value)
+            : FormatException(value['error'] as String);
+        if (error is ModelLoadFailure) {
+          SafeDiagnostics.record('model_prepare',
+              phase: 'model', reason: error.stage, error: error);
+        }
         if (!_opening!.isCompleted) _opening!.completeError(error);
         if (_pending != null && !_pending!.isCompleted) {
           _pending!.completeError(error);
@@ -95,7 +103,8 @@ class OrtButtonInference implements ButtonInference {
       }
     });
     try {
-      _isolate = await Isolate.spawn(_worker, [_receive!.sendPort, path, hash], onError: _receive!.sendPort, onExit: _receive!.sendPort);
+      _isolate = await Isolate.spawn(_worker, [_receive!.sendPort, path, hash],
+          onError: _receive!.sendPort, onExit: _receive!.sendPort);
       await _opening!.future.timeout(const Duration(seconds: 30));
       if (_closed || _send == null) throw StateError('推理已停止');
     } catch (_) {
@@ -164,19 +173,26 @@ void _worker(List<Object> args) {
     OrtEnv.instance.release();
   }
 
+  var stage = 'hash';
   try {
     final model = File(path);
     if (model.lengthSync() > 32 * 1024 * 1024 ||
         sha256.convert(model.readAsBytesSync()).toString() != expected) {
       throw const FormatException('本机模型完整性校验失败');
     }
+    stage = 'ffi';
+    final runtimeVersion = OrtEnv.version;
+    if (runtimeVersion.isEmpty) throw const FormatException('运行库版本缺失');
+    stage = 'env';
     OrtEnv.instance
         .init(level: OrtLoggingLevel.error, logId: 'controller-button');
     options = OrtSessionOptions()
       ..setIntraOpNumThreads(2)
       ..setInterOpNumThreads(1)
       ..setSessionGraphOptimizationLevel(GraphOptimizationLevel.ortEnableAll);
+    stage = 'session';
     session = OrtSession.fromFile(model, options!);
+    stage = 'schema';
     if (session!.inputNames.length != 1 ||
         session!.inputNames.single != 'images' ||
         session!.outputNames.length != 1) {
@@ -188,7 +204,9 @@ void _worker(List<Object> args) {
     final warmOptions = OrtRunOptions();
     List<OrtValue?>? warm;
     try {
+      stage = 'warmup';
       warm = session!.run(warmOptions, {'images': zeros});
+      stage = 'schema';
       decodeButtonOutput(warm.single?.value);
     } finally {
       zeros.release();
@@ -234,11 +252,17 @@ void _worker(List<Object> args) {
         host.send({'sequence': sequence, 'error': '本机模型识别失败，请检查模型兼容性后重试'});
       }
     });
-  } catch (_) {
+  } catch (error) {
+    final failure = ModelLoadFailure.fromError(stage, error);
     try {
       release();
     } catch (_) {}
-    host.send({'error': '本机模型无法加载，模型或运行库不兼容', 'fatal': true});
+    host.send({
+      'error': '本机模型无法加载，模型或运行库不兼容',
+      'fatal': true,
+      'stage': failure.stage,
+      'cause': failure.cause
+    });
     port?.close();
   }
 }

@@ -84,25 +84,23 @@ jobs:
       - name: Cache pinned public model
         uses: actions/cache@v4
         with:
-          path: app/assets/bt_v10_int8.onnx
-          key: ${{ runner.os }}-controller-model-45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2
+          path: app/assets/controller-button.onnx
+          key: ${{ runner.os }}-controller-model-45a522a4e47102e32aa6b447e470598012556ef0d37226fc3f793e162a0f8491
 
       - name: Restore pinned bundled model
         env:
-          GH_TOKEN: ${{ github.token }}
           PRIVATE_ARTIFACT_PASSWORD: ${{ secrets.PRIVATE_ARTIFACT_PASSWORD }}
+          COMPAT_MODEL_URL: ${{ vars.CONTROLLER_COMPAT_MODEL_URL }}
         run: |
           set -euo pipefail
-          modeldir=$(mktemp -d "$RUNNER_TEMP/pinned-model.XXXXXX")
+          modeldir=$(mktemp -d "$RUNNER_TEMP/compatible-model.XXXXXX")
           trap 'rm -rf "$modeldir"' EXIT
-          gh run download 43384903782 --repo "${{ github.repository }}" --name controller-private-build --dir "$modeldir"
+          curl --fail --silent --show-error --proto '=https' --connect-timeout 20 --max-time 180 "$COMPAT_MODEL_URL" -o "$modeldir/model.7z"
+          echo "7310ba7d56a24833297e5e128aaa9981090c45f7701889ad09c31fad4c971c37  $modeldir/model.7z" | sha256sum -c -
           command -v 7z >/dev/null || sudo apt-get install -y p7zip-full
-          7z x -y -p"$PRIVATE_ARTIFACT_PASSWORD" -o"$modeldir/unpacked" "$modeldir/controller-private-build.7z" >/dev/null
-          apk="$modeldir/unpacked/build/app/outputs/flutter-apk/app-release.apk"
-          echo "519fac11018b87140fd4ad82689c459139c5a1af0241a4fd56fea39f53dd805b  $apk" | sha256sum -c -
-          unzip -p "$apk" assets/flutter_assets/assets/bt_v10_int8.onnx > "$modeldir/model.onnx"
-          echo "45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2  $modeldir/model.onnx" | sha256sum -c -
-          install -m 0644 "$modeldir/model.onnx" assets/bt_v10_int8.onnx
+          7z x -y -p"$PRIVATE_ARTIFACT_PASSWORD" -o"$modeldir/unpacked" "$modeldir/model.7z" >/dev/null
+          echo "45a522a4e47102e32aa6b447e470598012556ef0d37226fc3f793e162a0f8491  $modeldir/unpacked/controller-button.onnx" | sha256sum -c -
+          install -m 0644 "$modeldir/unpacked/controller-button.onnx" assets/controller-button.onnx
 
       - name: Resolve dependencies
         run: flutter pub get
@@ -201,25 +199,23 @@ jobs:
       - name: Cache pinned public model
         uses: actions/cache@v4
         with:
-          path: app/assets/bt_v10_int8.onnx
-          key: ${{ runner.os }}-controller-model-45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2
+          path: app/assets/controller-button.onnx
+          key: ${{ runner.os }}-controller-model-45a522a4e47102e32aa6b447e470598012556ef0d37226fc3f793e162a0f8491
 
       - name: Restore pinned bundled model
+        env:
+          PRIVATE_ARTIFACT_PASSWORD: ${{ secrets.PRIVATE_ARTIFACT_PASSWORD }}
+          COMPAT_MODEL_URL: ${{ vars.CONTROLLER_COMPAT_MODEL_URL }}
         run: |
           set -euo pipefail
-          if [ -f assets/bt_v10_int8.onnx ]; then
-            python3 -c 'import hashlib; from pathlib import Path; assert hashlib.sha256(Path("assets/bt_v10_int8.onnx").read_bytes()).hexdigest()=="45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2"'
-            exit 0
-          fi
-          apk=$(mktemp "$RUNNER_TEMP/model-source.XXXXXX")
-          model=$(mktemp "$RUNNER_TEMP/bundled-model.XXXXXX")
-          trap 'rm -f "$apk" "$model"' EXIT
-          curl --fail --silent --show-error --proto '=https' --connect-timeout 30 --retry 2 --retry-delay 2 --max-time 600 \
-            https://d.zhangyue.site/apps/phone-controller-flash/releases/1.3.17/phone-controller-flash-1.3.17-vc60.apk -o "$apk"
-          echo "263c8120640db90889073a23cfd3e77dd64f5ca068ac23eea27185f5eaa4be13  $apk" | shasum -a 256 -c -
-          unzip -p "$apk" assets/flutter_assets/assets/bt_v10_int8.onnx > "$model"
-          echo "45484096aa3e90b0d3e6b4caf3d94311505d1193972c028675149129d757dbe2  $model" | shasum -a 256 -c -
-          install -m 0644 "$model" assets/bt_v10_int8.onnx
+          modeldir=$(mktemp -d "$RUNNER_TEMP/compatible-model.XXXXXX")
+          trap 'rm -rf "$modeldir"' EXIT
+          curl --fail --silent --show-error --proto '=https' --connect-timeout 20 --max-time 180 "$COMPAT_MODEL_URL" -o "$modeldir/model.7z"
+          echo "7310ba7d56a24833297e5e128aaa9981090c45f7701889ad09c31fad4c971c37  $modeldir/model.7z" | shasum -a 256 -c -
+          command -v 7zz >/dev/null || brew install sevenzip
+          7zz x -y -p"$PRIVATE_ARTIFACT_PASSWORD" -o"$modeldir/unpacked" "$modeldir/model.7z" >/dev/null
+          echo "45a522a4e47102e32aa6b447e470598012556ef0d37226fc3f793e162a0f8491  $modeldir/unpacked/controller-button.onnx" | shasum -a 256 -c -
+          install -m 0644 "$modeldir/unpacked/controller-button.onnx" assets/controller-button.onnx
 
       - name: Verify required native SDK
         run: |

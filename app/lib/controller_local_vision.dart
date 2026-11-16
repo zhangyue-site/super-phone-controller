@@ -9,6 +9,7 @@ import 'button_detector.dart';
 import 'controller_model_runtime.dart';
 import 'controller_builtin_model.dart';
 import 'diagnostics.dart';
+import 'model_diagnostics.dart';
 
 class _ObservationCancelled implements Exception {}
 
@@ -27,6 +28,7 @@ class ControllerLocalVision extends ChangeNotifier {
   int _generation = 0;
   String _status = '控制手机本地模型待准备';
   String? _error, _lastFrame;
+  ModelLoadFailure? _builtinFailure;
   double? _inferenceMs;
   int? _boxCount;
   ControllerLocalVision(LocalVisionSource source,
@@ -98,6 +100,7 @@ class ControllerLocalVision extends ChangeNotifier {
       _status = '正在检查内置模型';
       _emit();
       ButtonInference? builtinRuntime;
+      _builtinFailure = null;
       try {
         final builtin = await _builtinModel();
         _check(generation);
@@ -122,7 +125,12 @@ class ControllerLocalVision extends ChangeNotifier {
         return;
       } on _ObservationCancelled {
         rethrow;
-      } catch (_) {
+      } catch (error) {
+        _builtinFailure = error is ModelLoadFailure
+            ? error
+            : ModelLoadFailure.fromError('asset', error);
+        SafeDiagnostics.record('model_prepare',
+            phase: 'model', reason: _builtinFailure!.stage, error: error);
         await builtinRuntime?.close();
         if (identical(_runtime, builtinRuntime)) _runtime = null;
         runtime = null;
@@ -186,7 +194,8 @@ class ControllerLocalVision extends ChangeNotifier {
       }
       if (_valid(generation)) {
         _ready = false;
-        _error = '本地模型加载、校验或预热未完成。基础控制仍可使用，可重试准备。';
+        _error =
+            '${_builtinFailure?.message ?? '本地模型加载、校验或预热未完成'}。基础控制仍可使用，可重试准备。';
         _status = '控制手机本地模型未就绪';
       }
     } finally {

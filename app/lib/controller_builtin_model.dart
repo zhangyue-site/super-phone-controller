@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 class BuiltinModelLoader {
-  static const _name = 'bt_v10_int8.onnx';
+  static const _name = 'controller-button.onnx';
 
   static Future<String> getModelPath() async => (await prepare()).path;
 

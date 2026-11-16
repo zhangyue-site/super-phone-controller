@@ -82,6 +82,8 @@ void main() {
         MaterialApp(home: ControlScreen(service: FakeBoard(), client: client)));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '打开微信找到测试联系人');
+    tester.testTextInput.hide();
+    await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
         find.byKey(const ValueKey('phone-task-prepare')), 120,
         scrollable: find.byType(Scrollable).first);
