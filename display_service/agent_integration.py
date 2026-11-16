@@ -91,7 +91,7 @@ def run(nav,j,text):
  cached=root/"agent-understanding-cache"/(cache_key+".json")
  if cached.exists():info=validate(json.loads(cached.read_text()));info["original"]=text
  else:info=understand(text,context=context.get("clarifications",[]))
- (root/"agent-runs").mkdir(mode=0o700,exist_ok=True)
+ (root/"agent-runs").mkdir(mode=0o700,parents=True,exist_ok=True)
  evidence=root/"agent-runs"/(ident+"-understanding.json")
  evidence.write_text(json.dumps(info,ensure_ascii=False,indent=2));evidence.chmod(0o600)
  if info["questions"]:return dict(state="needs_input",reply="执行前需要补充："+"；".join(info["questions"]))
@@ -111,7 +111,7 @@ def run(nav,j,text):
  existing_request=verify_intent(text,info,existing_platform)
  record_scope=None if existing_request else build(text,context.get("clarifications",[]),info,today=datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat(),journal_path=str(root/"agent-records.sqlite"))
  if not info["questions"]:
-  cached.parent.mkdir(mode=0o700,exist_ok=True);cached.write_text(json.dumps(info,ensure_ascii=False));cached.chmod(0o600)
+  cached.parent.mkdir(mode=0o700,parents=True,exist_ok=True);cached.write_text(json.dumps(info,ensure_ascii=False));cached.chmod(0o600)
  publish("任务已理解，正在按当前平台制订下一步。")
  granted={k for k in REGISTRY if (k in catalog(platform)["tools"] or k in ("observe","verify","stop")) and (k!="save_record" or record_scope and record_scope["allow_save"])}
  if existing_request:granted.add("uninstall_app")

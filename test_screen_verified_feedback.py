@@ -9,7 +9,7 @@ class Handler:
  def reply(self,status,body):self.status=status;self.result=json.loads(body)
 class FeedbackTests(unittest.TestCase):
  def status(self,**changes):
-  job=SimpleNamespace(state='done',done=True,cancelled=False,navigation_verified=False,reply='已通过画面核验完成',video_sequence=12,pointer_protocol='absolute-v1',video_barrier='b'*32,screen_session='x'*43)
+  job=SimpleNamespace(device='board',session='a'*16,sequence=1,state='done',done=True,cancelled=False,navigation_verified=False,reply='已通过画面核验完成',video_sequence=12,pointer_protocol='absolute-v1',video_barrier='b'*32,screen_session='x'*43)
   for k,v in changes.items():setattr(job,k,v)
   box=SimpleNamespace(lock=threading.RLock(),jobs={'board':job})
   authority=Authority();authority.tickets['x'*43]=(authority.clock()+300,'board','screen')
