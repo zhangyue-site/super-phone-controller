@@ -632,7 +632,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                 subtitle: Text('查看本地 OCR 真实状态与辅助选项'),
                 children: [
               AccessibilityAssistCard(),
-              const OverlayPillCard(),
+              OverlayPillCard(),
               Padding(
                   padding: EdgeInsets.fromLTRB(8, 12, 8, 4),
                   child: Text('本地 OCR 与识别 · 状态未返回时保持待确认')),
