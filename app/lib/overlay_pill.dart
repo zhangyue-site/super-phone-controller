@@ -256,14 +256,18 @@ class _OverlayPillCardState extends State<OverlayPillCard> {
   }
 
   Future<void> _read() async {
-    if (_reading) return;
+    if (_reading) {
+      return;
+    }
     _reading = true;
     try {
       final value = await _channel.invokeMethod<bool>('canShow');
-      if (mounted) setState(() {
-        _allowed = value == true;
-        _error = null;
-      });
+      if (mounted) {
+        setState(() {
+          _allowed = value == true;
+          _error = null;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _error = '暂时无法读取悬浮窗权限状态，请稍后重试');
     } finally {
