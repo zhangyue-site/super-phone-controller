@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'diagnostics.dart';
 import 'screen_share.dart';
+import 'overlay_status.dart';
 import 'target_session.dart';
 
 /// 状态灯编码，与 android .../OverlayPill.kt 的常量一一对应。
@@ -16,7 +18,7 @@ const int pillGreen = 0, pillYellow = 1, pillRed = 2, pillGray = 3;
 /// 悬浮状态条（pill）控制器。
 ///
 /// 数据全部来自 App 内已有状态源：共享状态读原生 `pcflash/screen` 的
-/// volatile 字段（无网络请求）、板端授权读 `TargetSession.retainedClient`
+/// volatile 字段（无网络请求）、控制连接读 `TargetSession.retainedClient`
 /// 的 `authorized`、任务回执时间读 `ControlClient.lastReceiptAt`
 /// （来自 CloudRelay 心跳/回执时间戳）、电量走原生电池广播。
 /// 渲染交给原生 WindowManager（TYPE_APPLICATION_OVERLAY），见 OverlayPill.kt。
@@ -167,15 +169,15 @@ class OverlayPill with WidgetsBindingObserver {
     final batteryText = battery == null ? '电量未知' : '电量 $battery%';
     final shortText = share == pillRed
         ? '共享已断开'
-        : hid == pillRed
-            ? '板端未授权'
+        : hid != pillGreen
+            ? (hid == pillGray ? '未连接' : '待恢复')
             : share == pillYellow
                 ? '共享检查中'
                 : (battery != null && battery < 20)
                     ? '电量 $battery%'
                     : task == pillYellow
                         ? '回执滞后'
-                        : '链路正常';
+                        : '已连接';
     return {
       'battery': batteryDot,
       'share': share,
@@ -201,9 +203,7 @@ class OverlayPill with WidgetsBindingObserver {
       final raw = await ScreenShare.channel.invokeMethod<String>('status');
       final value = raw == null ? null : jsonDecode(raw);
       if (value is! Map) return (pillYellow, '共享检查中');
-      return value['active'] == true
-          ? (pillGreen, '共享中')
-          : (pillRed, '共享已断开');
+      return value['active'] == true ? (pillGreen, '共享中') : (pillRed, '共享已断开');
     } catch (_) {
       return (pillYellow, '共享检查中');
     }
@@ -211,10 +211,8 @@ class OverlayPill with WidgetsBindingObserver {
 
   (int, String) _readHid() {
     final client = TargetSession.retainedClient;
-    if (client == null) return (pillRed, '板端未连接');
-    return client.authorized
-        ? (pillGreen, '板端已授权')
-        : (pillRed, '板端未授权');
+    return gatewayIndicator(
+        hasClient: client != null, sessionReady: client?.authorized == true);
   }
 
   (int, String) _readTask() {
@@ -280,7 +278,8 @@ class _OverlayPillCardState extends State<OverlayPillCard> {
       await _channel.invokeMethod<void>('openSettings');
     } catch (_) {
       if (mounted) {
-        setState(() => _error = '无法打开系统设置，请从 系统 → 应用 → 手机控制助手 → 显示在其他应用上层 手动开启');
+        setState(
+            () => _error = '无法打开系统设置，请从 系统 → 应用 → 手机控制助手 → 显示在其他应用上层 手动开启');
       }
     }
   }
@@ -293,28 +292,26 @@ class _OverlayPillCardState extends State<OverlayPillCard> {
     return Card(
         child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('悬浮状态条',
-                      style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  Text(_allowed
-                      ? '已开启。App 退到后台且共享或链路仍在时，屏幕上角会显示电量、屏幕共享、板端链路、云端任务四个状态灯；可拖动、点按展开详情或关闭。'
-                      : '尚未授权。App 退到后台且共享或链路仍在时，屏幕上角会显示上述四个状态灯，需要"显示在其他应用上层"权限。'),
-                  if (!_allowed) ...[
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                        onPressed: _settings,
-                        icon: const Icon(Icons.layers_outlined),
-                        label: const Text('前往系统设置开启悬浮窗权限')),
-                  ],
-                  if (_error != null)
-                    Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(_error!,
-                            style: TextStyle(
-                                color: Theme.of(context).colorScheme.error))),
-                ])));
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('悬浮状态条', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Text(_allowed
+                  ? '已开启。App 退到后台且共享或链路仍在时，屏幕上角会显示电量、屏幕共享、板端链路、云端任务四个状态灯；可拖动、点按展开详情或关闭。'
+                  : '尚未授权。App 退到后台且共享或链路仍在时，屏幕上角会显示上述四个状态灯，需要"显示在其他应用上层"权限。'),
+              if (!_allowed) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                    onPressed: _settings,
+                    icon: const Icon(Icons.layers_outlined),
+                    label: const Text('前往系统设置开启悬浮窗权限')),
+              ],
+              if (_error != null)
+                Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(_error!,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error))),
+            ])));
   }
 }

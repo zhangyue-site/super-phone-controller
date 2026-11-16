@@ -1,20 +1,15 @@
 package org.example.phonecontroller
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
-import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.BatteryManager
 import android.provider.Settings
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.View
-import android.view.ViewConfiguration
-import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import io.flutter.plugin.common.MethodChannel
@@ -23,7 +18,7 @@ import io.flutter.plugin.common.MethodChannel
  * 被控端悬浮状态条（pill）。
  *
  * 渲染完全由 Flutter 驱动：pcflash/pill 通道的 show/update/hide 携带 4 个状态灯
- * 编码与三段文本，本文件只负责窗口管理与手势（点按展开/收起、垂直拖动、关闭）。
+ * 编码与三段文本，本文件只负责窗口管理与手势（点按展开/收起、二维拖动、关闭）。
  * 状态灯编码与 lib/overlay_pill.dart 的 pillGreen/pillYellow/pillRed/pillGray 对应。
  *
  * 生命周期约定：Activity 销毁（用户划掉任务、进程回收前）必须 remove，
@@ -36,6 +31,16 @@ object OverlayPill {
     private const val GRAY = 3
 
     private var view: LinearLayout? = null
+    private var container: FloatingOverlayContainer? = null
+    private var summary: TextView? = null
+    private var line1: TextView? = null
+    private var line2: TextView? = null
+    private var body: LinearLayout? = null
+    private var detailsScroll: android.widget.ScrollView? = null
+    private var headerView: LinearLayout? = null
+    private var closeButton: View? = null
+    private var visualBar: LinearLayout? = null
+    private var dots: List<View> = emptyList()
     private var expanded = false
     private var payload: Map<*, *>? = null
     private var notifier: MethodChannel? = null
@@ -74,170 +79,157 @@ object OverlayPill {
         remove()
         expanded = false
         payload = data
-        val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val root = LinearLayout(context)
-        root.orientation = LinearLayout.VERTICAL
-        render(context, root)
-        val lp = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT
-        )
-        lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        lp.y = dip(context, 28)
-        try {
-            wm.addView(root, lp)
-        } catch (_: Exception) {
-            return false
+        val app = context.applicationContext
+        val window = FloatingOverlayContainer(app, "status_pill")
+        val content = LinearLayout(app).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, 0)
         }
-        attachGestures(context, root, lp)
-        view = root
-        return true
+        val header = LinearLayout(app).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dip(app, 48)
+            isClickable = true; isFocusable = true
+            setOnClickListener { toggle() }
+        }
+        val bar = LinearLayout(app).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(dip(app, 8), 0, dip(app, 8), 0)
+        }
+        header.addView(bar, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, dip(app, 32)))
+        visualBar = bar
+        dots = listOf("battery", "share", "hid", "task").map { key ->
+            dotView(app, dotColor(dot(data, key))).also { bar.addView(it) }
+        }
+        summary = label(app, "").apply {
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            maxWidth = dip(app, 72)
+            setPadding(dip(app, 4), 0, dip(app, 4), 0)
+        }
+        bar.addView(summary)
+        val close = android.widget.Button(app).apply {
+            text = "关闭"; contentDescription = "关闭浮窗"
+            minimumWidth = dip(app, 48); minimumHeight = dip(app, 48)
+            minWidth = dip(app, 48); minHeight = dip(app, 48)
+            setPadding(0, 0, 0, 0)
+            visibility = View.GONE
+            setOnClickListener { closePill() }
+        }
+        bar.addView(close, LinearLayout.LayoutParams(dip(app, 48), dip(app, 48)))
+        closeButton = close
+        // A real button preserves keyboard/TalkBack semantics; drags are intercepted by the shell.
+        header.accessibilityDelegate = object : View.AccessibilityDelegate() {
+            override fun onInitializeAccessibilityNodeInfo(host: View, info: android.view.accessibility.AccessibilityNodeInfo) {
+                super.onInitializeAccessibilityNodeInfo(host, info)
+                info.className = "android.widget.Button"
+                info.isExpandedCompat(expanded)
+            }
+        }
+        content.addView(header)
+        val details = LinearLayout(app).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        }
+        line1 = label(app, "").apply { maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END }
+        line2 = label(app, "", dim = true).apply { maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END }
+        details.addView(line1); details.addView(line2)
+        // Long content scrolls inside a bounded panel rather than exceeding the safe screen.
+        val scroll = android.widget.ScrollView(app).apply {
+            isFillViewport = false
+            addView(details)
+            visibility = View.GONE
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> view.parent?.requestDisallowInterceptTouchEvent(true)
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL ->
+                        view.parent?.requestDisallowInterceptTouchEvent(false)
+                }
+                false
+            }
+        }
+        content.addView(scroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        body = details; detailsScroll = scroll; headerView = header
+        window.root.addView(content)
+        window.onToggle = { toggle() }
+        window.onDismiss = { closePill() }
+        container = window; view = content
+        render(app, content)
+        if (window.show()) return true
+        remove()
+        return false
     }
 
     fun update(context: Context, data: Map<*, *>): Boolean {
         payload = data
         val root = view ?: return show(context, data)
-        render(context, root)
+        render(root.context, root)
         return true
     }
 
-    fun hide() {
-        remove()
-    }
+    fun hide() { remove() }
 
     private fun remove() {
-        val root = view ?: return
-        view = null
-        try {
-            (root.parent as? WindowManager)?.removeView(root)
-        } catch (_: Exception) {
-        }
+        container?.dismiss()
+        container = null; view = null; summary = null; line1 = null; line2 = null
+        body = null; detailsScroll = null; headerView = null; closeButton = null; visualBar = null; dots = emptyList()
     }
 
     private fun closePill() {
         remove()
-        try {
-            notifier?.invokeMethod("onClosed", null)
-        } catch (_: Exception) {
-        }
+        try { notifier?.invokeMethod("onClosed", null) } catch (_: Exception) { }
     }
 
-    /** 就地重建内容；窗口保持挂载，拖动位置不受影响。 */
+    private fun toggle() {
+        expanded = !expanded
+        view?.let { render(it.context, it) }
+        if (!expanded) headerView?.requestFocus()
+    }
+
+    /** Update fields in place: a polling update must not replace a pressed or focused child. */
     private fun render(context: Context, root: LinearLayout) {
         val data = payload ?: return
-        root.removeAllViews()
-        val background = GradientDrawable()
-        background.setColor(Color.argb(217, 22, 24, 27))
-        background.cornerRadius =
-            dip(context, if (expanded) 14 else 20).toFloat()
-        root.background = background
-        root.setPadding(
-            dip(context, 12),
-            dip(context, if (expanded) 8 else 6),
-            dip(context, 12),
-            dip(context, if (expanded) 10 else 6)
-        )
-        if (expanded) {
-            root.addView(headerRow(context, data, withClose = true))
-            root.addView(line(context, text(data, "line1")))
-            root.addView(line(context, text(data, "line2"), dim = true))
-        } else {
-            root.addView(headerRow(context, data, withClose = false))
+        val shape = GradientDrawable().apply {
+            setColor(Color.argb(235, 22, 24, 27)); cornerRadius = dip(context, 16).toFloat()
         }
+        root.background = if (expanded) shape else null
+        root.setPadding(if (expanded) dip(context, 8) else 0, 0,
+            if (expanded) dip(context, 8) else 0, 0)
+        visualBar?.let { bar ->
+            bar.background = if (expanded) null else shape
+            val lp = bar.layoutParams
+            val height = dip(context, if (expanded) 48 else 32)
+            if (lp.height != height) { lp.height = height; bar.layoutParams = lp }
+        }
+        listOf("battery", "share", "hid", "task").forEachIndexed { index, key ->
+            (dots.getOrNull(index)?.background as? GradientDrawable)?.setColor(dotColor(dot(data, key)))
+        }
+        summary?.text = text(data, "short").ifBlank { "状态" } + if (expanded) " ▴" else " ▾"
+        line1?.text = text(data, "line1")
+        line2?.text = text(data, "line2")
+        headerView?.contentDescription = listOf(text(data, "short"), text(data, "line1"),
+            text(data, "line2"), if (expanded) "点按收起" else "点按展开").filter { it.isNotBlank() }.joinToString("，")
+        body?.visibility = if (expanded) View.VISIBLE else View.GONE
+        body?.importantForAccessibility = if (expanded) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+            else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        detailsScroll?.visibility = if (expanded) View.VISIBLE else View.GONE
+        closeButton?.visibility = if (expanded) View.VISIBLE else View.GONE
+        root.minimumWidth = dip(context, if (expanded) 220 else 0)
+        container?.root?.contentDescription = if (expanded) "状态浮窗，已展开" else "状态浮窗，已收起"
+        container?.root?.requestLayout()
     }
 
-    private fun headerRow(
-        context: Context,
-        data: Map<*, *>,
-        withClose: Boolean
-    ): LinearLayout {
-        val row = LinearLayout(context)
-        row.orientation = LinearLayout.HORIZONTAL
-        row.gravity = Gravity.CENTER_VERTICAL
-        for (key in listOf("battery", "share", "hid", "task")) {
-            row.addView(dotView(context, dotColor(dot(data, key))))
-        }
-        if (withClose) {
-            val close = label(context, "关闭", size = 13f)
-            close.setPadding(dip(context, 16), dip(context, 2), 0, dip(context, 2))
-            close.setOnClickListener { closePill() }
-            row.addView(close)
-        } else {
-            val summary = label(context, text(data, "short"))
-            summary.setPadding(dip(context, 8), 0, 0, 0)
-            row.addView(summary)
-        }
-        return row
+    private fun android.view.accessibility.AccessibilityNodeInfo.isExpandedCompat(value: Boolean) {
+        // State description is available on current devices; click remains usable on API 26+.
+        if (android.os.Build.VERSION.SDK_INT >= 30) stateDescription = if (value) "已展开" else "已收起"
     }
 
-    private fun line(context: Context, value: String, dim: Boolean = false): TextView {
-        val view = label(context, value, dim = dim)
-        view.setPadding(0, dip(context, 5), 0, 0)
-        return view
-    }
-
-    private fun dotView(context: Context, color: Int): View {
-        val view = View(context)
-        val size = dip(context, 9)
-        val lp = LinearLayout.LayoutParams(size, size)
-        lp.rightMargin = dip(context, 5)
-        view.layoutParams = lp
-        val shape = GradientDrawable()
-        shape.shape = GradientDrawable.OVAL
-        shape.setColor(color)
-        view.background = shape
-        return view
-    }
-
-    /** 点按（未超过触摸阈值）切换展开；拖动只在垂直方向调整 lp.y。 */
-    @SuppressLint("ClickableViewAccessibility")
-    private fun attachGestures(
-        context: Context,
-        root: LinearLayout,
-        lp: WindowManager.LayoutParams
-    ) {
-        val slop = ViewConfiguration.get(context).scaledTouchSlop
-        var downRawY = 0f
-        var startY = 0
-        var dragging = false
-        root.setOnTouchListener { _, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downRawY = event.rawY
-                    startY = lp.y
-                    dragging = false
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dy = (event.rawY - downRawY).toInt()
-                    if (!dragging && (dy < -slop || dy > slop)) dragging = true
-                    if (dragging) {
-                        val metrics = root.resources.displayMetrics
-                        val max = metrics.heightPixels - root.height - dip(context, 8)
-                        lp.y = (startY + dy).coerceIn(0, if (max > 0) max else 0)
-                        try {
-                            (root.parent as? WindowManager)?.updateViewLayout(root, lp)
-                        } catch (_: Exception) {
-                        }
-                    }
-                    true
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    val tapped = !dragging && event.actionMasked == MotionEvent.ACTION_UP
-                    dragging = false
-                    if (tapped) {
-                        expanded = !expanded
-                        render(context, root)
-                    }
-                    true
-                }
-                else -> false
-            }
-        }
+    private fun dotView(context: Context, color: Int): View = View(context).apply {
+        val size = dip(context, 8)
+        layoutParams = LinearLayout.LayoutParams(size, size).apply { rightMargin = dip(context, 4) }
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) }
     }
 
     private fun dotColor(code: Int): Int = when (code) {

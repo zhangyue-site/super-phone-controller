@@ -10,14 +10,13 @@ class ControllerModelStatus extends StatelessWidget {
   final VoidCallback onRetry;
   @override
   Widget build(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('控制手机本机模型', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Semantics(liveRegion: true, child: Text(vision.status)),
-            const Text('在控制手机本机识别被控画面中的按钮，仅作为观察提示。'),
+        child: ExpansionTile(
+          key: const PageStorageKey('controller-local-observation'),
+          title: const Text('本地按钮识别'),
+          subtitle: Semantics(liveRegion: true, child: Text(vision.status)),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          children: [
+            const Text('只提供观察提示；准备期间仍可发送任务。'),
             if (vision.inferenceMs != null || vision.boxCount != null)
               Text([
                 if (vision.inferenceMs != null)
@@ -27,10 +26,11 @@ class ControllerModelStatus extends StatelessWidget {
             if (vision.error != null) ...[
               ProductError(vision.error!),
               OutlinedButton(
-                  onPressed: vision.preparing ? null : onRetry,
-                  child: const Text('重试准备本机模型')),
+                onPressed: vision.preparing ? null : onRetry,
+                child: const Text('重试本地识别'),
+              ),
             ],
-          ]),
+          ],
         ),
       );
 }

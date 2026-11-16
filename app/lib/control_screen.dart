@@ -537,7 +537,7 @@ class _ControlScreenState extends State<ControlScreen>
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Text(_busy
-                ? '正在连接…'
+                ? '正在生成任务确认信息…'
                 : _client.authorized
                     ? '直接描述手机任务，无需 /phone；龙虾先复述目标和计划，确认后执行'
                     : '控制连接已结束'),
@@ -557,8 +557,6 @@ class _ControlScreenState extends State<ControlScreen>
                             const Text(
                                 '本机仅发送任务，无需共享本机屏幕。生成计划后由你确认，执行时再检查被控画面与控制板许可。'),
                           ]))),
-            if (_client.isPaired && _vision != null)
-              ControllerModelStatus(vision: _vision!, onRetry: _prepareVision),
             if (_client.supportsSkillReplay)
               OutlinedButton(
                   onPressed: _busy || _stopping ? null : _loadSkills,
@@ -606,14 +604,16 @@ class _ControlScreenState extends State<ControlScreen>
                 maxLines: 4,
                 enabled: !_busy && !_stopping,
                 decoration: const InputDecoration(
-                    labelText: '发给龙虾的手机任务',
+                    labelText: '想让被控手机做什么？',
                     helperText: '操作目标是当前已绑定手机',
                     helperMaxLines: 2,
                     hintText: '打开设置 / 打开设置搜索电池',
                     border: OutlineInputBorder())),
             FilledButton(
                 onPressed: _busy || _stopping ? null : () => _run('prepare'),
-                child: Text(_busy ? '正在请求…' : '发给龙虾，查看计划')),
+                child: Text(_busy ? '正在准备任务…' : '查看并确认任务')),
+            if (_client.isPaired && _vision != null)
+              ControllerModelStatus(vision: _vision!, onRetry: _prepareVision),
             const SizedBox(height: 12),
             const Text('确认计划后，控制板会操作被控手机。进入设置不会取消任务；停止按钮可请求立即停止，结果按真实回执更新。'),
           ]),

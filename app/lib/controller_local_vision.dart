@@ -17,6 +17,7 @@ class ControllerLocalVision extends ChangeNotifier {
   final LocalVisionSource _source;
   final ButtonInference Function() _runtimeFactory;
   final Future<Directory> Function() _cacheDirectory;
+  final Future<({String path, String hash})> Function() _builtinModel;
   ButtonInference? _runtime;
   ButtonModelManifest? _manifest;
   Future<void>? _prepareFuture;
@@ -30,10 +31,12 @@ class ControllerLocalVision extends ChangeNotifier {
   int? _boxCount;
   ControllerLocalVision(LocalVisionSource source,
       {ButtonInference Function()? runtimeFactory,
-      Future<Directory> Function()? cacheDirectory})
+      Future<Directory> Function()? cacheDirectory,
+      Future<({String path, String hash})> Function()? builtinModel})
       : _source = source,
         _runtimeFactory = runtimeFactory ?? OrtButtonInference.new,
-        _cacheDirectory = cacheDirectory ?? _defaultCache;
+        _cacheDirectory = cacheDirectory ?? _defaultCache,
+        _builtinModel = builtinModel ?? BuiltinModelLoader.prepare;
   static Future<Directory> _defaultCache() async => Directory(
       '${(await getApplicationCacheDirectory()).path}/controller-models');
   String get status => _status;
@@ -94,22 +97,37 @@ class ControllerLocalVision extends ChangeNotifier {
       // v47: 优先加载 APK 内置模型
       _status = '正在检查内置模型';
       _emit();
+      ButtonInference? builtinRuntime;
       try {
-        final builtinPath = await BuiltinModelLoader.getModelPath();
+        final builtin = await _builtinModel();
         _check(generation);
-        _status = '正在加载内置模型';
+        final size = await File(builtin.path).length();
+        final manifest = ButtonModelManifest('builtin', builtin.hash, size);
+        if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(builtin.hash) ||
+            size < 1 ||
+            size > 32 * 1024 * 1024) {
+          throw const FormatException('内置模型描述无效');
+        }
+        _status = '正在加载并预热内置模型';
         _emit();
-        final builtinRuntime = _runtimeFactory();
-        await builtinRuntime.load(builtinPath, 'builtin');
-        _runtime = builtinRuntime;
+        builtinRuntime = _runtimeFactory();
         runtime = builtinRuntime;
+        _runtime = builtinRuntime;
+        await builtinRuntime.load(builtin.path, builtin.hash);
+        _check(generation);
+        _manifest = manifest;
         _ready = true;
-        _status = '内置模型已就绪';
+        _status = '内置模型加载与预热已完成';
         _emit();
         return;
-      } catch (e) {
-        if (identical(_runtime, runtime)) {}
-        _status = '内置模型不可用，回退云端模型';
+      } on _ObservationCancelled {
+        rethrow;
+      } catch (_) {
+        await builtinRuntime?.close();
+        if (identical(_runtime, builtinRuntime)) _runtime = null;
+        runtime = null;
+        _check(generation);
+        _status = '内置模型未就绪，正在检查备用模型';
         _emit();
       }
       final obj = await _source.localVision('manifest', {});
@@ -168,7 +186,7 @@ class ControllerLocalVision extends ChangeNotifier {
       }
       if (_valid(generation)) {
         _ready = false;
-        _error = '本地模型准备失败，请检查网络或稍后重试。基础控制仍可使用。';
+        _error = '本地模型加载、校验或预热未完成。基础控制仍可使用，可重试准备。';
         _status = '控制手机本地模型未就绪';
       }
     } finally {
