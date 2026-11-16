@@ -38,3 +38,15 @@
 蓝牙 Gateway 和直连设备领取共享单一执行所有权；待领取任务在确认后 60 秒过期，执行中任务使用独立的生命周期限制。STOP、掉线、过期或回执不明不会将旧动作转交给另一个入口。`board_control.py` 保留历史会话工具及元数据兼容逻辑，当前 HTTP Handler 未注册 `/board-control`；手动指令和技能仍通过已认证的 App/配对入口及同一执行链路处理。
 
 完整离线回归可运行 `python3 tools/run_offline_tests.py --include-focused`。此入口禁止 Python 外部 socket 连接，只允许本机 HTTP 测试；模型响应和手机画面均使用合成 fixture，不代表实机验收。
+
+## 通用任务 Agent 源码
+
+通用执行器以正常Python模块发布，不依赖维护者的版本后缀、生产manifest或服务目录。显式设置 `EPAPER_PHONE_AGENT=1` 时，已认证远程任务经 `Conversation.start_remote` → `agent_loader.run` → `agent_integration.run` 进入执行器；默认仍不开启。模型输出、OCR及稳定性报告都是不可信观察，不能授予控制权限。每个输入仍绑定原任务、设备、会话和新画面，写入结果不明时停止，不自动重放。
+
+额外配置：`EPAPER_STATE` 指定通用Agent状态目录（默认相对 `state`）；`EPAPER_MODEL_CONFIG` 指向部署者私有的模型配置（须和已有模型路由配置一致）；可选 `EPAPER_OCR_URL`、`EPAPER_OCR_TOKEN_FILE` 明确配置辅助OCR，未配置不会连接维护者服务。可选工作台OCR诊断仅对 `EPAPER_WORKBENCH_OCR_DEVICES` 显式登记的设备开放，默认空；它不改变执行许可。私有账号、设备和状态数据均不在源码中。
+
+`local_observation`同时要求手机端ready=true、达到该报告的requiredFrames（4或10）且稳定时长至少600ms；不能把native 10帧改判为4帧就绪。无效手势容器只触发有界重新观察/规划，不裁剪扩大坐标、不放宽写入限制、不重放输入。
+
+运行 `python3 tools/run_agent_offline_tests.py` 验证合成Agent回归；运行 `python3 tools/run_offline_tests.py` 验证现有公开契约。需要仓库现有Pillow和 `requirements-keyboard.txt` 依赖。测试禁止外网，不能证明真机动作成功。
+
+此次导出不含维护者专用账单单步派发、临时OTA设备闸门、私有模型配置、运行状态或未接线的native local-loop草稿；保留公开版既有严格nonce/重放规则，未混入其他部署的中继接管策略。线上版本与公开通用代码的这些差异是明确保留的部署边界，不能声称整套生产环境已原样复制或真机全部验收完成。

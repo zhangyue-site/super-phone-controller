@@ -82,9 +82,10 @@ void main() {
         MaterialApp(home: ControlScreen(service: FakeBoard(), client: client)));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '打开微信找到测试联系人');
-    await tester.scrollUntilVisible(find.text('查看并确认任务'), 120,
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('phone-task-prepare')), 120,
         scrollable: find.byType(Scrollable).first);
-    await tester.tap(find.text('查看并确认任务'));
+    await tester.tap(find.byKey(const ValueKey('phone-task-prepare')));
     await tester.pumpAndSettle();
     expect(operations, ['prepare']);
     expect(tester.getTopLeft(find.text('等待你的确认')).dy, lessThan(220));

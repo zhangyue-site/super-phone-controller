@@ -26,7 +26,7 @@ class FakeVision extends ControllerLocalVision {
   int? get boxCount => detections;
   bool Function()? current;
   @override
-  String get status => '本地模型已就绪';
+  String get status => failure == null ? '本地模型已就绪' : '本地模型未就绪';
   @override
   bool get ready => true;
   @override
@@ -93,9 +93,13 @@ void main() {
         home: Scaffold(
             body: ControllerModelStatus(
                 vision: vision, onRetry: () => retries++))));
+    expect(find.text('本地模型未就绪'), findsOneWidget);
+    expect(find.text('下载校验失败'), findsNothing);
+    await tester.tap(find.text('本地按钮识别'));
+    await tester.pumpAndSettle();
     expect(find.text('下载校验失败'), findsOneWidget);
     expect(find.textContaining('实际推理'), findsNothing);
-    await tester.tap(find.text('重试准备本机模型'));
+    await tester.tap(find.text('重试本地识别'));
     expect(retries, 1);
     vision.milliseconds = 12.4;
     vision.detections = 3;
@@ -105,6 +109,7 @@ void main() {
                 key: const ValueKey('updated'),
                 vision: vision,
                 onRetry: () => retries++))));
+    await tester.pumpAndSettle();
     expect(find.text('实际推理 12.4 毫秒 · 按钮 3 个'), findsOneWidget);
   });
   testWidgets('paired controller automatically prepares; target never starts',
@@ -121,7 +126,9 @@ void main() {
     await tester.pump();
     expect(factories, 1);
     expect(vision.prepares, 1);
-    expect(find.text('控制手机本机模型'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('本地按钮识别'), 150,
+        scrollable: find.byType(Scrollable).first);
+    expect(find.text('本地按钮识别'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpWidget(MaterialApp(
         home: ControlScreen(
@@ -140,9 +147,10 @@ void main() {
     await tester.pumpWidget(MaterialApp(
         home: ControlScreen(client: client, visionFactory: (_) => vision)));
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('发给龙虾，查看计划'), 150,
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('phone-task-prepare')), 150,
         scrollable: find.byType(Scrollable).first);
-    await tester.tap(find.text('发给龙虾，查看计划'));
+    await tester.tap(find.byKey(const ValueKey('phone-task-prepare')));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('确认执行'), 150,
         scrollable: find.byType(Scrollable).first);
@@ -166,9 +174,10 @@ void main() {
             client: FakeClient(true), visionFactory: (_) => vision)));
     await tester.pump();
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('发给龙虾，查看计划'), 150,
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('phone-task-prepare')), 150,
         scrollable: find.byType(Scrollable).first);
-    await tester.tap(find.text('发给龙虾，查看计划'));
+    await tester.tap(find.byKey(const ValueKey('phone-task-prepare')));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('确认执行'), 150,
         scrollable: find.byType(Scrollable).first);
@@ -210,9 +219,10 @@ void main() {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump(const Duration(milliseconds: 700));
     expect(vision.prepares, stoppedPrepares);
-    await tester.scrollUntilVisible(find.text('发给龙虾，查看计划'), 150,
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('phone-task-prepare')), 150,
         scrollable: find.byType(Scrollable).first);
-    await tester.tap(find.text('发给龙虾，查看计划'));
+    await tester.tap(find.byKey(const ValueKey('phone-task-prepare')));
     await tester.pumpAndSettle();
     expect(vision.prepares, greaterThan(stoppedPrepares));
     await tester.pumpWidget(const SizedBox());

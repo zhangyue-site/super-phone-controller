@@ -62,3 +62,9 @@ def tail(device):
         raise ValueError('invalid device')
     with LOCK:
         return _read(control.ROOT / 'events' / (device + '.jsonl'))[-100:]
+
+
+def latest_exec(device):
+    rows=[row for row in tail(device) if row.get("event")=="exec"]
+    if not rows or type(rows[-1].get("a")) is not int:return None
+    return rows[-1]["a"]

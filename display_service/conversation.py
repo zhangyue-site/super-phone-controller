@@ -44,7 +44,7 @@ class Conversation:
   with self.mailbox.lock:
    now=self.mailbox.clock()
    for j in self.mailbox.jobs.values():
-    if now-j.touched>(60 if j.done else 45) or now-j.created>180:
+    if now-j.touched>(60 if j.done else 45) or now-j.created>j.max_age:
      if not j.cancelled and not j.done:self.status(j.device,'error','设备执行连接已中断，本次任务未完成；请检查连接后重试。')
      if not j.done:j.cancelled=True
      j.audio=b'';j.video=b'';j.event.set()
@@ -55,10 +55,16 @@ class Conversation:
   j=self.mailbox.create(device,session,sequence)
   j.ui_protocol=ui_protocol if ui_protocol=="plan-v1" else ""
   threading.Thread(target=self.run,args=(j,text),daemon=True).start();return j
+ def start_remote(self,device,session,sequence,text,ident,pointer_protocol,lease):
+  j=self.mailbox.create(device,session,sequence)
+  j.remote_task_id=ident;j.pointer_protocol=pointer_protocol;j.remote_lease=lease
+  if os.environ.get("EPAPER_PHONE_AGENT")=="1":j.agent_job=True;j.max_age=600
+  threading.Thread(target=self.run,args=(j,text),daemon=True).start();return j
  @task_model_session
  def run(self,j,text):
   text=normalize_navigation_text(text)
   key=(j.device,j.session);final='';state='error'
+  reply_limit=6000 if getattr(j,"remote_task_id",None) else 120
   with self.history_lock:history=list(self.histories.get(key,[]))
   messages=[{'role':'system','content':PROMPT},*history,{'role':'user','content':text}]
   try:
@@ -75,6 +81,14 @@ class Conversation:
     try:name=self.skills.save_last(j.device)
     except ValueError as error:raise NavigationError(str(error))
     d={'action':'reply','reply':'已固化为专项技能：'+name+'。下次可以从桌面回放。'}
+   elif os.environ.get('EPAPER_PHONE_AGENT')=='1' and getattr(j,'remote_task_id',None):
+    from .agent_loader import run as run_agent
+    try:
+     result=run_agent(self.general_navigator,j,text)
+     if result.get("state")!="done":raise ValueError(result["reply"])
+     answer=result["reply"]
+    except ValueError as error:raise NavigationError(str(error))
+    d={'action':'reply','reply':answer}
    elif enabled and query is not None:
     try:answer=self.general_navigator.run(j,'打开微信搜索'+query)
     except ValueError as error:raise NavigationError(str(error))
@@ -87,7 +101,7 @@ class Conversation:
    self.mailbox._live(j)
    action=d.get('action');reply=d.get('reply','')
    if action=='reply' and isinstance(reply,str) and reply.strip():
-    final=reply[:120];state='done'
+    final=reply[:reply_limit];state='done'
    elif action=='home' and os.environ.get('EPAPER_AI_HID_HOME')=='1' and re.search(r'(回到|返回|回).*桌面|手机首页',text) and not re.search(r'微信|联系人|找到|发送|不要|别|停止|取消',text):
     if voice_ui.enabled(j):voice_ui.preview(self.mailbox,j,text,self.planner)
     self.status(j.device,'running','正在请求板端HID返回桌面')
@@ -98,12 +112,12 @@ class Conversation:
     final='板子已发出回桌面按键，请确认手机是否回到桌面；当前没有画面回传。';state='waiting'
    elif action=='stop':
     self.skills.invalidate(j.device)
-    final=(reply[:120] if isinstance(reply,str) and reply.strip() else '本次操作已停止。');state='done'
+    final=(reply[:reply_limit] if isinstance(reply,str) and reply.strip() else '本次操作已停止。');state='done'
    else:
     final='手机画面采集和AOA鼠标通路尚未接入，当前没有执行手机操作。';state='error'
   except NavigationError as error:
    detail={'invalid_command':'板子未接受本步指令，请重试；若重复出现请检查固件兼容性','input_failed':'板子未能完成本步操作，请检查手机连接','cancelled':'本次操作已停止'}.get(str(error),str(error))
-   final=('手机任务未完成：'+detail)[:120];state='error'
+   final=(detail if getattr(j,'sop_verification_timeout',False) else '手机任务未完成：'+detail)[:reply_limit];state='error'
   except PhoneCommandError:
    final='板子未发出HID按键，请在板上确认开启手机控制，并检查USB连接。';state='error'
   except TimeoutError:
@@ -111,6 +125,7 @@ class Conversation:
   except ValueError:
    final='本次对话已取消或连接超时。';state='error'
   except Exception:
+   import traceback;print('TURN-EXC '+traceback.format_exc(),flush=True)
    final='对话暂时失败，请检查连接后重试。';state='error'
   try:
    text_only=bool(getattr(j,'remote_task_id',None))
@@ -123,6 +138,8 @@ class Conversation:
    with self.mailbox.lock:
     self.mailbox._live(j);j.audio=audio;j.state=state;j.video=b'';j.done=True
     self.status(j.device,'done' if state=='done' else 'error',final)
+   from .sop_runtime import finalize as finalize_sop
+   finalize_sop(j,self.mailbox)
    if state=='done':
     with self.history_lock:
      self.history_times[key]=time.monotonic()

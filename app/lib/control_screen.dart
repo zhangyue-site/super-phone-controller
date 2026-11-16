@@ -610,6 +610,7 @@ class _ControlScreenState extends State<ControlScreen>
                     hintText: '打开设置 / 打开设置搜索电池',
                     border: OutlineInputBorder())),
             FilledButton(
+                key: const ValueKey('phone-task-prepare'),
                 onPressed: _busy || _stopping ? null : () => _run('prepare'),
                 child: Text(_busy ? '正在准备任务…' : '查看并确认任务')),
             if (_client.isPaired && _vision != null)

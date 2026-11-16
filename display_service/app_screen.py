@@ -3,13 +3,45 @@ No phone actions, device bearer keys, screenshots on disk, or ADB access.
 """
 import json,re,threading,os,hashlib,hmac,secrets
 from .app_ota import Authority
+from .screen_state import ScreenStates
 from .conversation import CONVERSATION
 from .wechat_nav import STORE
 from .local_screen_results import LocalScreenResults, MAX_BODY
 AUTHORITY=Authority()
 LOCAL_RESULTS=LocalScreenResults()
+SCREEN_STATES=ScreenStates()
 LOCK=threading.Lock()
 SEQUENCES={}
+WORKBENCH_ENABLED="/run/phone-controller-workbench-diagnostics"
+WORKBENCH_LAST={}
+WORKBENCH_STAGES="plugins|start|loaded|frame|boxes|wait|unavailable|stale|invalid|order|done|timeout|stop|failure|relay_error|ocr_start|ocr_bill|ocr_achai|ocr_other|ocr_ms|ocr_amount|ocr_date|ocr_added|ocr_done|ocr_timeout|ocr_stop|ocr_error"
+WORKBENCH_ROW=re.compile(r"([1-9][0-9]{0,8}):("+WORKBENCH_STAGES+r"):(10|[0-9]):([0-9]{1,9})")
+
+def workbench_diagnostics(device,headers):
+ if not os.path.isfile(WORKBENCH_ENABLED):return
+ values=headers.get_all("X-Pcflash-Workbench",[])
+ if len(values)!=1 or len(values[0])>2000:return
+ parts=values[0].split(";")
+ if len(parts)!=4 or parts[0]!="52" or not re.fullmatch(r"[a-f0-9]{8}",parts[1]):return
+ if not re.fullmatch(r"[0-9]{1,9}(?::[0-9]{1,9}){3}",parts[2]):return
+ rows=parts[3].split(",") if parts[3] else []
+ if len(rows)>40:return
+ matches=[WORKBENCH_ROW.fullmatch(row) for row in rows]
+ if any(m is None or (m[2]!="ocr_amount" and int(m[4])>60000) for m in matches):return
+ # Optional OCR diagnostics require explicit deployment enrollment (default: none).
+ if device not in {d.strip() for d in os.environ.get("EPAPER_WORKBENCH_OCR_DEVICES", "").split(",") if d.strip()}:
+  matches=[m for m in matches if not m[2].startswith("ocr_")]
+ indices=[int(m[1]) for m in matches]
+ if indices!=sorted(set(indices)):return
+ key=(device,parts[1])
+ previous=WORKBENCH_LAST.pop(key,0)
+ WORKBENCH_LAST[key]=max([previous]+indices)
+ if len(WORKBENCH_LAST)>128:WORKBENCH_LAST.pop(next(iter(WORKBENCH_LAST)))
+ events=[dict(seq=int(m[1]),stage=m[2],count=int(m[3]),value=int(m[4])) for m in matches if int(m[1])>previous]
+ if events:
+  print("WORKBENCH_DIAG "+json.dumps(dict(device=device,session=parts[1],source=int(parts[2].split(":")[0]),
+   eligible=int(parts[2].split(":")[1]),uploaded=int(parts[2].split(":")[2]),upload_errors=int(parts[2].split(":")[3]),events=events),separators=(",",":")),flush=True)
+
 USB_AUTHORITY=Authority()
 def usb_challenge(device,serial,keys):
  if not isinstance(serial,str) or not re.fullmatch("[0-9A-Fa-f]{12}",serial):raise ValueError("serial")
@@ -100,6 +132,7 @@ def handle(handler,config):
      for old,item in list(AUTHORITY.tickets.items()):
       if item[1]==obj['device'] and old!=result['ticket']:
        AUTHORITY.tickets.pop(old,None);LOCAL_RESULTS.discard(old)
+     SCREEN_STATES.prune(AUTHORITY.tickets,AUTHORITY.clock())
      CONVERSATION.mailbox.cancel(obj['device'])
    elif path.endswith('/challenge'):
     if set(obj)!={'device'}:raise ValueError('fields')
@@ -112,6 +145,7 @@ def handle(handler,config):
      for old,item in list(AUTHORITY.tickets.items()):
       if item[1]==obj['device'] and old!=grant['ticket']:
        AUTHORITY.tickets.pop(old,None);LOCAL_RESULTS.discard(old)
+     SCREEN_STATES.prune(AUTHORITY.tickets,AUTHORITY.clock())
      CONVERSATION.mailbox.cancel(obj['device'])
     result={'ticket':grant['ticket'],'expiresIn':grant['expiresIn'],'scope':'screen-frames'}
    handler.reply(200,json.dumps(result).encode());return True
@@ -123,7 +157,9 @@ def handle(handler,config):
    if not 0<=size<=MAX_BODY:raise ValueError('size')
    payload=None
    if size:
-    if handler.headers.get('Content-Type')!='application/json':raise ValueError('content type')
+    # v64 native status sends JSON with HttpURLConnection's default media type.
+    # Keep strict JSON decoding and ticket checks; only this legacy status path accepts it.
+    if handler.headers.get('Content-Type') not in ('application/json','application/x-www-form-urlencoded'):raise ValueError('content type')
     raw=handler.rfile.read(size)
     if len(raw)!=size:raise ValueError('truncated')
     payload=json.loads(raw)
@@ -147,13 +183,23 @@ def handle(handler,config):
      except (ValueError,TypeError):LOCAL_RESULTS.discard(ticket)
     else:
      LOCAL_RESULTS.discard(ticket)
+    SCREEN_STATES.record(ticket,device,handler.headers,AUTHORITY.clock(),AUTHORITY.tickets)
+    workbench_diagnostics(device,handler.headers)
+    from .recognition_receipts import receive
+    receipt=receive(device,ticket,handler.headers) if os.path.isfile(WORKBENCH_ENABLED) else None
     with mailbox.lock:
      j=mailbox.jobs.get(device)
      if j and (j.cancelled or (j.done and getattr(j,'screen_session','')!=ticket)):j=None
+     if j and mailbox.jobs.get(device) is j and j.device==device and not j.done and not j.cancelled:
+      SCREEN_STATES.bind_job(j,ticket,device,AUTHORITY.clock(),AUTHORITY.tickets)
      result={'state':j.state if j else 'idle','reply':j.reply if j else '',
       'frame':j.video_sequence if j else 0,'pointerReady':bool(j and j.pointer_protocol=='absolute-v1'),
       'skills':STORE.catalog(device),'barrier':j.video_barrier if j else '',
+      'accessibilityProtocol':1,'ocrProtocol':1,'localObservationProtocol':1,
       'verified':bool(j and j.done and j.state=='done' and getattr(j,'navigation_verified',False) is True)}
+   request=getattr(j,'local_observation_request',None) if j and not j.done and not j.cancelled else None
+   if isinstance(request,dict) and request.get('barrier')==j.video_barrier:result['localObservationRequest']=request
+   if receipt is not None:result["recognitionReceipt"]=receipt
    if j and (cloud_task is None or (not j.done and not j.cancelled and not getattr(j,'remote_task_id','') and cloud_task['terminal'])):
     cloud_task=job_summary(j)
    if j and getattr(j,'agent_job',False):result['reply']=job_summary(j)['description']
@@ -170,16 +216,21 @@ def handle(handler,config):
     if ticket not in AUTHORITY.tickets:raise ValueError('revoked')
     AUTHORITY.tickets.pop(ticket,None)
     LOCAL_RESULTS.discard(ticket)
+    SCREEN_STATES.discard(ticket)
     with LOCK:SEQUENCES.pop(ticket,None)
     mailbox.cancel(device);STORE.invalidate(device)
    handler.reply(200,b'{}');return True
-  if handler.headers.get('Content-Type')!='image/jpeg' or not 1<=size<=524288:raise ValueError('size')
+  from . import accessibility,phone_ocr
+  kind=handler.headers.get('Content-Type')
+  if kind not in ('image/jpeg',accessibility.CONTENT_TYPE) or not 1<=size<=(524288 if kind=='image/jpeg' else accessibility.MAX_ENVELOPE):raise ValueError('size')
   platform=handler.headers.get('X-Screen-Platform','android')
   if platform not in ('android','ios'):raise ValueError('capture platform')
   sequence=int(handler.headers.get('X-Screen-Sequence','0'))
   if not 1<=sequence<=2147483647:raise ValueError('sequence')
   payload=handler.rfile.read(size)
   if len(payload)!=size:raise ValueError('truncated')
+  payload,ui_tree,ocr_hint=phone_ocr.decode_frame(kind,payload,int(handler.headers.get('X-Screen-Native-Width','0')),int(handler.headers.get('X-Screen-Native-Height','0')))
+  if platform!='android':ui_tree=None
   with AUTHORITY.lock:
    AUTHORITY._prune(AUTHORITY.clock())
    if ticket not in AUTHORITY.tickets:raise ValueError('revoked')
@@ -215,9 +266,17 @@ def handle(handler,config):
     if mailbox._job(device,voice_session,voice_sequence) is not j or j.done or j.video_barrier!=capture_barrier:raise ValueError('superseded')
     if getattr(j,'video_platform','') and j.video_platform!=platform:raise ValueError('capture platform changed')
     j.video_source='user-consented-app-screen'
+    if ui_tree and (ui_tree['width'],ui_tree['height'])!=(j.video_width,j.video_height):ui_tree=None
+    accessibility.bind(j,ui_tree,j.video,capture_barrier,frame_sequence)
+    if ocr_hint and (ocr_hint["width"],ocr_hint["height"])!=(j.video_width,j.video_height):ocr_hint=None
+    phone_ocr.bind(j,ocr_hint,j.video,capture_barrier,frame_sequence)
     result['barrier']=j.video_barrier
   result['source']='user-consented-app-screen'
   if frame_sequence==1 or frame_sequence%10==0:print('APP_SCREEN frame device=%s turn=%d frame=%d width=%d height=%d'%(device,voice_sequence,frame_sequence,result['width'],result['height']),flush=True)
   handler.reply(200,json.dumps(result).encode())
- except (ValueError,TypeError,KeyError,OSError):handler.reply(403,b'{"error":"screen session invalid or expired"}')
+ except (ValueError,TypeError,KeyError,OSError) as error:
+  import traceback
+  frames=traceback.extract_tb(error.__traceback__)
+  print("APP_SCREEN_REJECT "+json.dumps(dict(path=path,error_type=type(error).__name__,trace=[dict(file=os.path.basename(f.filename),line=f.lineno,function=f.name) for f in frames]),separators=(",",":")),flush=True)
+  handler.reply(403,b'{"error":"screen session invalid or expired"}')
  return True
