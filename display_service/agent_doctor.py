@@ -15,7 +15,7 @@ class RecognitionDoctor:
   message=str(error)
   if not isinstance(error,GateError):
    if "锁屏" in message:code="screen_locked"
-   elif "没有收到新的" in message or "没有新的" in message:code="frame_unavailable"
+   elif "没有收到新的" in message or "没有新的" in message or "未收到新的" in message:code="frame_unavailable"
    elif isinstance(error,TimeoutError) or "Transport" in type(error).__name__:code="model_transport"
   observed=None
   if snapshot is not None:
@@ -58,7 +58,7 @@ def persist_report(state_root,report):
  temp.write_text(json.dumps(report,ensure_ascii=False,indent=2));temp.chmod(0o600);temp.replace(target)
 
 
-def require_observation_recovery(report):
+def require_observation_recovery(report,detail=""):
  if (report.get("code")=="gesture_invalid" and report.get("repeat",0)>=3
      and report.get("recovery")!="reconcile_original"):
   raise GateError("planner_geometry_blocked","observation","stop","连续三次手势区域或路径无效，已停止；未裁剪坐标或重放输入，请重新定位。")
@@ -69,4 +69,4 @@ def require_observation_recovery(report):
      and type(report.get("repeat")) is int and report["repeat"]>=3
      and report.get("recovery")!="reconcile_original"):
   raise GateError("observation_pipeline_blocked","observation","stop",
-      "目标连续3轮未取得10个稳定新源帧；已停止本任务，请检查本地采样频率、帧间隔和共享绑定。此步骤未发送新的输入。")
+      "目标连续3轮未取得10个稳定新源帧；已停止本任务，请检查本地采样频率、帧间隔和共享绑定。此步骤未发送新的输入。"+(detail if isinstance(detail,str) else ""))

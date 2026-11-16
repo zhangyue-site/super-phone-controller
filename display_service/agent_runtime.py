@@ -485,7 +485,8 @@ def run(nav,job,text,*,authority=None,guard=None,policy=None,intake=understand,
                         except TargetNotStable as pending_local:
                             error=GateError("target_not_stable","observation","reobserve",str(pending_local));note(error,step)
                             from .agent_doctor import require_observation_recovery
-                            require_observation_recovery(doctor_report)
+                            from .agent_local_observation import blocked_detail
+                            require_observation_recovery(doctor_report,detail=blocked_detail(job))
                             run_state.reobserve(error.code);last=nseq;continue
                         new_observed=snap(nhint).observed_at
                         print("LOCAL_STABILITY_READY "+json.dumps(dict(task=authority.goal_id,target=step["target"],wait_ms=round((clock()-started_local)*1000),source_sequence=(nhint.get("local_observation")or{}).get("sourceSequence"),proof=getattr(job,"agent_local_stability",[None])[-1])),flush=True)

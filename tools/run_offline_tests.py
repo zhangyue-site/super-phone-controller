@@ -12,6 +12,11 @@ def main():
  parser.add_argument('--include-focused',action='store_true')
  args=parser.parse_args()
  os.chdir(ROOT);sys.path[:0]=[str(ROOT),str(ROOT/'tests')]
+ # app_control opens its pairing store on import; never touch a deployment path here.
+ scratch=None
+ if 'EPAPER_PAIRING_STATE' not in os.environ:
+  import tempfile
+  scratch=tempfile.TemporaryDirectory();os.environ['EPAPER_PAIRING_STATE']=str(Path(scratch.name)/'pairings.sqlite3')
  original_connect=socket.socket.connect;original_create=socket.create_connection
  def allowed(address):return isinstance(address,tuple) and address[0] in ('127.0.0.1','localhost','::1')
  def guarded_connect(sock,address):
@@ -26,5 +31,7 @@ def main():
   suite=loader.loadTestsFromNames(args.modules) if args.modules else loader.discover(str(ROOT/'tests'))
   if args.include_focused:suite.addTests(loader.loadTestsFromNames(['test_visual_retry','test_go_endpoint','test_screen_verified_feedback']))
   return 0 if unittest.TextTestRunner().run(suite).wasSuccessful() else 1
- finally:socket.socket.connect=original_connect;socket.create_connection=original_create
+ finally:
+  socket.socket.connect=original_connect;socket.create_connection=original_create
+  if scratch is not None:os.environ.pop('EPAPER_PAIRING_STATE',None);scratch.cleanup()
 if __name__=='__main__':raise SystemExit(main())

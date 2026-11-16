@@ -38,6 +38,27 @@ class _FailureTrace:
   records=getattr(job,'agent_local_stability_failures',[]);job.agent_local_stability_failures=(records+[report])[-32:]
   print('LOCAL_STABILITY_PENDING '+json.dumps(report,ensure_ascii=False,allow_nan=False),flush=True)
 
+def blocked_detail(job):
+ """Name the link the last failed wait observed broken. Counts only: no screen text, no authority."""
+ rows=getattr(job,'agent_local_stability_failures',None)
+ if not isinstance(rows,list) or not rows or not isinstance(rows[-1],dict):return ''
+ report=rows[-1];samples=[s for s in report.get('samples',[]) if isinstance(s,dict)]
+ seen=[s for s in samples if s.get('request_region_seen') is True]
+ if report.get('reason')=='no_new_transport_frame':cause='服务端没有收到新的共享帧'
+ elif report.get('reason') in ('task_scope_changed','geometry_changed'):cause='等待期间共享任务或画面尺寸发生变化'
+ elif not seen:cause='手机回报中始终没有本次请求的目标区域，请求可能未送达或未被手机接受'
+ else:
+  sources=[s['sourceSequence'] for s in seen if type(s.get('sourceSequence')) is int]
+  advance=max(sources)-min(sources) if sources else 0
+  best=max((s['count'] for s in seen if type(s.get('count')) is int),default=0)
+  if advance==0:cause='手机已收到请求，但没有产生新的源帧'
+  elif report.get('consecutive_source_gap_observed'):cause='相邻源帧间隔超过250毫秒，连续计数被重置'
+  elif report.get('target_counter_reset_observed'):cause='目标区域像素在变化，连续计数被重置'
+  elif best<=1:cause='每个新源帧都重新计数，帧间隔过大或目标区域像素在变化'
+  else:cause='源帧在增加，但时限内未累计到所需帧数或稳定时长'
+  cause+='；最高连续%d帧，源帧推进%d'%(best,advance)
+ return '最近一轮：'+cause+'。'
+
 def wait_for_target(job,raw,seq,sig,hint,bounds,label,*,read,guard,clock=time.monotonic,request_id=lambda:uuid.uuid4().hex,budget=8.0):
  guard()
  if not isinstance(hint.get('local_observation'),dict) and not getattr(job,'local_observation_capable',False):return raw,seq,sig,hint
