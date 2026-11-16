@@ -35,7 +35,7 @@ class AppBuildWorkflow(unittest.TestCase):
 
     def test_native_sdk_requirement_and_encryption_remain_explicit(self):
         self.assertIn('xcrun --sdk iphoneos --show-sdk-version', self.ios)
-        self.assertIn('iOS27 simulator required', self.ios)
+        self.assertIn('../tools/select_ios_simulator.py', self.ios)
         for job in (self.android, self.ios):
             self.assertIn('PRIVATE_ARTIFACT_PASSWORD', job)
             self.assertIn('-mhe=on', job)
