@@ -30,7 +30,9 @@ class CloudRelay {
   Timer? _watchdog;
   String? _nonce;
   DateTime? _heartbeat;
-  DateTime? _lastPoll, _lastControl;
+  DateTime? _lastControl;
+  Duration? _heartbeatAt, _lastPollAt, _lastControlAt;
+  late final Duration Function() _elapsed;
   bool _upgradeRequested = false, _maintenanceSupported = false;
   bool _wifiUpgradeSupported = false;
   Map<String, dynamic> diagnostics = {};
@@ -51,7 +53,10 @@ class CloudRelay {
       this.beforeModeChange,
       this.retiredNonce,
       void Function(Map<String, Object>)? onTrace,
-      bool tracePhases = false}) {
+      bool tracePhases = false,
+      Duration Function()? monotonic}) {
+    final clock = Stopwatch()..start();
+    _elapsed = monotonic ?? (() => clock.elapsed);
     _trace = RelayPhaseTrace(
         onEvent: onTrace ??
             (row) {
@@ -112,7 +117,7 @@ class CloudRelay {
     if (_closed) throw StateError('控制连接已结束');
     await beforePolling?.call();
     if (_closed) throw StateError("控制连接已结束");
-    _lastPoll = DateTime.now(); // Keep the existing idle/startup cadence.
+    _lastPollAt = _elapsed(); // Keep the existing idle/startup cadence.
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => _tick());
     _watchdog ??=
         Timer.periodic(const Duration(seconds: 5), (_) => _watchdogTick());
@@ -120,15 +125,15 @@ class CloudRelay {
 
   Future<void> _tick() async {
     if (_busy || _closed) return;
-    final now = DateTime.now();
-    final fast = _lastControl != null &&
-        now.difference(_lastControl!).inMilliseconds < 3000;
+    final now = _elapsed();
+    final fast =
+        _lastControlAt != null && (now - _lastControlAt!).inMilliseconds < 3000;
     if (!fast &&
-        _lastPoll != null &&
-        now.difference(_lastPoll!).inMilliseconds < 500) {
+        _lastPollAt != null &&
+        (now - _lastPollAt!).inMilliseconds < 500) {
       return;
     }
-    _lastPoll = now;
+    _lastPollAt = now;
     _busy = true;
     var dispatched = false; // dispatch-fence
     try {
@@ -136,8 +141,8 @@ class CloudRelay {
           ? null
           : _upgradeRequested
               ? 11
-              : (_heartbeat == null ||
-                      DateTime.now().difference(_heartbeat!).inSeconds >= 5)
+              : (_heartbeatAt == null ||
+                      (_elapsed() - _heartbeatAt!).inSeconds >= 5)
                   ? 12
                   : null;
       _phase = maintenance == null ? 'poll' : 'maintenance';
@@ -248,11 +253,15 @@ class CloudRelay {
       if (result["state"] != "acknowledged") throw StateError("板端动作失败");
       if (const [1, 2, 3, 4, 13, 14].contains(op)) {
         _lastControl = DateTime.now();
+        _lastControlAt = _elapsed();
       }
       _lastOp = op;
       _lastSeq = seq;
       SafeDiagnostics.record('relay_ack', phase: 'ack', op: op, seq: seq);
-      if (op == 12) _heartbeat = DateTime.now();
+      if (op == 12) {
+        _heartbeat = DateTime.now();
+        _heartbeatAt = _elapsed();
+      }
       if (op == 11) _upgradeRequested = false;
       if (op == 5) {
         taskStopAcknowledged = true;
@@ -289,9 +298,9 @@ class CloudRelay {
   /// waiting for a human to restart the app.
   Future<void> _watchdogTick() async {
     if (_closed || _upgradeRequested) return;
-    final hb = _heartbeat;
+    final hb = _heartbeatAt;
     if (hb == null) return;
-    final stale = DateTime.now().difference(hb).inSeconds;
+    final stale = (_elapsed() - hb).inSeconds;
     if (stale <= 45) return;
     SafeDiagnostics.record('relay_watchdog',
         phase: 'stale_heartbeat', remainingMs: stale * 1000);

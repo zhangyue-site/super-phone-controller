@@ -467,6 +467,7 @@ class ControlClient implements LocalVisionSource {
       _healExhausted = false;
       _healAttempts = 0;
       final relay = CloudRelay(
+        tracePhases: const bool.fromEnvironment('CONTROLLER_RELAY_TRACE'),
         beforeModeChange: onModeChange,
         post: (p, b) => _post('relay:$p', b, auth: true),
         read: service.readLocalControl,
@@ -694,6 +695,7 @@ class ControlClient implements LocalVisionSource {
         phase: 'authorize', reason: 'grant_ok', remainingMs: ttl * 1000);
     // Same physical session, same nonce: the server adopts it in place.
     final next = CloudRelay(
+      tracePhases: const bool.fromEnvironment('CONTROLLER_RELAY_TRACE'),
       beforeModeChange: onModeChange,
       post: (p, b) => _post('relay:$p', b, auth: true),
       read: board.readLocalControl,
@@ -834,6 +836,7 @@ class ControlClient implements LocalVisionSource {
         _expires = DateTime.now().add(const Duration(seconds: 300));
       }
       next = CloudRelay(
+        tracePhases: const bool.fromEnvironment('CONTROLLER_RELAY_TRACE'),
         retiredNonce: retired,
         beforeModeChange: onModeChange,
         post: (p, b) => _post('relay:$p', b, auth: true),
