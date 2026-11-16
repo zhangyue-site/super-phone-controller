@@ -28,9 +28,16 @@ class AppBuildWorkflow(unittest.TestCase):
         self.assertNotIn('runs-on: macos-latest-large', self.workflow)
         self.assertIn('runs-on: xcode-27', self.ios)
 
+    def test_simulator_boot_has_own_budget_and_build_is_diagnosable(self):
+        self.assertIn('name: Boot iOS 27 simulator', self.ios)
+        self.assertIn('timeout-minutes: 30', self.ios)
+        self.assertIn('flutter test integration_test/startup_test.dart -v', self.ios)
+        self.assertIn('name: Preserve simulator diagnostics', self.ios)
+        self.assertIn('if: failure()', self.ios)
+
     def test_native_sdk_requirement_and_encryption_remain_explicit(self):
         self.assertIn('xcrun --sdk iphoneos --show-sdk-version', self.ios)
-        self.assertIn('iOS27 simulator required', self.ios)
+        self.assertIn('../tools/select_ios_simulator.py', self.ios)
         for job in (self.android, self.ios):
             self.assertIn('PRIVATE_ARTIFACT_PASSWORD', job)
             self.assertIn('-mhe=on', job)
