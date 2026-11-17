@@ -7,7 +7,11 @@ import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.util.Log
 
-/** A USB attachment is a background event after first setup, never a navigation command. */
+/**
+ * USB 插入即拉起：只要识别为本家族控制板（VID/PID/产品名 + 12 位十六进制序列号），
+ * 每次插入都打开主界面；不再区分首次/后续，也不再要求 USB 权限已授予——
+ * 权限在主界面里授权。拉起本身不授予任何采集、USB 会话或 HID 能力。
+ */
 class UsbAttachActivity : Activity() {
  override fun onCreate(savedInstanceState: Bundle?) {
   super.onCreate(savedInstanceState)
@@ -16,15 +20,11 @@ class UsbAttachActivity : Activity() {
    @Suppress("DEPRECATION") val requested=intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)?:return
    val manager=getSystemService(USB_SERVICE) as UsbManager
    val actual=manager.deviceList[requested.deviceName]?:return
-   if(!UsbControllerProfile.supports(actual.vendorId,actual.productId,actual.productName) || !manager.hasPermission(actual))return
+   if(!UsbControllerProfile.supports(actual.vendorId,actual.productId,actual.productName))return
    val serial=actual.serialNumber?.uppercase()?:return
    if(!Regex("[0-9A-F]{12}").matches(serial))return
-   val prefs=getSharedPreferences("usb-auto-open",MODE_PRIVATE)
-   if(prefs.getBoolean(serial,false)) {Log.i("UsbAttach","Background attachment; main screen retained in background");return}
-   // This preference only suppresses UI. It never grants capture, USB sessions, or HID.
-   if(!prefs.edit().putBoolean(serial,true).commit())return
    startActivity(Intent(this,MainActivity::class.java).setAction(UsbManager.ACTION_USB_DEVICE_ATTACHED).putExtra(UsbManager.EXTRA_DEVICE,actual).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-   Log.i("UsbAttach","First attachment; opened setup once")
+   Log.i("UsbAttach","Board attached; opening main screen")
   } catch(_:Exception) {Log.w("UsbAttach","Attachment ignored; open the app manually if setup is needed")}
   finally {finish()}
  }
