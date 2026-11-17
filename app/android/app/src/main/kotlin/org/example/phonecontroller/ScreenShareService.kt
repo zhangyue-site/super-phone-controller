@@ -127,6 +127,15 @@ class ScreenShareService: Service() {
    "switches" to (sourceBurst?.switches() ?: 0),"acquired_candidates" to (sourceBurst?.accepted() ?: 0),
    "source_frames" to sourceFrames.get(),"eligible_frames" to eligibleFrames.get()))
  }
+ // Diagnostics only: one row per request key and reason a burst was not started.
+ // Bounded memory forgets the oldest note first, so a later reason is still reported.
+ private val burstSkipNotes=linkedSetOf<String>()
+ private fun burstSkipped(key: String,reason: String) {
+  if(!burstSkipNotes.add("$key:$reason"))return
+  if(burstSkipNotes.size>128)burstSkipNotes.remove(burstSkipNotes.iterator().next())
+  SafeDiagnostics.record(mapOf("event" to "source_burst","phase" to "frame","reason" to reason,
+   "source_frames" to sourceFrames.get(),"eligible_frames" to eligibleFrames.get()))
+ }
  private val burstTick=object: Runnable {
   override fun run() { synchronized(this@ScreenShareService) {
    if(!BuildConfig.SOURCE_BURST_EXPERIMENT || !running)return
@@ -134,7 +143,7 @@ class ScreenShareService: Service() {
    val key=if(supportsLocalObservation && hasDemand(SystemClock.elapsedRealtime()))localObservation.burstRequestKey(scope) else null
    if(sourceBurst==null && key!=null && key !in attemptedBursts && burstAuthorized() && retiredReader==null) {
     // Bound replay memory per capture: saturation disables additional attempts.
-    if(attemptedBursts.size>=128)return
+    if(attemptedBursts.size>=128){burstSkipped(key,"burst_budget_exhausted");return}
     attemptedBursts.add(key);burstScope=scope;burstKey=key;burstPrimary=reader
     val adapter=object: SourceBurst.Adapter {
      override fun allocate(){check(retiredReader==null && burstAuthorized());burstSecondary=newReader()}
@@ -158,6 +167,8 @@ class ScreenShareService: Service() {
     }
     sourceBurst=SourceBurst(adapter,scope,System.nanoTime())
     sourceBurst!!.begin(System.nanoTime(),false);burstDiagnostic("begin")
+   } else if(sourceBurst==null && key!=null) {
+    burstSkipped(key,if(key in attemptedBursts)"burst_already_attempted" else if(!burstAuthorized())"burst_unauthorized" else "burst_reader_swap")
    }
    val burst=sourceBurst ?: return
    if(burstInFlight())burst.tick(System.nanoTime(),scope,burstAuthorized(),key==burstKey,locked(),localObservation.burstReady(scope,lastEligibleTimestamp))
@@ -172,7 +183,7 @@ class ScreenShareService: Service() {
   listOfNotNull(burstPrimary,burstSecondary).distinct().filter{it!==activeReader}.forEach{
    try{it.setOnImageAvailableListener(null,null);it.close()}catch(_: Exception){}
   }
-  burstPrimary=null;burstSecondary=null;sourceBurst=null;attemptedBursts.clear()
+  burstPrimary=null;burstSecondary=null;sourceBurst=null;attemptedBursts.clear();burstSkipNotes.clear()
  }
  private fun newReader(): ImageReader {
   val r=ImageReader.newInstance(initialWidth,initialHeight,PixelFormat.RGBA_8888,2)
@@ -447,7 +458,9 @@ class ScreenShareService: Service() {
       statusOkAt=SystemClock.elapsedRealtime();hasStatusBarrier=Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
       supportsLocalObservation=data.optInt("localObservationProtocol")==1
       val observedBarrier=data.optString("barrier")
-      if(supportsLocalObservation && observedBarrier==barrier){val shot=screenshotSize();localObservation.request(data.optJSONObject("localObservationRequest"),observationScope(),shot.first,shot.second,barrier)}
+      val wanted=data.optJSONObject("localObservationRequest")
+      if(supportsLocalObservation && observedBarrier==barrier){val shot=screenshotSize();localObservation.request(wanted,observationScope(),shot.first,shot.second,barrier)}
+      else if(supportsLocalObservation && wanted!=null)localObservation.declined(wanted,"status_barrier_mismatch")
       if(!supportsLocalObservation)localObservation.clear()
       frameDemand=data.optString("state") in setOf("thinking","running","planning","plan","verifying","capturing") && Regex("[0-9a-f]{32}").matches(data.optString("barrier")) && data.optString("barrier").any{it!='0'}
       demandAt=SystemClock.elapsedRealtime()

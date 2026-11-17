@@ -47,7 +47,7 @@
 
 `local_observation`同时要求手机端ready=true、达到该报告的requiredFrames（4或10）且稳定时长至少600ms；不能把native 10帧改判为4帧就绪。无效手势容器只触发有界重新观察/规划，不裁剪扩大坐标、不放宽写入限制、不重放输入。
 
-`tests/test_agent_public_chain.py` 用合成手机和打桩的规划器，经真实HTTP处理器完整驱动上述入口链路（领取→理解→观察→本地稳定性请求→HID→新帧核验），由 `tools/run_offline_tests.py` 一并运行，用于定位任务停在哪一环。合成条件下服务端各环节可以闭环；手机若不能为请求区域提供连续新源帧，任务以 `observation_pipeline_blocked` 停止且不发送输入，回复附带最近一轮观察到的原因（仅计数，不含画面文字）。等不到新帧时按手机最近上报的亮屏/锁屏状态说明原因，不再一律提示重新共享。该测试不代表真机、模型或控制板验收。
+`tests/test_agent_public_chain.py` 用合成手机和打桩的规划器，经真实HTTP处理器完整驱动上述入口链路（领取→理解→观察→本地稳定性请求→HID→新帧核验），由 `tools/run_offline_tests.py` 一并运行，用于定位任务停在哪一环。合成条件下服务端各环节可以闭环；手机若不能为请求区域提供连续新源帧，任务以 `observation_pipeline_blocked` 停止且不发送输入，回复附带最近一轮观察到的原因（仅计数，不含画面文字）。等不到新帧时按手机最近上报的亮屏/锁屏状态说明原因，不再一律提示重新共享。该测试不代表真机、模型或控制板验收。任务停住后服务端和手机端各该收集哪些记录、字段含义是什么，见 `docs/agent-troubleshooting-logs.md`。
 
 Agent状态目录不存在时会自动创建。`tools/run_offline_tests.py` 在未设置 `EPAPER_PAIRING_STATE` 时使用临时配对库，不触碰部署路径。
 

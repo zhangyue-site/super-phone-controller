@@ -8,7 +8,7 @@ import kotlin.math.abs
 
 /** Read-only local facts; never sends input or grants control permission. */
 class LocalObservationBridge {
- private val tracker=LocalRegionStability()
+ private val tracker=LocalRegionStability().also{it.traceRole("agent_target")}
  private var scope=""
  private var width=0
  private var height=0
@@ -17,7 +17,35 @@ class LocalObservationBridge {
  private var external: JSONObject?=null
  private var latestHints=JSONArray()
  private fun digest(text: String)=MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it)}
- @Synchronized fun clear(){tracker.clear();scope="";width=0;height=0;nextId=1;ocrTargets=emptyList();external=null;latestHints=JSONArray()}
+ // Diagnostics only: fixed reasons and counts for one requested target at a time.
+ // No screen text, label, bounds or request id leaves this class through them.
+ private var watchedId=""
+ private var watchedAt=0L
+ private var declinedNote=""
+ private var reportsSent=0
+ private var reportsReady=0
+ private var reportsDropped=0
+ private fun requestId(value: JSONObject?)=value?.optJSONArray("regions")?.optJSONObject(0)?.optString("id")?:""
+ private fun watch(id: String,endReason: String){
+  if(id==watchedId)return
+  val trace=tracker.drainTrace()
+  if(watchedId.isNotEmpty())SafeDiagnostics.record(mapOf("event" to "local_stability","phase" to "frame","reason" to endReason,
+   "observed_frames" to trace.frames,"rejected_frames" to trace.rejected,"gap_resets" to trace.gapResets,"change_resets" to trace.changeResets,
+   "max_gap_ms" to trace.maxGapMs,"best_count" to trace.bestCount,"best_stable_ms" to trace.bestStableMs,"ready" to trace.ready,
+   "reports_sent" to reportsSent,"reports_ready" to reportsReady,"reports_dropped" to reportsDropped,
+   "watch_ms" to (System.nanoTime()-watchedAt)/1_000_000L))
+  watchedId=id;watchedAt=System.nanoTime();reportsSent=0;reportsReady=0;reportsDropped=0
+  if(id.isNotEmpty())SafeDiagnostics.record(mapOf("event" to "local_stability","phase" to "frame","reason" to "request_begin",
+   "burst_enabled" to BuildConfig.SOURCE_BURST_EXPERIMENT))
+ }
+ /** One row per request the phone saw but did not adopt; changes nothing else. */
+ @Synchronized fun declined(value: JSONObject,reason: String){
+  val note=requestId(value)+":"+reason
+  if(note==declinedNote)return
+  declinedNote=note
+  SafeDiagnostics.record(mapOf("event" to "local_stability","phase" to "status","reason" to reason))
+ }
+ @Synchronized fun clear(){watch("","watch_cleared");tracker.clear();scope="";width=0;height=0;nextId=1;ocrTargets=emptyList();external=null;latestHints=JSONArray()}
  private fun ensureScope(value: String,w: Int,h: Int){
   if(scope!=value || width!=w || height!=h){clear();scope=value;width=w;height=h;tracker.configure(value,w,h,emptyList())}
  }
@@ -39,6 +67,14 @@ class LocalObservationBridge {
   ensureScope(currentScope,w,h)
   external=if(value!=null && value.optString("barrier")==barrier && value.optInt("width")==w && value.optInt("height")==h && value.optInt("requiredFrames")==10)value else null
   tracker.configure(scope,width,height,targets())
+  val adopted=external!=null && targets().any{it.role=="agent_target"}
+  if(value!=null && !adopted)declined(value,when{
+   value.optString("barrier")!=barrier->"request_barrier_mismatch"
+   value.optInt("width")!=w || value.optInt("height")!=h->"request_geometry_mismatch"
+   value.optInt("requiredFrames")!=10->"request_frames_mismatch"
+   else->"request_region_invalid"
+  })
+  watch(if(adopted)requestId(external) else "","request_end")
  }
  @Synchronized fun wantsFastSamples(currentScope: String): Boolean = scope==currentScope && external!=null
  // Only a validated external target set can request a bounded source burst.
@@ -88,7 +124,10 @@ class LocalObservationBridge {
   ocrTargets=next;latestHints=hints;tracker.configure(scope,width,height,targets())
  }
  @Synchronized fun report(ocr: JSONObject,capturedAt: Long,currentScope: String): JSONObject? {
-  if(scope!=currentScope || width!=ocr.optInt("width") || height!=ocr.optInt("height"))return null
+  if(scope!=currentScope || width!=ocr.optInt("width") || height!=ocr.optInt("height")){
+   if(watchedId.isNotEmpty())reportsDropped++
+   return null
+  }
   // Snapshot lookup precedes OCR configuration: no future count is put on an old JPEG.
   val snapshot=tracker.snapshotAt(capturedAt)
   updateOcr(ocr)
@@ -100,6 +139,13 @@ class LocalObservationBridge {
    }
    JSONObject().put("v",1).put("scopeHash",digest(currentScope)).put("sourceSequence",snapshot.sourceSeq).put("sourceTimestampNs",snapshot.sourceTimestampNs).put("sourceWidth",snapshot.sourceWidth).put("sourceHeight",snapshot.sourceHeight).put("ageMs",age).put("requiredFrames",10).put("minStableMs",600).put("regions",regions).put("layoutHints",JSONArray(latestHints.toString()))
   } else null
+  if(watchedId.isNotEmpty()){
+   if(output==null)reportsDropped++
+   else{
+    reportsSent++
+    if(snapshot?.regions?.any{it.id==watchedId && it.ready}==true)reportsReady++
+   }
+  }
   return output
  }
 }

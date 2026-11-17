@@ -71,6 +71,48 @@ public final class LocalRegionStability {
     }
   }
 
+  /**
+   * Diagnostic counts since the previous drain, for targets of the traced role.
+   * Never a readiness, authorization or input fact; carries no pixels, text or bounds.
+   */
+  public static final class Trace {
+    public final long frames, rejected, gapResets, changeResets, maxGapMs, bestStableMs;
+    public final int bestCount;
+    public final boolean ready;
+    private Trace(long frames, long rejected, long gapResets, long changeResets, long maxGapMs,
+        long bestStableMs, int bestCount, boolean ready) {
+      this.frames = frames; this.rejected = rejected; this.gapResets = gapResets;
+      this.changeResets = changeResets; this.maxGapMs = maxGapMs;
+      this.bestStableMs = bestStableMs; this.bestCount = bestCount; this.ready = ready;
+    }
+  }
+
+  private String traceRole;
+  private long traceFrames, traceRejected, traceGapResets, traceChangeResets, traceMaxGapNs,
+      traceBestStableMs, tracePreviousNs = -1;
+  private int traceBestCount;
+  private boolean traceReady;
+
+  /** Select which target role the diagnostic trace counts; restarts the trace. */
+  public synchronized void traceRole(String role) { traceRole = role; drainTrace(); }
+
+  /**
+   * Return the counts gathered since the previous drain and start a new window.
+   * A gap is measured only between two accepted frames inside the same window.
+   */
+  public synchronized Trace drainTrace() {
+    Trace answer = new Trace(traceFrames, traceRejected, traceGapResets, traceChangeResets,
+        traceMaxGapNs / 1_000_000L, traceBestStableMs, traceBestCount, traceReady);
+    traceFrames = traceRejected = traceGapResets = traceChangeResets = traceMaxGapNs = 0;
+    traceBestStableMs = 0; traceBestCount = 0; traceReady = false; tracePreviousNs = -1;
+    return answer;
+  }
+
+  private Snapshot rejected(String scope, long seq, long timestamp, int w, int h) {
+    traceRejected++;
+    return invalid(scope, seq, timestamp, w, h);
+  }
+
   private String scope;
   private int shotWidth, shotHeight, width, height, pixelStride, rowStride;
   private long lastSeq = -1, lastTimestamp = -1;
@@ -141,20 +183,20 @@ public final class LocalRegionStability {
       ByteBuffer rgba, int sourceWidth, int sourceHeight, int pixelStride, int rowStride) {
     if (!Objects.equals(this.scope, scope) || this.scope == null || seq < 0 || timestampNs < 0) {
       resetObservations();
-      return invalid(scope, seq, timestampNs, sourceWidth, sourceHeight);
+      return rejected(scope, seq, timestampNs, sourceWidth, sourceHeight);
     }
     if (seq < lastSeq || timestampNs < lastTimestamp) {
       resetObservations();
-      return invalid(scope, seq, timestampNs, sourceWidth, sourceHeight);
+      return rejected(scope, seq, timestampNs, sourceWidth, sourceHeight);
     }
     if (!validBuffer(rgba, sourceWidth, sourceHeight, pixelStride, rowStride)) {
       resetObservations();
       // A malformed real source image still advances its high-water mark.
       lastSeq = Math.max(lastSeq, seq); lastTimestamp = Math.max(lastTimestamp, timestampNs);
-      return invalid(scope, seq, timestampNs, sourceWidth, sourceHeight);
+      return rejected(scope, seq, timestampNs, sourceWidth, sourceHeight);
     }
     if (seq == lastSeq || timestampNs == lastTimestamp) {
-      return invalid(scope, seq, timestampNs, sourceWidth, sourceHeight);
+      return rejected(scope, seq, timestampNs, sourceWidth, sourceHeight);
     }
     boolean geometry = width != sourceWidth || height != sourceHeight
         || this.pixelStride != pixelStride || this.rowStride != rowStride;
@@ -165,6 +207,9 @@ public final class LocalRegionStability {
     this.pixelStride = pixelStride; this.rowStride = rowStride;
     lastSeq = seq; lastTimestamp = timestampNs;
     ArrayList<Region> rows = new ArrayList<>(targets.size());
+    long changes = 0, bestStableMs = 0;
+    int bestCount = 0;
+    boolean ready = false;
     try {
       for (State s : targets.values()) {
         Target t = s.target;
@@ -176,13 +221,30 @@ public final class LocalRegionStability {
         hash = sample(rgba, Math.max(0, l - 3), Math.max(0, top - 3),
             Math.min(width, right + 3), Math.min(height, bottom + 3),
             pixelStride, rowStride, hash);
+        boolean traced = t.role.equals(traceRole);
+        if (traced && s.count > 0 && hash != s.hash) changes++;
         s.sample(hash, timestampNs);
-        rows.add(new Region(s, l, top, right, bottom, timestampNs));
+        Region row = new Region(s, l, top, right, bottom, timestampNs);
+        rows.add(row);
+        if (traced) {
+          bestCount = Math.max(bestCount, row.count);
+          bestStableMs = Math.max(bestStableMs, row.stableMs);
+          ready |= row.ready;
+        }
       }
     } catch (IndexOutOfBoundsException | IllegalArgumentException error) {
       resetObservations();
-      return invalid(scope, seq, timestampNs, sourceWidth, sourceHeight);
+      return rejected(scope, seq, timestampNs, sourceWidth, sourceHeight);
     }
+    if (tracePreviousNs >= 0) {
+      long gap = timestampNs - tracePreviousNs;
+      traceMaxGapNs = Math.max(traceMaxGapNs, gap);
+      if (gap > MAX_GAP_NS) traceGapResets++;
+    }
+    tracePreviousNs = timestampNs; traceFrames++; traceChangeResets += changes;
+    traceBestCount = Math.max(traceBestCount, bestCount);
+    traceBestStableMs = Math.max(traceBestStableMs, bestStableMs);
+    traceReady |= ready;
     Snapshot answer = new Snapshot(scope, seq, timestampNs, sourceWidth, sourceHeight, true, rows);
     ring.put(timestampNs, answer);
     while (ring.size() > RING_SIZE) ring.remove(ring.keySet().iterator().next());
