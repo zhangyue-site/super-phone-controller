@@ -17,10 +17,11 @@ import 'target_progress_card.dart';
 import 'local_auto_loop.dart';
 import 'overlay_pill.dart';
 
-/// The target owns capture and the BLE relay, never command entry.
+/// The target owns capture and USB authorization; Bluetooth relay is optional.
 class UsbTargetScreen extends StatefulWidget {
   final UsbAttachment attachment;
   final BleOtaService? service;
+  final ControlClient Function()? createControlClient;
   final VoidCallback? onLegacy;
   final bool Function() isCurrent;
   final DateTime Function()? captureClock;
@@ -30,6 +31,7 @@ class UsbTargetScreen extends StatefulWidget {
       required this.attachment,
       required this.isCurrent,
       this.service,
+      this.createControlClient,
       this.onLegacy,
       this.captureClock,
       this.renewCapture});
@@ -46,7 +48,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   Future<void>? _startFuture;
   bool _busy = false, _active = false, _polling = false, _stopping = false;
   bool _pointerReady = false, _lost = false, _externalGateway = false;
-  bool _boardVerified = false;
+  bool _boardVerified = false, _bluetoothRequested = false;
   int _generation = 0;
   int? _captureStartErrorGeneration;
   String? _captureStartErrorMessage;
@@ -94,7 +96,10 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
           setState(() {
             _active = false;
             _boardVerified = false;
-            _relay = 'USB 已断开，控制已停止';
+            _relay = 'USB 已断开，本机控制授权已关闭';
+            _error = _control?.usbRevokeFailed == true
+                ? '云端撤销未确认；本机已结束授权，旧动作不会重发'
+                : null;
           });
         }
         return;
@@ -217,7 +222,66 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
     return device;
   }
 
+  Future<void> _switchTransport(bool bluetooth) async {
+    if (_busy || _stopping || !_active || !widget.isCurrent()) return;
+    final generation = ++_generation;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _code = null;
+    });
+    try {
+      final previous = _control;
+      await TargetSession.release(diagnosticReason: 'transport_switch');
+      await previous?.shutdown();
+      if (!_current(generation)) return;
+      if (previous?.usbRevokeFailed == true) {
+        throw StateError('云端撤销未确认，请先检查连接；不会切换或重放旧任务');
+      }
+      _control = null;
+      _bluetoothRequested = bluetooth;
+      _externalGateway = false;
+    } catch (e) {
+      if (_current(generation)) setState(() => _error = '连接切换未完成：$e');
+      return;
+    } finally {
+      if (mounted && generation == _generation) setState(() => _busy = false);
+    }
+    if (_current(generation)) await _start(allowConsent: false);
+  }
+
   Future<void> _connectBoard(String identity, int generation) async {
+    final owner = TargetSession.clientFor(widget.attachment);
+    if (owner?.authorized == true) {
+      TargetSession.resumeRecovery(owner!);
+      _control = owner;
+      _bluetoothRequested = !owner.usesUsbDirect;
+      _relay = owner.usesUsbDirect ? 'USB 授权已建立；等待板端 Wi-Fi 与任务回执' : '手机中转连接已保留';
+      return;
+    }
+    if (!_bluetoothRequested) {
+      if (TargetSession.hasRetainedOwner) {
+        await TargetSession.release(diagnosticReason: 'usb_reauthorize');
+      }
+      if (!_current(generation)) return;
+      await _control?.shutdown();
+      if (!_current(generation)) return;
+      final client = widget.createControlClient?.call() ?? ControlClient();
+      _control = client;
+      await client.authorizeUsb(widget.attachment,
+          isCurrent: () => _current(generation));
+      if (!_current(generation)) {
+        await client.shutdown();
+        return;
+      }
+      if (client.deviceId != null && client.deviceId != identity) {
+        await client.shutdown();
+        throw StateError('USB控制授权目标已改变');
+      }
+      TargetSession.retain(widget.attachment, client, null);
+      _relay = 'USB 授权已建立；等待板端 Wi-Fi 与任务回执';
+      return;
+    }
     final service = widget.service;
     if (service == null) {
       _relay = '等待控制板连接';
@@ -370,9 +434,10 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         if (!_current(generation)) return;
       }
       captureStage = false;
+      if (restoreLocal) _bluetoothRequested = true;
       setState(() {
         _capture = '正在共享整个屏幕';
-        _relay = '正在连接云端中继';
+        _relay = _bluetoothRequested ? '正在连接蓝牙备用中转' : '正在通过 USB 核验控制授权';
       });
       if (!_externalGateway || restoreLocal) {
         await _connectBoard(identity, generation);
@@ -526,6 +591,9 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       await TargetSession.release();
       await _control?.shutdown();
       await _startFuture;
+      if (_control?.usbRevokeFailed == true) {
+        failure = '云端撤销未确认，请检查网络；设备停止仍待核验。';
+      }
       await widget.service?.disconnect();
       if (mounted) {
         setState(() {
@@ -579,7 +647,9 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
       body: ListView(padding: const EdgeInsets.all(20), children: [
         Text(
             ready && !_feedback.isCloudStale(DateTime.now())
-                ? '已连接，等待或接收任务'
+                ? (_control?.usesUsbDirect == true
+                    ? 'USB 已授权，等待板端连接'
+                    : '已连接，等待或接收任务')
                 : _active
                     ? '整屏共享中，正在检查连接'
                     : _busy
@@ -587,7 +657,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                         : '需要连接',
             style: Theme.of(context).textTheme.headlineMedium),
         const SizedBox(height: 8),
-        const Text('连接控制板、共享整屏，再在控制手机输入绑定码。'),
+        const Text('USB 连接并授权、共享整屏，再在控制手机输入绑定码。板子通过 Wi-Fi 连接云端，蓝牙中转为可选备用。'),
         if (!ready)
           Card(
               child: Padding(
@@ -614,10 +684,12 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
           permission:
               _pointerReady ? '最近回执允许操作，开始执行前仍会检查' : '执行任务时检查操作许可，空闲无需重复授权',
           network: connected
-              ? '此手机中转连接已建立，云端执行状态按任务回执更新'
+              ? (_control?.usesUsbDirect == true
+                  ? 'USB 授权已建立；板端 Wi-Fi 在线状态以心跳和任务回执为准'
+                  : '此手机中转连接已建立，云端执行状态按任务回执更新')
               : _externalGateway
                   ? '等待控制板直连或另一台手机中转；当前网络状态待更新'
-                  : '正在检查手机中转连接',
+                  : '正在检查 USB 授权与板端直连状态',
           error: _error,
         ),
         for (final message in _checkErrors.messages) ProductError(message),
@@ -647,8 +719,21 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
               label: Text(_busy
                   ? '正在请求授权或连接…'
                   : _active
-                      ? '重新检查手机中转'
+                      ? (_bluetoothRequested ? '重新检查手机中转' : '重新检查控制连接')
                       : '开始屏幕共享并连接')),
+        if (_active) const Text('切换连接会结束当前控制任务并保留屏幕共享，旧动作不会重放。'),
+        if (_active && !_bluetoothRequested && widget.service != null)
+          OutlinedButton.icon(
+              onPressed:
+                  _busy || _stopping ? null : () => _switchTransport(true),
+              icon: const Icon(Icons.bluetooth),
+              label: const Text('改用蓝牙中转（备用）')),
+        if (_active && _bluetoothRequested && !_externalGateway)
+          OutlinedButton.icon(
+              onPressed:
+                  _busy || _stopping ? null : () => _switchTransport(false),
+              icon: const Icon(Icons.usb),
+              label: const Text('改用 USB 授权与 Wi-Fi 直连')),
         if (_externalGateway && _active)
           OutlinedButton.icon(
               onPressed: _busy || _stopping || !widget.isCurrent()
@@ -661,7 +746,9 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
               onPressed: _busy || _stopping ? null : _pairingCode,
               icon: const Icon(Icons.devices),
               label: const Text('连接控制手机')),
-        if (!_externalGateway)
+        if (!_externalGateway &&
+            _control != null &&
+            _control?.usesUsbDirect != true)
           OutlinedButton.icon(
               onPressed: _busy || _stopping
                   ? null

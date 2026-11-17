@@ -68,7 +68,7 @@ class TargetSession {
       client != null && identical(_client, client);
   static bool get hasGateway => _client?.authorized == true;
   static void retain(
-      UsbAttachment usb, ControlClient client, BleOtaService service) {
+      UsbAttachment usb, ControlClient client, BleOtaService? service) {
     _recovery.reset();
     _usb = usb;
     _client = client;

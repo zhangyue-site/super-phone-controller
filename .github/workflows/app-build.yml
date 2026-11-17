@@ -49,6 +49,7 @@ jobs:
           python -m unittest discover -s tests -p test_persistent_pairing.py
           python -m unittest discover -s tests -p test_cloud_progress.py
           python -m unittest discover -s tests -p test_app_control.py
+          python -m unittest discover -s tests -p test_usb_control_auth.py
           python -m unittest discover -s tests -p test_remote_control.py
       - name: Generic Agent offline regressions (no device IO)
         run: python3 tools/run_agent_offline_tests.py
