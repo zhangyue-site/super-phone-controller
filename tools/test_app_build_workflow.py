@@ -35,8 +35,8 @@ class AppBuildWorkflow(unittest.TestCase):
         self.assertIn('name: Preserve simulator diagnostics', self.ios)
         self.assertIn('if: failure()', self.ios)
 
-    def test_android_release_preserves_existing_store_package_and_usb_tests(self):
-        self.assertIn('CONTROLLER_APPLICATION_ID: org.example.phonecontroller', self.android)
+    def test_android_release_preserves_existing_site_package_and_usb_tests(self):
+        self.assertIn('CONTROLLER_APPLICATION_ID: site.zhangyue.pcflash', self.android)
         self.assertIn('test_usb_control_auth.py', self.workflow)
 
     def test_native_sdk_requirement_and_encryption_remain_explicit(self):
