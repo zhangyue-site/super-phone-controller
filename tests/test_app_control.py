@@ -12,11 +12,13 @@ class AppControlTests(http_tests.RemoteHttpTests):
  test_remote_stop_blocks_voice_asr_already_in_flight=None
  def setUp(self):
   super().setUp();self.control_auth=Authority(firmware_scope=False)
+  from display_service.paired_control import Pairings
+  self.pair_patch=patch.object(app_control,'PAIRINGS',Pairings(lambda t:app_control.owner(t)[3]));self.pair_patch.start()
   self.ap=patch.object(app_control,'AUTHORITY',self.control_auth);self.ap.start()
   self.frames=patch.object(app_screen,'SEQUENCES',{});self.frames.start()
   self.remote.binding_allowed=remote_http.binding_allowed
  def tearDown(self):
-  self.frames.stop();self.ap.stop();super().tearDown()
+  self.pair_patch.stop();self.frames.stop();self.ap.stop();super().tearDown()
  def grant(self):
   code,c=self.request('/app-control/challenge',{'device':'epaper-01'});self.assertEqual(code,200)
   proof=hmac.new(b'synthetic-device-only',b'PCFLASH1\nepaper-01\n'+bytes.fromhex(c['challenge']),hashlib.sha256).hexdigest()
@@ -191,3 +193,33 @@ class AppControlTests(http_tests.RemoteHttpTests):
   code,restored=self.request('/app-control/pair-restore',{'bindingToken':grant['bindingToken']})
   self.assertEqual(code,200);self.assertEqual(restored['bindingToken'],grant['bindingToken'])
   self.assertEqual(self.command(restored['ticket'],'status')[0],200)
+
+ def test_diagnostics_auth_strict_shape_and_no_task_mutation(self):
+  from unittest.mock import patch
+  import copy
+  ticket=self.grant()
+  _,plan=self.command(ticket,'prepare',text='打开设置')
+  self.command(ticket,'confirm',task_id=plan['task_id'])
+  # A read must not expire an old queue or persist a new state.
+  self.remote.records[plan['task_id']]['expires']=0
+  before=copy.deepcopy(self.remote.records)
+  saved=self.remote.path.read_bytes()
+  with patch.object(self.remote,'_sync',side_effect=AssertionError('query mutated task')):
+   code,out=self.command(ticket,'diagnostics')
+  self.assertEqual(code,200);self.assertTrue(out['advisory'])
+  self.assertEqual(self.remote.records,before);self.assertEqual(self.remote.path.read_bytes(),saved)
+  self.assertFalse(self.mailbox.jobs);self.assertFalse(self.calls)
+  for values in ({'text':'打开设置'},{'task_id':plan['task_id']},{'device':'other'}):
+   self.assertEqual(self.command(ticket,'diagnostics',**values)[0],409)
+  self.assertEqual(self.command('invalid','diagnostics')[0],403)
+  self.control_auth.tickets[ticket]=(0,'epaper-01','f'*64)
+  self.assertEqual(self.command(ticket,'diagnostics')[0],403)
+
+ def test_paired_diagnostics_uses_bound_device_and_revoke_denies(self):
+  parent=self.grant();controller=self.paired(parent)
+  with patch.object(self.remote,'diagnostics',wraps=self.remote.diagnostics) as inspect:
+   self.assertEqual(self.command(controller,'diagnostics')[0],200)
+   self.assertEqual(inspect.call_args.args[0][3],'epaper-01')
+  self.assertEqual(self.command(controller,'diagnostics',device='other')[0],409)
+  self.assertEqual(self.request('/app-control/pair-revoke',{},extra={'Authorization':'Bearer '+parent})[0],200)
+  self.assertEqual(self.command(controller,'diagnostics')[0],403)

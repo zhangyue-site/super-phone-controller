@@ -8,7 +8,8 @@ CHANNELS=frozenset(('openclaw-weixin','telegram','android-app'))
 class RemoteControl:
  def __init__(self,conversation,path=None,clock=time.monotonic,screen_ready=None):
   self.c=conversation;self.path=Path(path or os.environ.get('EPAPER_REMOTE_STATE','/var/lib/phone-controller/remote-control.json'));self.clock=clock
-  self.screen_ready=screen_ready or (lambda _:False);self.lock=threading.RLock();self.records={};self.jobs={};self.board_turns={};self.boots={};self.pending_boots={}
+  self.screen_source_allowed=lambda device,ticket:False
+  self.screen_ready=screen_ready or (lambda _:False);self.lock=threading.RLock();self.records={};self.jobs={};self.board_turns={};self.boots={};self.pending_boots={};self.claim_observations={}
   self.runtime_lock=threading.RLock();self.voice_busy=lambda _:False;self.cancel_voice=lambda _:None;self.turn_allowed=lambda *a:True;self.binding_allowed=lambda _:True
   try:
    if self.path.stat().st_size>1000000:raise ValueError('state size')
@@ -100,27 +101,29 @@ class RemoteControl:
    self._sync()
    boot=self.boots.get(device)
    if boot is None or boot['session']!=session:
-    if boot and session in boot['retired']:return {'op':'wait'}
+    if boot and session in boot['retired']:return {'op':'wait','reason':'retired_session'}
     key=(device,session);pending=self.pending_boots.get(key)
     if not pending or self.clock()-pending[1]>30 or lease!=pending[0]:
      if not pending or self.clock()-pending[1]>30:
       pending=(uuid.uuid4().hex+uuid.uuid4().hex,self.clock());self.pending_boots[key]=pending
-     return {'op':'wait','lease':pending[0]}
+     return {'op':'wait','lease':pending[0],'reason':'lease_required'}
     retired=(boot['retired']+[boot['session']])[-16:] if boot else []
     boot={'session':session,'lease':lease,'high':0,'retired':retired};self.boots[device]=boot
     self.pending_boots={k:v for k,v in self.pending_boots.items() if k[0]!=device}
-   if lease!=boot['lease']:return {'op':'wait','lease':boot['lease']}
-   if sequence<=boot['high'] or not self.turn_allowed(device,session,sequence):print('CLAIM wait: fence',sequence,boot['high'],flush=True);return {'op':'wait'}
+   if lease!=boot['lease']:return {'op':'wait','lease':boot['lease'],'reason':'lease_required'}
+   if sequence<=boot['high'] or not self.turn_allowed(device,session,sequence):return {'op':'wait','reason':'sequence_rejected'}
    boot['high']=sequence;self.board_turns[device]=(session,sequence)
-   if self.voice_busy(device):print('CLAIM wait: voice_busy',flush=True);return {'op':'wait'}
+   self.claim_observations[device]=(self.clock(),ready,pointer_protocol)
+   if self.voice_busy(device):return {'op':'wait','reason':'voice_busy'}
    # 2026-11-11 autoclaim: bound private-chat tasks self-establish the screen session (user approved); drop has_screen precondition
-   if ready is not True or pointer_protocol!='absolute-v1':print('CLAIM wait: ready/pointer',ready,pointer_protocol,flush=True);return {'op':'wait'}
+   if ready is not True:return {'op':'wait','reason':'device_not_ready'}
+   if pointer_protocol!='absolute-v1':return {'op':'wait','reason':'pointer_protocol_mismatch'}
    existing=self.c.mailbox.jobs.get(device)
-   if existing and not existing.done and not existing.cancelled:print('CLAIM wait: mailbox_busy',flush=True);return {'op':'wait'}
+   if existing and not existing.done and not existing.cancelled:return {'op':'wait','reason':'device_busy'}
    for ident,r in self.records.items():
     if r['owner'][3]!=device or r['state']!='queued':continue
     # Android pairing never substitutes for current explicit screen consent.
-    if r['owner'][0]=='android-app' and not has_screen:return {'op':'wait'}
+    if r['owner'][0]=='android-app' and not has_screen:return {'op':'wait','reason':'screen_not_authorized'}
     # Persist consumption before execution; a lost reply never causes replay.
     r.update(state='running',session=session,sequence=sequence,claimed=self.clock(),screen_seen=bool(has_screen),screen_wait_until=self.clock()+15,reply='控制板已领取，正在观察手机画面。' if has_screen else '控制板已领取，等待手机建立本次共享；等待期间不执行输入。');self._save()
     try:
@@ -131,7 +134,7 @@ class RemoteControl:
     except Exception:
      r.update(state='error',reply='控制板领取失败，任务未重试。');self._save();raise
     print('CLAIM START',ident,flush=True);return {'op':'start','task_id':ident}
-   return {'op':'wait'}
+   return {'op':'wait','reason':'no_queued_task'}
  def board_status(self,device,session,sequence):
   # Capture authority is sampled before mailbox/remote locks, matching claim.
   has_screen=self.screen_ready(device)
@@ -159,10 +162,44 @@ class RemoteControl:
    ident,r=self._get(owner,ident);out=self._reply(ident,r)
    if r['state']=='queued':
     from . import events
-    code=events.latest_exec(r['owner'][3])
-    labels={0:'板端心跳：可以执行。',1:'板端心跳：未插入USB。',2:'板端心跳：未连上服务器。',3:'板端心跳：键鼠未开启。',4:'板端心跳：上一次任务失败。'}
-    out['reply']=out['reply']+' '+(labels[code] if code in labels else '还没有板端心跳。')
+    heartbeat=events.exec_snapshot(r['owner'][3]);code=heartbeat['code']
+    labels={0:'板端心跳：可以执行。',1:'板端心跳：未插入USB。',2:'板端心跳：未连上服务器。',3:'板端心跳：键鼠未开启。',4:'板端心跳：上一次任务失败。',5:'板端心跳：已停止，需重新授权。'}
+    out['reply']=out['reply']+' '+(labels[code] if code in labels else '板端心跳已过期，当前状态未知。' if heartbeat['state']=='stale' else '还没有板端心跳。')
    return out
+ def diagnostics(self,owner):
+  """Advisory snapshot only: never expires, cancels, persists or starts tasks."""
+  from . import events
+  owner=self._owner(owner)
+  if not self.binding_allowed(owner):raise PermissionError('binding')
+  device=owner[3]
+  # Authority callbacks and event I/O precede remote/mailbox locks.
+  screen=bool(self.screen_ready(device));heartbeat=events.exec_snapshot(device);voice_busy=bool(self.voice_busy(device))
+  with self.lock,self.c.mailbox.lock:
+   now=self.clock();sample=self.claim_observations.get(device)
+   recent=bool(sample and 0<=now-sample[0]<=45)
+   pointer=(sample[2]=='absolute-v1') if recent else None
+   reported_ready=sample[1] if recent else None
+   job=self.c.mailbox.jobs.get(device)
+   busy=bool(job and not job.done and not job.cancelled)
+   queued=any(r['owner'][3]==device and r['state']=='queued' and now<r.get('expires',0) for r in self.records.values())
+   stamp=getattr(job,'video_received',0) if job else 0
+   frame_now=self.c.mailbox.clock()
+   age=frame_now-stamp if screen and job and bool(job.video) and not job.cancelled and getattr(job,'video_source','')=='user-consented-app-screen' and getattr(job,'video_sequence',0)>0 and stamp>0 and frame_now>=stamp else None
+   source=getattr(job,'screen_session','') if job else ''
+  if age is not None and not self.screen_source_allowed(device,source):age=None
+  reasons=[]
+  if voice_busy:reasons.append('voice_busy')
+  if not screen:reasons.append('screen_not_authorized')
+  if heartbeat['state']!='fresh':reasons.append('heartbeat_unknown' if heartbeat['state']=='unknown' else 'heartbeat_stale')
+  elif heartbeat['code']!=0:reasons.append('device_not_ready')
+  if reported_ready is not True:reasons.append('claim_readiness_unknown' if reported_ready is None else 'device_not_ready')
+  if pointer is not True:reasons.append('pointer_protocol_unknown' if pointer is None else 'pointer_protocol_mismatch')
+  if busy:reasons.append('device_busy')
+  return dict(controlAuthorized=True,screenAuthorized=screen,heartbeat=heartbeat,
+   reportedReady=reported_ready,pointerCompatible=pointer,taskBusy=busy,voiceBusy=voice_busy,taskQueued=queued,
+   frameAgeSeconds=age,frameFresh=(age<=10 if age is not None else None),
+   inputReady=False if reasons else None,reasons=list(dict.fromkeys(reasons)),
+   advisory=True)
  def public_device_status(self,device):
   from .cloud_progress import summary
   with self.lock:

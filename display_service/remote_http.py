@@ -19,6 +19,12 @@ def binding_allowed(owner):
  except (OSError,ValueError,TypeError):return False
 REMOTE=RemoteControl(CONVERSATION,screen_ready=screen_ready)
 REMOTE.binding_allowed=binding_allowed
+def screen_source_allowed(device,ticket):
+ from . import app_screen
+ with app_screen.AUTHORITY.lock:
+  item=app_screen.AUTHORITY.tickets.get(ticket)
+  return bool(item and item[1]==device and item[0]>app_screen.AUTHORITY.clock())
+REMOTE.screen_source_allowed=screen_source_allowed
 def body(handler,limit):
  size=int(handler.headers.get('Content-Length','0'))
  if not 0<=size<=limit:raise ValueError('size')

@@ -64,7 +64,28 @@ def tail(device):
         return _read(control.ROOT / 'events' / (device + '.jsonl'))[-100:]
 
 
+def exec_snapshot(device, max_age=45):
+    """Server-receipt freshness, not proof of present USB/HID permission."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', device):
+        raise ValueError('invalid device')
+    with LOCK:
+        rows = _read(control.ROOT / 'events' / (device + '.jsonl'))[-512:]
+    unknown = {"state": "unknown", "code": None, "ageSeconds": None}
+    if not rows:
+        return unknown
+    boot = rows[-1].get("boot")
+    rows = [r for r in rows if r.get("boot") == boot and r.get("event") == "exec"]
+    if not rows:
+        return unknown
+    row = max(rows, key=lambda r: r.get("seq", -1))
+    stamp, code = row.get("receivedAt"), row.get("a")
+    if type(stamp) not in (int, float) or type(code) is not int or code not in range(6):
+        return unknown
+    age = time.time() - stamp
+    if not 0 <= age <= max_age:
+        return {"state": "stale", "code": None, "ageSeconds": age if age >= 0 else None}
+    return {"state": "fresh", "code": code, "ageSeconds": age}
+
+
 def latest_exec(device):
-    rows=[row for row in tail(device) if row.get("event")=="exec"]
-    if not rows or type(rows[-1].get("a")) is not int:return None
-    return rows[-1]["a"]
+    return exec_snapshot(device)["code"]

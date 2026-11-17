@@ -112,7 +112,10 @@ def handle(handler,config):
    identity=controller_owner(header[7:])
    if set(obj)-{'operation','text','task_id'}:raise ValueError('fields')
    operation=obj.get('operation');remote=remote_http.REMOTE
-   if operation=='prepare':
+   if operation=='diagnostics':
+    if set(obj)!={'operation'}:raise ValueError('fields')
+    result=remote.diagnostics(identity)
+   elif operation=='prepare':
     result=remote.prepare(identity,obj.get('text'))
    elif operation=='confirm':
     ident=obj.get('task_id')
