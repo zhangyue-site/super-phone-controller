@@ -35,6 +35,10 @@ class AppBuildWorkflow(unittest.TestCase):
         self.assertIn('name: Preserve simulator diagnostics', self.ios)
         self.assertIn('if: failure()', self.ios)
 
+    def test_android_release_preserves_existing_store_package_and_usb_tests(self):
+        self.assertIn('CONTROLLER_APPLICATION_ID: org.example.phonecontroller', self.android)
+        self.assertIn('test_usb_control_auth.py', self.workflow)
+
     def test_native_sdk_requirement_and_encryption_remain_explicit(self):
         self.assertIn('xcrun --sdk iphoneos --show-sdk-version', self.ios)
         self.assertIn('../tools/select_ios_simulator.py', self.ios)

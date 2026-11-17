@@ -1,20 +1,88 @@
-"""Android command capability: BLE proof, explicit confirmation, no long-lived key."""
-import hashlib,json,os,re,threading
+"""Android command capability: USB/BLE proof and explicit task confirmation."""
+import hashlib,hmac,json,os,re,secrets,threading
 from .app_ota import Authority
 from . import remote_http
 from .paired_control import Pairings
 AUTHORITY=Authority(firmware_scope=False)
 SESSION_LOCK=threading.RLock()
+# Independent challenge namespace: screen and BLE proofs cannot grant control.
+USB_AUTHORITY=Authority(firmware_scope=False)
+USB_SERIALS={}
+def _usb_serial(serial):
+ if not isinstance(serial,str) or not re.fullmatch(r'[0-9A-Fa-f]{12}',serial):raise ValueError('serial')
+ return serial.upper()
+def _usb_prune():
+ # SESSION_LOCK precedes authority locks; release them before Pairings callbacks.
+ with AUTHORITY.lock:
+  AUTHORITY._prune(AUTHORITY.clock())
+  for ticket in list(USB_SERIALS):
+   if ticket not in AUTHORITY.tickets:USB_SERIALS.pop(ticket,None)
+def usb_challenge(obj,config):
+ serial=_usb_serial(obj['serial']);keys=json.loads(config.read_text())
+ with SESSION_LOCK:
+  _usb_prune()
+  result=USB_AUTHORITY.challenge(obj['device'],keys)
+  with USB_AUTHORITY.lock:
+   nonce=result['challenge'];item=USB_AUTHORITY.challenges[nonce]
+   USB_AUTHORITY.challenges[nonce]=(*item,serial)
+  return dict(result,serial=serial,protocol='pcusb-v1')
+def _usb_prove(obj,keys):
+ serial=_usb_serial(obj['serial']);device=obj['device'];nonce=obj['challenge'];proof=obj['proof']
+ if not isinstance(device,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',device):raise ValueError('device')
+ if not isinstance(nonce,str) or not re.fullmatch(r'[0-9a-f]{64}',nonce) or not isinstance(proof,str) or not re.fullmatch(r'[0-9a-f]{64}',proof):raise ValueError('proof')
+ with USB_AUTHORITY.lock:
+  USB_AUTHORITY._prune(USB_AUTHORITY.clock());item=USB_AUTHORITY.challenges.pop(nonce,None)
+  if item is None or item[1:]!=(device,serial) or device not in keys:raise ValueError('challenge')
+ message=b'pcusb-v1\n'+device.encode()+b'\n'+serial.encode()+b'\n'+bytes.fromhex(nonce)
+ if not hmac.compare_digest(hmac.new(keys[device].encode(),message,hashlib.sha256).hexdigest(),proof):raise ValueError('proof')
+ return device,serial
+def _usb_parent(ticket):
+ identity=owner(ticket)
+ with AUTHORITY.lock:
+  item=AUTHORITY.tickets.get(ticket)
+  if item is None or item[2]!='phone-commands' or ticket not in USB_SERIALS:raise PermissionError('scope')
+ return identity
+def usb_authorize(obj,config,ticket=None):
+ with SESSION_LOCK:
+  _usb_prune()
+  if ticket is not None:
+   identity=_usb_parent(ticket)
+   if obj['device']!=identity[3] or _usb_serial(obj['serial'])!=USB_SERIALS[ticket]:raise PermissionError('binding')
+  device,serial=_usb_prove(obj,json.loads(config.read_text()))
+  with AUTHORITY.lock:
+   now=AUTHORITY.clock();AUTHORITY._prune(now)
+   if ticket is not None:
+    old=AUTHORITY.tickets.get(ticket)
+    if old is None or old[1:]!=(device,'phone-commands'):raise PermissionError('expired')
+   else:
+    if len(AUTHORITY.tickets)>=256:raise ValueError('rate')
+    ticket=secrets.token_urlsafe(32)
+    for previous,item in list(AUTHORITY.tickets.items()):
+     if item[1]==device:AUTHORITY.tickets.pop(previous,None);USB_SERIALS.pop(previous,None)
+   AUTHORITY.tickets[ticket]=(now+300,device,'phone-commands');USB_SERIALS[ticket]=serial
+  PAIRINGS.attach(ticket)
+  return dict(ticket=ticket,expiresIn=300,scope='phone-commands',device=device,serial=serial,protocol='pcusb-v1')
+def usb_revoke(ticket):
+ with SESSION_LOCK:
+  _usb_prune();identity=_usb_parent(ticket)
+  device=PAIRINGS.revoke(ticket)
+  with AUTHORITY.lock:
+   AUTHORITY.tickets.pop(ticket,None);USB_SERIALS.pop(ticket,None)
+  remote_http.REMOTE.stop_device(device)
+  return dict(device=identity[3],serverCancelled=True,stopConfirmed=False,verified=False,state='stopping')
 def authorize_target(obj,config):
  with SESSION_LOCK:
   grant=AUTHORITY.authorize(obj['device'],obj['challenge'],obj['proof'],json.loads(config.read_text()))
   with AUTHORITY.lock:
    for ticket,item in list(AUTHORITY.tickets.items()):
-    if item[1]==obj['device'] and ticket!=grant['ticket']:AUTHORITY.tickets.pop(ticket,None)
+    if item[1]==obj['device'] and ticket!=grant['ticket']:AUTHORITY.tickets.pop(ticket,None);USB_SERIALS.pop(ticket,None)
   PAIRINGS.attach(grant['ticket'])
   return grant
 def renew_target(ticket,obj,config):
  with SESSION_LOCK:
+  # A BLE proof cannot extend a USB serial-bound parent; fallback requires
+  # a fresh BLE authorization with the usual supersession semantics.
+  if ticket in USB_SERIALS:raise PermissionError('scope')
   identity=owner(ticket)
   if obj['device']!=identity[3]:raise ValueError('fields')
   grant=AUTHORITY.authorize(obj['device'],obj['challenge'],obj['proof'],json.loads(config.read_text()))
@@ -67,12 +135,21 @@ def binding_allowed(identity):
  return found or PAIRINGS.allowed(identity)
 def handle(handler,config):
  path=handler.path
- if path not in ('/app-control/challenge','/app-control/authorize','/app-control/command','/app-control/renew','/app-control/pair-issue','/app-control/pair-redeem','/app-control/pair-restore','/app-control/pair-renew','/app-control/pair-revoke','/app-control/pair-rotate','/app-control/screen-renew'):return False
+ if path not in ('/app-control/usb-challenge','/app-control/usb-authorize','/app-control/usb-renew','/app-control/usb-revoke','/app-control/challenge','/app-control/authorize','/app-control/command','/app-control/renew','/app-control/pair-issue','/app-control/pair-redeem','/app-control/pair-restore','/app-control/pair-renew','/app-control/pair-revoke','/app-control/pair-rotate','/app-control/screen-renew'):return False
  try:
   if handler.command!='POST':handler.reply(405,b'{}');return True
   if os.environ.get('EPAPER_REMOTE_CONTROL')!='1':handler.reply(503,b'{}');return True
   obj=remote_http.body(handler,2048)
-  if path.endswith('/challenge'):
+  if path.endswith('/usb-challenge'):
+   if set(obj)!={'device','serial'}:raise ValueError('fields')
+   result=usb_challenge(obj,config)
+  elif path.endswith('/usb-authorize') or path.endswith('/usb-renew'):
+   if set(obj)!={'device','serial','challenge','proof'}:raise ValueError('fields')
+   result=usb_authorize(obj,config,bearer(handler) if path.endswith('/usb-renew') else None)
+  elif path.endswith('/usb-revoke'):
+   if obj:raise ValueError('fields')
+   result=usb_revoke(bearer(handler))
+  elif path.endswith('/challenge'):
    if set(obj)!={'device'}:raise ValueError('fields')
    result=AUTHORITY.challenge(obj['device'],json.loads(config.read_text()))
   elif path.endswith('/authorize'):
@@ -129,7 +206,7 @@ def handle(handler,config):
   handler.reply(200,json.dumps(result,ensure_ascii=False).encode())
  except PermissionError:handler.reply(403,json.dumps({'reply':'控制授权已失效，请重新连接授权。'},ensure_ascii=False).encode())
  except (ValueError,TypeError,KeyError) as error:
-  message='授权未完成，请检查蓝牙连接后重试。' if not path.endswith('/command') else str(error)
+  message=('USB 身份授权未完成，请检查 USB 连接和设备身份后重试。' if path.startswith('/app-control/usb-') else '授权未完成，请检查蓝牙连接后重试。') if not path.endswith('/command') else str(error)
   handler.reply(409,json.dumps({'reply':message},ensure_ascii=False).encode())
  except OSError:handler.reply(503,b'{}')
  return True

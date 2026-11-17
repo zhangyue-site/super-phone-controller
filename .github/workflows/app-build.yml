@@ -49,6 +49,7 @@ jobs:
           python -m unittest discover -s tests -p test_persistent_pairing.py
           python -m unittest discover -s tests -p test_cloud_progress.py
           python -m unittest discover -s tests -p test_app_control.py
+          python -m unittest discover -s tests -p test_usb_control_auth.py
           python -m unittest discover -s tests -p test_remote_control.py
       - name: Generic Agent offline regressions (no device IO)
         run: python3 tools/run_agent_offline_tests.py
@@ -136,7 +137,7 @@ jobs:
         env:
           CONTROLLER_BASE_URL: ${{ secrets.CONTROLLER_BASE_URL }}
           CONTROLLER_DOWNLOAD_URL: ${{ secrets.CONTROLLER_DOWNLOAD_URL }}
-          CONTROLLER_APPLICATION_ID: site.zhangyue.pcflash
+          CONTROLLER_APPLICATION_ID: org.example.phonecontroller
           PRIVATE_ARTIFACT_PASSWORD: ${{ secrets.PRIVATE_ARTIFACT_PASSWORD }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}

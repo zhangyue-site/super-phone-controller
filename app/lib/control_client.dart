@@ -1,4 +1,6 @@
 import 'diagnostics.dart';
+import 'usb_launch.dart';
+import 'usb_control_proof.dart';
 import 'button_detector.dart';
 import 'controller_config.dart';
 import 'controller_pairing_store.dart';
@@ -13,7 +15,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble_ota_service.dart';
 
-/// Ephemeral BLE possession capability, kept only in memory.
+/// Ephemeral USB/BLE possession capability, kept only in memory.
 class ControlClient implements LocalVisionSource {
   Future<Uint8List> _localVisionBytes(
       String operation, Map<String, dynamic> body, int limit) async {
@@ -89,6 +91,12 @@ class ControlClient implements LocalVisionSource {
   bool _closed = false;
   Object? _relayError;
   BleOtaService? _board;
+  UsbControlProof? _usbDirect;
+  bool _usbRevokeFailed = false;
+  String? _usbRevocationTicket;
+  Future<void>? _usbAuthorizing, _usbRefreshing;
+  bool get usesUsbDirect => _usbDirect != null;
+  bool get usbRevokeFailed => _usbRevokeFailed;
   String? _ticket, _bindingToken;
   DateTime? _expires;
   BleOtaService? _relayBoard;
@@ -113,7 +121,8 @@ class ControlClient implements LocalVisionSource {
   bool get isPaired => _paired;
   bool get supportsSkillReplay => _board != null;
   bool get canWifiUpgrade => ownsGateway && _relay?.supportsMaintenance == true;
-  bool get usesBoardLink => _board != null || _relayBoard != null;
+  bool get usesBoardLink =>
+      _board != null || _relayBoard != null || usesUsbDirect;
   bool get ownsGateway => _relay != null && authorized;
   String get upgradeStatus {
     final stage = _relay?.diagnostics['otaStage'];
@@ -140,9 +149,11 @@ class ControlClient implements LocalVisionSource {
               ? '蓝牙网关已停止：$_relayError'
               : _relay != null
                   ? (_relay!.isClosed ? '蓝牙网关已释放' : '此手机持有蓝牙网关；云端动作需回执确认')
-                  : _paired
-                      ? '已绑定目标；云端在线状态以任务回执为准'
-                      : '等待控制板授权';
+                  : usesUsbDirect
+                      ? 'USB 授权已建立；等待板端 Wi-Fi 与任务回执'
+                      : _paired
+                          ? '已绑定目标；云端在线状态以任务回执为准'
+                          : '等待控制板授权';
 
   /// Non-null while a bounded self-heal is running or after it gave up, so
   /// the target screens can show the real reason instead of "re-pair".
@@ -251,7 +262,7 @@ class ControlClient implements LocalVisionSource {
   }
 
   Future<Map<String, dynamic>> pairingCode() async {
-    if (!authorized || _paired || _relay == null) {
+    if (!authorized || _paired || (_relay == null && !usesUsbDirect)) {
       throw StateError('请先建立被控手机中继');
     }
     return _post('pair-issue', {'format': 'pin4'}, auth: true);
@@ -260,7 +271,7 @@ class ControlClient implements LocalVisionSource {
   /// Rotating a fixed binding code invalidates existing controller grants.
   /// It never requests a phone action or starts/replays a task.
   Future<Map<String, dynamic>> rotatePairingCode() async {
-    if (!authorized || _paired || _relay == null) {
+    if (!authorized || _paired || (_relay == null && !usesUsbDirect)) {
       throw StateError('请先建立被控手机中继');
     }
     return _post('pair-rotate', {}, auth: true);
@@ -271,7 +282,17 @@ class ControlClient implements LocalVisionSource {
     await _post('pair-revoke', {}, auth: true);
   }
 
-  Future<void> refresh() => _refresh();
+  Future<void> refresh() => usesUsbDirect ? _refreshUsbTracked() : _refresh();
+
+  Future<void> _refreshUsbTracked({bool force = false}) {
+    final existing = _usbRefreshing;
+    if (existing != null) return existing;
+    final pending = _refresh(force: force);
+    _usbRefreshing = pending;
+    return pending.whenComplete(() {
+      if (identical(_usbRefreshing, pending)) _usbRefreshing = null;
+    });
+  }
 
   Future<void> _refresh({bool force = false}) async {
     if (_closed ||
@@ -290,6 +311,18 @@ class ControlClient implements LocalVisionSource {
       Map<String, dynamic> result;
       if (_paired) {
         result = await _post('pair-renew', {}, auth: true);
+      } else if (_usbDirect != null) {
+        final usb = _usbDirect!;
+        final body = await usb.request((b) => _post('usb-challenge', b),
+            expectedDevice: deviceId);
+        result = await _post('usb-renew', body, auth: true);
+        await usb.check();
+        if (result['ticket'] != _ticket ||
+            result['device'] != deviceId ||
+            result['serial'] != usb.usb.serial ||
+            result['protocol'] != 'pcusb-v1') {
+          throw const FormatException('USB续期身份无效');
+        }
       } else {
         final board = _relayBoard;
         if (board == null) return;
@@ -326,6 +359,12 @@ class ControlClient implements LocalVisionSource {
           reason: 'renew_ok',
           remainingMs: _expires?.difference(DateTime.now()).inMilliseconds);
     } catch (e) {
+      if (e is UsbSessionChanged) {
+        _ticket = null;
+        _expires = null;
+        final revoked = _usbRevocationTicket;
+        if (revoked != null) await _revokeUsbGrant(revoked);
+      }
       SafeDiagnostics.record('control_refresh',
           phase: 'renew',
           reason: 'renew_fail',
@@ -410,6 +449,79 @@ class ControlClient implements LocalVisionSource {
           relayDenial: denial);
     }
     return decoded;
+  }
+
+  Future<void> authorizeUsb(UsbAttachment usb, {bool Function()? isCurrent}) {
+    if (_usbAuthorizing != null) {
+      return Future<void>.error(StateError('USB控制授权正在处理中'));
+    }
+    final pending = _authorizeUsb(usb, isCurrent: isCurrent);
+    _usbAuthorizing = pending;
+    return pending.whenComplete(() {
+      if (identical(_usbAuthorizing, pending)) _usbAuthorizing = null;
+    });
+  }
+
+  Future<void> _authorizeUsb(UsbAttachment usb,
+      {bool Function()? isCurrent}) async {
+    if (_closed || _ticket != null) throw StateError('控制连接已结束或已经授权');
+    _http ??= http.Client();
+    final proof = UsbControlProof(usb,
+        isCurrent: () => !_closed && (isCurrent?.call() ?? true));
+    String? issued;
+    var retained = false;
+    try {
+      final body = await proof.request((b) => _post('usb-challenge', b));
+      final grant = await _post('usb-authorize', body);
+      final ticket = grant['ticket'];
+      if (ticket is String && RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(ticket)) {
+        issued = ticket;
+        _usbRevocationTicket = ticket;
+      }
+      await proof.check();
+      if (issued == null ||
+          grant['scope'] != 'phone-commands' ||
+          grant['device'] != body['device'] ||
+          grant['serial'] != usb.serial ||
+          grant['protocol'] != 'pcusb-v1' ||
+          grant['expiresIn'] != 300) {
+        throw const FormatException('USB控制授权范围或身份无效');
+      }
+      _ticket = issued;
+      _expires = DateTime.now().add(const Duration(seconds: 300));
+      _usbDirect = UsbControlProof(usb, isCurrent: () => !_closed);
+      deviceId = body['device'] as String;
+      _usbRevokeFailed = false;
+      retained = true;
+    } finally {
+      if (issued != null && !retained) await _revokeUsbGrant(issued);
+    }
+  }
+
+  Future<void> refreshUsbAuthorization() {
+    if (!usesUsbDirect || !authorized) throw StateError('USB控制授权已结束，请重新连接');
+    return _refreshUsbTracked(force: true);
+  }
+
+  Future<void> _revokeUsbGrant(String ticket) async {
+    try {
+      final response = await _http!
+          .post(Uri.parse('$base/usb-revoke'),
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $ticket'
+              },
+              body: '{}')
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode != 200 && response.statusCode != 403) {
+        throw StateError('云端撤销未确认');
+      }
+      _usbRevokeFailed = false;
+      if (_usbRevocationTicket == ticket) _usbRevocationTicket = null;
+    } catch (_) {
+      _usbRevokeFailed = true;
+      // Local credentials are still discarded; never replay after a failed revoke.
+    }
   }
 
   Future<void> authorize(BleOtaService service) async {
@@ -938,14 +1050,27 @@ class ControlClient implements LocalVisionSource {
     _healTimer = null;
     _stopHealWatch();
     final relay = _relay;
+    final usbPending = _usbAuthorizing, usbRefreshing = _usbRefreshing;
     _relay = null;
     return _closing = () async {
       try {
         if (relay != null) await relay.close(reason: 'owner_shutdown');
+        for (final pending in [usbPending, usbRefreshing]) {
+          if (pending != null) {
+            try {
+              await pending;
+            } catch (_) {/* Cleanup still follows. */}
+          }
+        }
+        final usbTicket = _usbRevocationTicket;
+        if (usbTicket != null && !_usbRevokeFailed) {
+          await _revokeUsbGrant(usbTicket);
+        }
       } finally {
         _ticket = null;
         _expires = null;
         _board = null;
+        _usbDirect = null;
         _http?.close();
       }
     }();

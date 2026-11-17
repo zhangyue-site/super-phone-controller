@@ -4,9 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pcflash/product_widgets.dart';
+import 'package:pcflash/control_client.dart';
+import 'package:pcflash/target_session.dart';
 import 'package:pcflash/screen_share.dart';
 import 'package:pcflash/usb_launch.dart';
 import 'package:pcflash/usb_target_screen.dart';
+
+// These cases isolate projection/window recovery from control HTTP.
+class PassiveUsbClient extends ControlClient {
+  @override
+  bool get usesUsbDirect => true;
+  @override
+  Future<void> authorizeUsb(UsbAttachment usb,
+      {bool Function()? isCurrent}) async {}
+}
 
 void main() {
   for (final scenario in ['same-phase', 'other-phase', 'invalid-ready']) {
@@ -46,7 +57,8 @@ void main() {
         }
         return null;
       });
-      addTearDown(() {
+      addTearDown(() async {
+        await TargetSession.release();
         messenger.setMockMethodCallHandler(UsbLaunch.channel, null);
         messenger.setMockMethodCallHandler(ScreenShare.channel, null);
       });
@@ -55,6 +67,7 @@ void main() {
         attachment: UsbAttachment(serial, '$serial:$scenario', null, null),
         isCurrent: () => true,
         captureClock: () => now,
+        createControlClient: PassiveUsbClient.new,
         renewCapture: (_) async {
           if (captureFails) throw StateError('capture-renew-failed');
         },
@@ -86,7 +99,7 @@ void main() {
       }
       expect(find.text('结果已核验'), findsNothing);
       expect(find.textContaining('最近回执允许操作'), findsNothing);
-      expect(find.textContaining('正在检查手机中转连接'), findsOneWidget);
+      expect(find.textContaining('正在检查 USB 授权与板端直连状态'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     });
   }
@@ -125,7 +138,8 @@ void main() {
       }
       return null;
     });
-    addTearDown(() {
+    addTearDown(() async {
+      await TargetSession.release();
       messenger.setMockMethodCallHandler(UsbLaunch.channel, null);
       messenger.setMockMethodCallHandler(ScreenShare.channel, null);
     });
@@ -133,6 +147,7 @@ void main() {
         home: UsbTargetScreen(
       attachment: const UsbAttachment(serial, 'stop-error-session', null, null),
       isCurrent: () => true,
+      createControlClient: PassiveUsbClient.new,
       renewCapture: (_) async {},
     )));
     await tester.pumpAndSettle();
