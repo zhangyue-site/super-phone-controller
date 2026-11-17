@@ -29,7 +29,8 @@ class GatewayRecoveryGate {
   static bool transportError(Object error) =>
       error is http.ClientException ||
       error is TimeoutException ||
-      error is ControlHttpFailure && error.relayLeaseExpired;
+      error is ControlHttpFailure &&
+          (error.relayLeaseExpired || error.status >= 500);
 
   Future<void> cancel() async {
     _blocked = true;
