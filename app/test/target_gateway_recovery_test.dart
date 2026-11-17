@@ -51,7 +51,7 @@ void main() {
       var active = true,
           serial = usb.serial,
           session = usb.session,
-          firstPoll = true,
+          failedPolls = 0,
           requests = 0;
       messenger.setMockMethodCallHandler(
           UsbLaunch.channel,
@@ -66,8 +66,8 @@ void main() {
       final board = BoundBoard();
       final client = ControlClient(client: MockClient((request) async {
         final op = request.url.path.split('/').last;
-        if (op == 'poll' && firstPoll) {
-          firstPoll = false;
+        if (op == 'poll' && failedPolls < 2) {
+          failedPolls++;
           throw http.ClientException('transient transport');
         }
         if (op == 'command') requests++;

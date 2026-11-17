@@ -63,15 +63,18 @@ void main() {
         'recovery $scenario stops old task and never replaces parent ticket or replays',
         () async {
       final board = RecoveryBoard(), calls = <String>[], auth = <String>[];
-      var firstPoll = true, authorizations = 0, attaches = 0, valid = true;
+      var failedPolls = 0, authorizations = 0, attaches = 0;
+      var valid = true;
       final client = ControlClient(client: MockClient((request) async {
         final op = request.url.path.split('/').last;
         calls.add(op);
         if (request.headers['Authorization'] != null) {
           auth.add(request.headers['Authorization']!);
         }
-        if (op == 'poll' && firstPoll) {
-          firstPoll = false;
+        // One transient poll is now recovered in place; exhaust both reads
+        // to exercise the old-task STOP and fresh-nonce reconnect path.
+        if (op == 'poll' && failedPolls < 2) {
+          failedPolls++;
           throw http.ClientException('test network loss');
         }
         if (op == 'detach') return http.Response('{}', 403);
@@ -96,6 +99,7 @@ void main() {
       }));
       await client.authorize(board);
       await until(() => client.canRecoverGateway);
+      expect(failedPolls, 2);
       expect(client.canReadStatus, true,
           reason: 'old lease detach403 is not parent-ticket expiry');
       calls.clear();
@@ -231,8 +235,7 @@ void main() {
 // 安全依据（服务端 hid_relay.py 实证）：stop 只把 queued/issued→uncertain，
 // poll 只投 queued，uncertain 永不重发——恢复不产生重执行；回执 HMAC 按旧
 // nonce 校验，新会话无法也不需要重放，uncertain 动作由任务侧保守放弃。
-test('unknown ACK network error can opt into automatic recovery',
-      () async {
+  test('unknown ACK network error can opt into automatic recovery', () async {
     var writes = 0, disconnects = 0;
     final stopped = Completer<void>();
     final events = <String>[];

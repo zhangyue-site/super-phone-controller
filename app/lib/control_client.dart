@@ -1,3 +1,4 @@
+import 'relay_http_deadline.dart';
 import 'diagnostics.dart';
 import 'button_detector.dart';
 import 'controller_config.dart';
@@ -354,17 +355,36 @@ class ControlClient implements LocalVisionSource {
 
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
       {bool auth = false}) async {
-    final response = await _http!
-        .post(
-            Uri.parse(path.startsWith('relay:')
-                ? "${base.replaceFirst('/app-control', '/app-relay')}/${path.substring(6)}"
-                : '$base/$path'),
-            headers: {
-              'Content-Type': 'application/json',
-              if (auth) 'Authorization': 'Bearer $_ticket',
-            },
-            body: jsonEncode(body))
-        .timeout(const Duration(seconds: 20));
+    final uri = Uri.parse(path.startsWith('relay:')
+        ? "${base.replaceFirst('/app-control', '/app-relay')}/${path.substring(6)}"
+        : '$base/$path');
+    final sentTicket = _ticket;
+    final sentExpiry = _expires;
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      if (auth) 'Authorization': 'Bearer $sentTicket',
+    };
+    final encoded = jsonEncode(body);
+    bool sameAuthorization() =>
+        sentTicket != null && _ticket == sentTicket && _expires == sentExpiry;
+    late final http.Response response;
+    try {
+      response = path.startsWith('relay:')
+          ? await relayHttpPost(_http!, uri, headers: headers, body: encoded)
+          : await _http!
+              .post(uri, headers: headers, body: encoded)
+              .timeout(const Duration(seconds: 20));
+    } on RelayHttpResponseIncomplete catch (error) {
+      if (error.status == 403 &&
+          path != 'relay:detach' &&
+          sameAuthorization()) {
+        _ticket = null;
+        _expires = null;
+      }
+      throw ControlHttpFailure(error.status, error.toString(),
+          relayDenial: path != 'relay:detach' &&
+              (error.status == 401 || error.status == 403));
+    }
     if (response.bodyBytes.length > 8192) {
       throw const FormatException('服务器响应过大');
     }
@@ -385,7 +405,9 @@ class ControlClient implements LocalVisionSource {
         throw ControlHttpFailure(409, '中转连接过期，停止旧任务后重新连接',
             relayLeaseExpired: true);
       }
-      if (response.statusCode == 403 && path != 'relay:detach') {
+      if (response.statusCode == 403 &&
+          path != 'relay:detach' &&
+          sameAuthorization()) {
         _ticket = null;
         _expires = null;
       }

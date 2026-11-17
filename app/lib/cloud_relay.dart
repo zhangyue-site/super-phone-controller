@@ -1,3 +1,4 @@
+import 'package:http/http.dart' as http;
 import 'gateway_recovery.dart';
 import 'diagnostics.dart';
 import "dart:async";
@@ -123,6 +124,30 @@ class CloudRelay {
         Timer.periodic(const Duration(seconds: 5), (_) => _watchdogTick());
   }
 
+  // A poll response can be lost after server-side consume. Retry only the
+  // transport read once, using the same nonce; never replay a signed packet.
+  // awaiting_receipt proves the server consumed an action: stop, do not resend.
+  Future<Map<String, dynamic>> _poll() async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (_closed) throw StateError('控制连接已结束');
+      try {
+        final result = await post('poll', {'nonce': _nonce});
+        if (result['state'] == 'awaiting_receipt') {
+          throw StateError('轮询响应不明，已发动作须核查；不重放输入');
+        }
+        return result;
+      } catch (error) {
+        if (attempt != 0 ||
+            _closed ||
+            !(error is http.ClientException || error is TimeoutException)) {
+          rethrow;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 75));
+      }
+    }
+    throw StateError('轮询已结束');
+  }
+
   Future<void> _tick() async {
     if (_busy || _closed) return;
     final now = _elapsed();
@@ -151,7 +176,7 @@ class CloudRelay {
       _activeSeq = null;
       var requestClock = Stopwatch()..start();
       var command = maintenance == null
-          ? await post("poll", {"nonce": _nonce})
+          ? await _poll()
           : await post('maintenance', {'nonce': _nonce, 'op': maintenance})
               .timeout(const Duration(seconds: 15));
       if (command["state"] == "busy") {
@@ -159,7 +184,7 @@ class CloudRelay {
         _trace.phase('poll', clearAction: true);
         _activeOp = null;
         requestClock = Stopwatch()..start();
-        command = await post("poll", {"nonce": _nonce});
+        command = await _poll();
       }
       if (_closed || command["state"] != "action") return;
       final packet = command["packet"],
