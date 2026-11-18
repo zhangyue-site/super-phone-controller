@@ -145,6 +145,11 @@ object RelayIme {
             var switched = false
             val selfId = app.packageName + "/" + RelayImeService.SERVICE_CLASS
             try {
+                // 首选无障碍 ACTION_SET_TEXT：免切换输入法、免焦点、毫秒级。
+                if (AccessibilityAssistService.setText(app, text)) {
+                    main.post { onDone(true, null) }
+                    return@Thread
+                }
                 val authorized = app.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
                     android.content.pm.PackageManager.PERMISSION_GRANTED
                 if (!authorized) { reason = "ime_not_authorized"; return@Thread }

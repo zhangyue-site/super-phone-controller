@@ -135,6 +135,8 @@ class MainActivity: FlutterActivity() {
      try {startActivity(AccessibilityAssistService.settingsIntent());result.success(null)}
      catch(_: Exception) {result.error("settings_unavailable","无法打开无障碍设置，请从系统设置进入",null)}
     }
+    "setText" -> result.success(AccessibilityAssistService.setText(this,call.argument<String>("text")?:""))
+    "clickLabel" -> result.success(AccessibilityAssistService.clickLabel(this,call.argument<String>("label")?:""))
     else -> result.notImplemented()
    }
   }

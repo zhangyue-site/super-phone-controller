@@ -25,6 +25,16 @@ class AccessibilityAssistService : AccessibilityService() {
   fun setEnabled(context: Context,value: Boolean): Boolean=context.getSharedPreferences("accessibility-assist",Context.MODE_PRIVATE).edit().putBoolean("enabled",value).commit()
   fun settingsIntent(): android.content.Intent = android.content.Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
   fun epoch(): Long=instance?.generation ?: -1L
+ fun setText(context: Context,text: String): Boolean {
+  val service=instance ?: return false
+  if(text.isEmpty())return false
+  return service.runCatching{setEditableText(text)}.getOrDefault(false)
+ }
+ fun clickLabel(context: Context,label: String): Boolean {
+  val service=instance ?: return false
+  if(label.isEmpty())return false
+  return service.runCatching{clickByLabel(label)}.getOrDefault(false)
+ }
   fun snapshot(frameNanos: Long,width: Int,height: Int,epoch: Long): JSONObject? {
    val service=instance ?: return null
    if(!ScreenShareService.active || !enabled(service))return null
@@ -40,6 +50,44 @@ class AccessibilityAssistService : AccessibilityService() {
  private val main=Handler(Looper.getMainLooper())
  @Volatile private var generation=0L
  private var changedNanos=System.nanoTime()
+ private fun setEditableText(text: String): Boolean {
+  val root=rootInActiveWindow ?: return false
+  var focused: AccessibilityNodeInfo?=null
+  var anyEditable: AccessibilityNodeInfo?=null
+  val stack=java.util.ArrayDeque<AccessibilityNodeInfo>();stack.add(root)
+  while(stack.isNotEmpty()){
+   val n=stack.removeLast()
+   if(n.isEditable){
+    if(n.isFocused){focused=n;break}
+    if(anyEditable==null)anyEditable=n
+   }
+   for(i in 0 until n.childCount)n.getChild(i)?.let{stack.add(it)}
+  }
+  val node=focused?:anyEditable?:return false
+  node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+  val args=android.os.Bundle().apply{putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,text)}
+  return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,args)
+ }
+
+ private fun clickByLabel(label: String): Boolean {
+  val root=rootInActiveWindow ?: return false
+  val stack=java.util.ArrayDeque<AccessibilityNodeInfo>();stack.add(root)
+  while(stack.isNotEmpty()){
+   val n=stack.removeLast()
+   val t=n.text?.toString()?:"";val d=n.contentDescription?.toString()?:""
+   if((t==label || d==label) && n.isVisibleToUser){
+    var cur: AccessibilityNodeInfo?=n
+    var hops=0
+    while(cur!=null && hops<4){
+     if(cur.isClickable)return cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+     cur=cur.parent;hops++
+    }
+   }
+   for(i in 0 until n.childCount)n.getChild(i)?.let{stack.add(it)}
+  }
+  return false
+ }
+
  override fun onServiceConnected(){instance=this;generation++;changedNanos=System.nanoTime()}
  override fun onAccessibilityEvent(event: AccessibilityEvent?){generation++;changedNanos=System.nanoTime()}
  override fun onInterrupt(){generation++;changedNanos=System.nanoTime()}
