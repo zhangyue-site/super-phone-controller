@@ -69,9 +69,9 @@ class RelayImeService : InputMethodService() {
         }
     }
 
-    override fun onServiceConnected() {
+    override fun onCreate() {
         instance = this
-        super.onServiceConnected()
+        super.onCreate()
     }
 
     override fun onDestroy() {
