@@ -126,6 +126,18 @@ class CloudRelay {
         Timer.periodic(const Duration(seconds: 5), (_) => _watchdogTick());
   }
 
+  void _restoreTaskIme() {
+    final orig = _taskImeOriginal;
+    _taskImeOriginal = null;
+    _imeRestoreTimer?.cancel();
+    if (orig != null && orig.isNotEmpty) ImeRelay.restore(orig);
+  }
+
+  void _armImeRestoreTimer() {
+    _imeRestoreTimer?.cancel();
+    _imeRestoreTimer = Timer(const Duration(seconds: 45), _restoreTaskIme);
+  }
+
   Future<void> _tick() async {
     if (_busy || _closed) return;
     final now = _elapsed();
