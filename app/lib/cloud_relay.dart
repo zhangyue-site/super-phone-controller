@@ -29,6 +29,8 @@ class CloudRelay {
   int? _activeOp, _activeSeq, _lastOp, _lastSeq;
   Timer? _timer;
   Timer? _watchdog;
+  Timer? _imeRestoreTimer;
+  String? _taskImeOriginal;
   String? _nonce;
   DateTime? _heartbeat;
   DateTime? _lastControl;
@@ -162,7 +164,13 @@ class CloudRelay {
         requestClock = Stopwatch()..start();
         command = await post("poll", {"nonce": _nonce});
       }
-      if (_closed || (command["state"] != "action" && command["state"] != "action_text")) return;
+      if (_closed) return;
+      if (command["state"] == "done") { _restoreTaskIme(); return; }
+      if (command["state"] != "action" && command["state"] != "action_text") return;
+      // 任务期把默认输入法切到无界面中转输入法（避免第三方键盘触发误分类/污染帧流），任务结束恢复。
+      _imeRestoreTimer?.cancel();
+      _taskImeOriginal ??= await ImeRelay.activate();
+      _armImeRestoreTimer();
 
       // paste_text (op 15): 整句经 App 本地输入法提交。不写 BLE、不动 packet；
       // dispatched 保持 false，任何失败都仍是可安全恢复的路径。

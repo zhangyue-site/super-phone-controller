@@ -136,6 +136,7 @@ object RelayIme {
     }
 
     fun paste(context: Context, text: String, enter: Boolean, timeoutMs: Long, onDone: (Boolean, String?) -> Unit) {
+        activateGuard()
         val app = context.applicationContext
         Thread {
             var ok = false
@@ -150,10 +151,11 @@ object RelayIme {
                 val enabled = Settings.Secure.getString(app.contentResolver, Settings.Secure.ENABLED_INPUT_METHODS) ?: ""
                 if (!enabled.split(':').contains(selfId)) { reason = "ime_not_authorized"; return@Thread }
                 original = RelayImeService.currentImeId(app)
-                if (!Settings.Secure.putString(app.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD, selfId)) {
+                if (original == selfId) original = null
+                if (original != null && !Settings.Secure.putString(app.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD, selfId)) {
                     reason = "ime_switch_failed"; return@Thread
                 }
-                switched = true
+                switched = original != null
                 // 等 IME 服务绑定（系统回调落在 App 主线程），最长 3s。
                 var waited = 0L
                 while (RelayImeService.instance == null && waited < 3000) {
@@ -185,5 +187,18 @@ object RelayIme {
             }
             main.post { onDone(ok, if (ok) null else (reason ?: "paste_failed")) }
         }.start()
+    }
+    private fun activateGuard() {}
+    fun activate(context: Context): String? {
+        val app = context.applicationContext
+        if (app.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return null
+        val selfId = "${app.packageName}/${RelayImeService.SERVICE_CLASS}"
+        val cur = RelayImeService.currentImeId(app) ?: return null
+        if (cur == selfId) return null
+        return if (Settings.Secure.putString(app.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD, selfId)) cur else null
+    }
+    fun restore(context: Context, id: String) {
+        if (id.isEmpty()) return
+        runCatching { Settings.Secure.putString(context.applicationContext.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD, id) }
     }
 }

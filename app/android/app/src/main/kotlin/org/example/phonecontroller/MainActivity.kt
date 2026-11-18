@@ -140,6 +140,8 @@ class MainActivity: FlutterActivity() {
   MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/ime").setMethodCallHandler { call,result ->
    when(call.method) {
     "status" -> result.success(RelayIme.status(applicationContext))
+    "activate" -> result.success(RelayIme.activate(applicationContext) ?: "")
+    "restore" -> { RelayIme.restore(applicationContext, call.argument<String>("id") ?: ""); result.success(true) }
     "pasteText" -> {
      val text=call.argument<String>("text") ?: ""
      if(text.isEmpty()){result.error("bad_args","text required",null);return@setMethodCallHandler}

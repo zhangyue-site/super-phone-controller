@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+ <string name="accessibility_assist_label">手机控制助手 · 辅助定位</string>
+ <string name="accessibility_assist_description">开启后，在您共享整个屏幕且正在执行任务时，读取账单应用和桌面的可见文字及控件位置，随画面发送给您已连接的控制服务，辅助定位。关闭助手内的辅助开关或停止共享即可停止读取。</string>
+</resources>

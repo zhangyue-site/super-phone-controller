@@ -4,6 +4,13 @@ import 'package:flutter/services.dart';
 class ImeRelay {
   static const _channel = MethodChannel('pcflash/ime');
 
+  static Future<String> activate() async {
+    try { return await _channel.invokeMethod<String>('activate') ?? ''; } catch (_) { return ''; }
+  }
+  static Future<void> restore(String id) async {
+    if (id.isEmpty) return;
+    try { await _channel.invokeMethod('restore', {'id': id}); } catch (_) {}
+  }
   static Future<Map<String, dynamic>> status() async =>
       await _channel.invokeMapMethod<String, dynamic>('status') ?? {};
 
