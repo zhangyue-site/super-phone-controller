@@ -137,6 +137,21 @@ class MainActivity: FlutterActivity() {
     else -> result.notImplemented()
    }
   }
+  MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/ime").setMethodCallHandler { call,result ->
+   when(call.method) {
+    "status" -> result.success(RelayIme.status(applicationContext))
+    "pasteText" -> {
+     val text=call.argument<String>("text") ?: ""
+     if(text.isEmpty()){result.error("bad_args","text required",null);return@setMethodCallHandler}
+     val enter=call.argument<Boolean>("enter") ?: false
+     val timeoutMs=(call.argument<Number>("timeoutMs") ?: 8000).toLong()
+     RelayIme.paste(applicationContext,text,enter,timeoutMs){ ok,reason ->
+      result.success(mapOf("ok" to ok,"reason" to (reason ?: "")))
+     }
+    }
+    else -> result.notImplemented()
+   }
+  }
   MethodChannel(engine.dartExecutor.binaryMessenger, "pcflash/app").setMethodCallHandler { call, result ->
    when(call.method) {
     "diagnosticEvent" -> { SafeDiagnostics.record(call.arguments as? Map<*,*> ?: emptyMap<Any,Any>());result.success(null) }

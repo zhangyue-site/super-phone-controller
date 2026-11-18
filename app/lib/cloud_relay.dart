@@ -2,6 +2,7 @@ import 'gateway_recovery.dart';
 import 'diagnostics.dart';
 import "dart:async";
 import 'relay_phase_trace.dart';
+import 'ime_relay.dart';
 
 /// A confirmed cloud STOP revokes only the old input session. No input retry.
 class TaskRelayStopped implements Exception {
@@ -161,7 +162,50 @@ class CloudRelay {
         requestClock = Stopwatch()..start();
         command = await post("poll", {"nonce": _nonce});
       }
-      if (_closed || command["state"] != "action") return;
+      if (_closed || (command["state"] != "action" && command["state"] != "action_text")) return;
+
+      // paste_text (op 15): 整句经 App 本地输入法提交。不写 BLE、不动 packet；
+      // dispatched 保持 false，任何失败都仍是可安全恢复的路径。
+      if (command["state"] == "action_text") {
+        final id = command["id"], text = command["text"], op = command["op"], seq = command["seq"];
+        if (id is! String ||
+            op != 15 ||
+            seq is! int ||
+            text is! String ||
+            text.isEmpty ||
+            text.length > 64) {
+          throw const FormatException("云端整句输入格式无效");
+        }
+        _phase = 'paste';
+        _trace.phase('paste');
+        _activeOp = op;
+        _activeSeq = seq;
+        _trace.setAction(op, seq);
+        SafeDiagnostics.record('relay_paste', phase: _phase, op: op, seq: seq);
+        Map<String, dynamic> outcome;
+        try {
+          outcome = await ImeRelay.pasteText(text)
+              .timeout(const Duration(seconds: 12));
+        } catch (_) {
+          outcome = {'ok': false, 'reason': 'paste_timeout'};
+        }
+        _phase = 'ack';
+        _trace.phase('ack');
+        final ack = await post("ack-text", {
+          "nonce": _nonce,
+          "id": id,
+          "ok": outcome["ok"] == true,
+          "reason": (outcome["reason"] as String?) ?? "",
+        }).timeout(const Duration(seconds: 20));
+        if (ack["state"] != "acknowledged") {
+          SafeDiagnostics.record('relay_paste_rejected', phase: 'ack', op: op);
+        }
+        _lastControl = DateTime.now();
+        _lastControlAt = _elapsed();
+        _lastOp = op;
+        SafeDiagnostics.record('relay_ack', phase: 'ack', op: op, seq: seq);
+        return;
+      }
       final packet = command["packet"],
           seq = command["seq"],
           op = command["op"];
