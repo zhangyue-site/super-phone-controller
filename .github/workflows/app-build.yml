@@ -185,6 +185,16 @@ jobs:
           path: ${{ runner.temp }}/controller-private-build.7z
           if-no-files-found: error
 
+      - name: Publish release asset (optional)
+        if: ${{ inputs.release_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REL: rel-${{ inputs.release_id }}
+          TAG: rel-${{ inputs.release_id }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "bridge release $TAG" >/dev/null
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP/controller-private-build.7z#app-bridge.7z" >/dev/null
+
   ios:
     needs: backend
     # Public repository + standard GitHub macOS runner: free build minutes.
