@@ -6,7 +6,7 @@ import 'package:pcflash/usb_launch.dart';
 import 'package:pcflash/screen_share.dart';
 
 void main() {
-  Finder connectButton() => find.ancestor(of: find.byIcon(Icons.link), matching: find.byType(FilledButton));
+  Finder connectButton() => find.byKey(const ValueKey('target-connect'));
   const serial = 'STOPTEST001';
   Map<String, dynamic> info(String value) =>
       {'protocol': 1, 'device': 'test-board', 'usbSerial': value};
@@ -53,13 +53,11 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
     expect(identities, 1);
     expect(starts, 0);
-    await tester.scrollUntilVisible(find.text('开始屏幕共享并连接'), 200);
-    await tester.drag(find.byType(ListView), const Offset(0, -200));
+    await tester.scrollUntilVisible(connectButton(), 160,
+        scrollable: find.byType(Scrollable).first);
     await tester.pumpAndSettle();
     final button = tester.widget<FilledButton>(connectButton());
     expect(button.onPressed, isNotNull);
-    await tester.scrollUntilVisible(find.text('开始屏幕共享并连接'), 160,
-        scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text('开始屏幕共享并连接'));
     await tester.pump();
     expect(identities, 2);
@@ -176,9 +174,7 @@ void main() {
     first.complete(info('SAMEWIDGETTEST'));
     await tester.pumpAndSettle();
     expect(find.text('正在停止…'), findsNothing);
-    await tester.drag(find.byType(ListView), const Offset(0, -250));
-    await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('开始屏幕共享并连接'), 160,
+    await tester.scrollUntilVisible(connectButton(), 160,
         scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text('开始屏幕共享并连接'));
     await tester.pump();

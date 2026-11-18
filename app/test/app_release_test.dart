@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -69,6 +71,45 @@ void main() {
     await tester.tap(find.text('官方下载与更新'));
     await tester.pumpAndSettle();
     expect(find.text('更新入口未配置或暂时无法打开，请联系应用维护者'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
+    expect(find.text('关闭').hitTestable(), findsOneWidget);
     expect(find.textContaining('example.invalid'), findsNothing);
+  });
+
+  testWidgets('small large-text update dialog can close during a launch',
+      (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.8;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final open = Completer<void>();
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(AppRelease.channel, (call) async {
+      if (call.method == 'info') return {'versionName': '1', 'versionCode': 1};
+      await open.future;
+      return null;
+    });
+    addTearDown(
+        () => messenger.setMockMethodCallHandler(AppRelease.channel, null));
+    await tester.pumpWidget(MaterialApp(
+        home: Builder(
+            builder: (context) => TextButton(
+                onPressed: () => AppRelease.show(context),
+                child: const Text('版本')))));
+    await tester.tap(find.text('版本'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('官方下载与更新'));
+    await tester.pump();
+    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
+        isNull);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    open.complete();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
   });
 }

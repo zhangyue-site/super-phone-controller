@@ -55,11 +55,29 @@ class AppTheme {
         brightness: brightness,
         platform: TargetPlatform.android,
         colorScheme: scheme);
+    final textTheme = base.textTheme.copyWith(
+      headlineSmall: base.textTheme.headlineSmall
+          ?.copyWith(fontWeight: FontWeight.w700, height: 1.25),
+      titleLarge:
+          base.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+      titleMedium:
+          base.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+      bodyMedium: base.textTheme.bodyMedium?.copyWith(height: 1.45),
+    );
+    OutlineInputBorder fieldBorder(Color color, {double width = 1}) =>
+        OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: BorderSide(color: color, width: width));
     return base.copyWith(
+      textTheme: textTheme,
       scaffoldBackgroundColor: scheme.surfaceContainerLowest,
       appBarTheme: AppBarTheme(
           backgroundColor: scheme.surface,
           foregroundColor: scheme.onSurface,
+          surfaceTintColor: Colors.transparent,
+          scrolledUnderElevation: 0,
+          titleTextStyle:
+              textTheme.titleLarge?.copyWith(color: scheme.onSurface),
           centerTitle: false),
       cardTheme: CardThemeData(
           color: scheme.surfaceContainerLow,
@@ -84,7 +102,14 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: scheme.surfaceContainerLow,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
+          border: fieldBorder(scheme.outline),
+          enabledBorder: fieldBorder(scheme.outline),
+          focusedBorder: fieldBorder(scheme.primary, width: 2),
+          errorBorder: fieldBorder(scheme.error),
+          focusedErrorBorder: fieldBorder(scheme.error, width: 2)),
+      chipTheme: base.chipTheme.copyWith(
+          backgroundColor: scheme.surfaceContainerLow,
+          side: BorderSide(color: scheme.outlineVariant)),
       dividerTheme: DividerThemeData(color: scheme.outlineVariant),
     );
   }

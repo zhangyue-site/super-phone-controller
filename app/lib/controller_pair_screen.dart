@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'control_client.dart';
 import 'controller_gateway_screen.dart';
 import 'control_screen.dart';
+import 'product_widgets.dart';
 
 /// Controller redeems the binding code explicitly shared by the target.
 class ControllerPairScreen extends StatefulWidget {
@@ -94,11 +95,12 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('连接被控手机')),
         body: ListView(padding: const EdgeInsets.all(24), children: [
-          Text('让两台手机连接起来', style: Theme.of(context).textTheme.headlineSmall),
-          const SizedBox(height: 12),
-          const Text('在被控手机连接控制板并共享整屏，再输入4位绑定码。绑定码持续有效，主动更换后失效。'),
-          const SizedBox(height: 12),
-          const Text('此手机用于发送任务和查看进度，无需共享此手机的屏幕。'),
+          const ProductHeader(
+            icon: Icons.devices_outlined,
+            label: '控制手机',
+            title: '让两台手机连接起来',
+            description: '在另一台手机接好控制板并开始共享，再到「连接控制手机」查看绑定码。本机不用共享。',
+          ),
           const SizedBox(height: 16),
           OutlinedButton.icon(
               onPressed: _busy
@@ -107,7 +109,7 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
                       builder: (_) => const ControllerGatewayScreen())),
               icon: const Icon(Icons.bluetooth),
               label: const Text('使用此手机中转蓝牙连接')),
-          const Text('控制板可直接连接 Wi-Fi，也可通过一台手机中转蓝牙与网络；切换前请先释放原连接。'),
+          const Text('板子已连 Wi-Fi 时，不用再开蓝牙中转。切换中转前，先释放原连接。'),
           const SizedBox(height: 24),
           Form(
               key: _form,
@@ -126,7 +128,7 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
                 decoration: const InputDecoration(
                     labelText: '4位绑定码',
                     hintText: '输入4位数字',
-                    helperText: '也可粘贴完整43位旧连接码；返回页面保留绑定',
+                    helperText: '使用被控手机显示的绑定码，不要转发给他人',
                     helperMaxLines: 2),
                 validator: (value) =>
                     RegExp(r'^(?:[0-9]{4}|[A-Za-z0-9_-]{43})$')
@@ -134,15 +136,21 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
                         ? null
                         : '请输入4位数字绑定码，或完整43位旧连接码',
               )),
+          if (_error != null) ProductError(_error!),
           TextButton(
               onPressed: _busy
                   ? null
                   : () => showDialog<void>(
                       context: context,
-                      builder: (context) => AlertDialog(
-                              title: const Text('使用旧连接码'),
-                              content: const Text(
-                                  '将完整43位旧连接码粘贴到同一个输入框即可。旧码仍遵循原有有效期。'),
+                      builder: (context) => ProductDialog(
+                              icon: Icons.key_outlined,
+                              title: '使用旧连接码',
+                              details: const [
+                                ProductDialogDetail('已有旧版连接码？',
+                                    '把完整的 43 位旧码粘贴到绑定码输入框。旧码仍按原有效期使用。'),
+                                ProductDialogDetail(
+                                    '旧码失效时', '回到被控手机查看当前绑定码，不要反复提交过期旧码。'),
+                              ],
                               actions: [
                                 TextButton(
                                     onPressed: () => Navigator.pop(context),
@@ -157,14 +165,6 @@ class _ControllerPairScreenState extends State<ControllerPairScreen> {
                   icon: const Icon(Icons.content_paste),
                   label: const Text('从剪贴板粘贴'))),
           const Text('仅在点击粘贴时读取剪贴板。', style: TextStyle(fontSize: 12)),
-          if (_error != null) ...[
-            const SizedBox(height: 16),
-            Semantics(
-                liveRegion: true,
-                child: Text(_error!,
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.error))),
-          ],
         ]),
         bottomNavigationBar: SafeArea(
             child: Padding(

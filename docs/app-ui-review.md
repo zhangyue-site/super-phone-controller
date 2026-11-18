@@ -1,5 +1,7 @@
 # App 1.4 UI and pairing candidate
 
+> 历史候选记录，不是 1.4.10（83）或本分支布局说明。Material 3 视觉改版见 [Android 界面与验收](android-ui.md)。
+
 This is a review candidate, not a production rollout.
 
 - Android and iOS share the natural-language phone-task entry: no slash command is required. A concrete target is shown before confirmation; detailed agent steps are generated after checking the current scene.

@@ -455,18 +455,22 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
   Future<void> _manageBinding({required bool rotate}) async {
     final confirmed = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-                title: Text(rotate ? '更换绑定码？' : '解除控制手机？'),
-                content: Text(rotate
-                    ? '旧绑定码将失效，已连接的控制手机将被解除。屏幕共享继续保留。'
-                    : '当前控制手机将被解除；绑定码保持有效，可重新连接。屏幕共享继续保留。'),
+        builder: (context) => ProductDialog(
+                icon: rotate ? Icons.key_outlined : Icons.link_off,
+                title: rotate ? '更换绑定码？' : '解除控制手机？',
+                details: [
+                  ProductDialogDetail('控制手机', rotate
+                      ? '旧绑定码立即失效，已绑定的控制手机需要用新码重新连接。'
+                      : '解除当前绑定。之后仍可使用现有绑定码重新连接。'),
+                  const ProductDialogDetail('整屏共享', '这项操作不会停止整屏共享。'),
+                ],
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(context, false),
                       child: const Text('取消')),
                   FilledButton(
                       onPressed: () => Navigator.pop(context, true),
-                      child: const Text('确认'))
+                      child: Text(rotate ? '更换并解除绑定' : '解除绑定'))
                 ]));
     if (confirmed != true || !mounted || _control?.authorized != true) return;
     final generation = _generation;
@@ -567,45 +571,58 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                 builder: (_) => Scaffold(
                     body: ProductSettingsScreen(
                         client: _control, diagnostic: _relay),
-                    bottomNavigationBar: SafeArea(
-                        child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: OutlinedButton.icon(
-                                onPressed: _stop,
-                                icon: const Icon(Icons.stop_circle_outlined),
-                                label: const Text('停止控制与共享'))))))),
+                    bottomNavigationBar: ProductActionBar(
+                        child: FilledButton.icon(
+                            style: productStopButtonStyle(context),
+                            onPressed: _stop,
+                            icon: const Icon(Icons.stop_circle_outlined),
+                            label: const Text('停止控制与共享')))))),
             icon: const Icon(Icons.settings_outlined))
       ]),
       body: ListView(padding: const EdgeInsets.all(20), children: [
-        Text(
-            ready && !_feedback.isCloudStale(DateTime.now())
+        ProductHeader(
+            icon: Icons.usb_outlined,
+            label: '连接工作台',
+            title: ready && !_feedback.isCloudStale(DateTime.now())
                 ? '已连接，等待或接收任务'
                 : _active
                     ? '整屏共享中，正在检查连接'
                     : _busy
                         ? '正在连接'
                         : '需要连接',
-            style: Theme.of(context).textTheme.headlineMedium),
-        const SizedBox(height: 8),
-        const Text('连接控制板、共享整屏，再在控制手机输入绑定码。'),
+            description: '查看这台手机的共享与连接状态。首次使用时，按下方步骤连接控制手机。'),
+        const SizedBox(height: 12),
         if (!ready)
           Card(
               child: Padding(
                   padding: const EdgeInsets.all(20),
                   child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Text(_error != null ? '恢复后，重新检查' : '首次连接 · 三步准备',
                             style: Theme.of(context).textTheme.titleMedium),
                         const SizedBox(height: 12),
-                        const Text(
-                            '1  检查控制板与 USB 连接\n\n2  允许系统的整屏共享\n\n3  在控制手机输入绑定码'),
+                        const Text('1. 用支持数据的 USB 线接好控制板。\n'
+                            '2. 按 Android 提示允许整屏共享。\n'
+                            '3. 打开「连接控制手机」，到另一台手机输入绑定码。'),
                         if (_error != null)
                           const Padding(
                               padding: EdgeInsets.only(top: 12),
                               child: Text('先核对连接与最新画面，不自动续跑旧动作。')),
+                        const SizedBox(height: 16),
+                        FilledButton.icon(
+                            key: const ValueKey('target-connect'),
+                            onPressed: _busy || _stopping || !widget.isCurrent()
+                                ? null
+                                : _start,
+                            icon: const Icon(Icons.link),
+                            label: Text(_busy
+                                ? '正在请求授权或连接…'
+                                : _active
+                                    ? '重新检查手机中转'
+                                    : '开始屏幕共享并连接')),
                       ]))),
-        const SizedBox(height: 20),
+        const SizedBox(height: 8),
         TargetStatusOverview(
           board: widget.isCurrent()
               ? (_boardVerified ? '控制板身份已核验' : 'USB 已连接，控制板身份待核验')
@@ -639,16 +656,6 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
               LocalAutoLoopCard()
             ])),
         const SizedBox(height: 16),
-        if (!ready)
-          FilledButton.icon(
-              onPressed:
-                  _busy || _stopping || !widget.isCurrent() ? null : _start,
-              icon: const Icon(Icons.link),
-              label: Text(_busy
-                  ? '正在请求授权或连接…'
-                  : _active
-                      ? '重新检查手机中转'
-                      : '开始屏幕共享并连接')),
         if (_externalGateway && _active)
           OutlinedButton.icon(
               onPressed: _busy || _stopping || !widget.isCurrent()
@@ -729,17 +736,13 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
         const Text(
             '画面用于理解任务和核验结果。返回或进入设置不会停止共享；仅主动停止、系统停止或真实断开连接后，才需要重新开始共享。旧操作不会重放。'),
       ]),
-      bottomNavigationBar: SafeArea(
-          child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                      foregroundColor: Theme.of(context).colorScheme.error,
-                      side: BorderSide(
-                          color: Theme.of(context).colorScheme.error)),
-                  onPressed: _stopping ? null : _stop,
-                  icon: const Icon(Icons.stop_circle_outlined),
-                  label: Text(_stopping ? '正在停止…' : '停止控制与共享')))),
+      bottomNavigationBar: ProductActionBar(
+        child: FilledButton.icon(
+            style: productStopButtonStyle(context),
+            onPressed: _stopping ? null : _stop,
+            icon: const Icon(Icons.stop_circle_outlined),
+            label: Text(_stopping ? '正在停止…' : '停止控制与共享')),
+      ),
     );
   }
 }

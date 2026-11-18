@@ -85,7 +85,7 @@ void main() {
             .controller!
             .text,
         '2468');
-    expect(find.textContaining('持续有效'), findsOneWidget);
+    expect(find.textContaining('不要转发给他人'), findsOneWidget);
   });
 
   testWidgets('validates locally and redeems trimmed code once then navigates',

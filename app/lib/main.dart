@@ -15,6 +15,7 @@ import 'theme.dart';
 import 'usb_launch.dart';
 import 'target_session.dart';
 import 'product_settings.dart';
+import 'product_widgets.dart';
 import 'screen_share.dart';
 
 void main() {
@@ -128,9 +129,13 @@ class _RoleRouterState extends State<_RoleRouter> {
     if (TargetSession.hasGateway) {
       await showDialog<void>(
           context: context,
-          builder: (c) => AlertDialog(
-                  title: const Text('先释放当前蓝牙连接'),
-                  content: const Text('请先在被控状态页停止手机操作并释放手机中转，再进入维护。屏幕共享可继续保留。'),
+          builder: (c) => ProductDialog(
+                  icon: Icons.bluetooth_disabled,
+                  title: '先释放当前蓝牙连接',
+                  details: const [
+                    ProductDialogDetail('在被控手机页面操作',
+                        '先停止手机操作，再点「释放手机中转，保留屏幕共享」。释放后才能进入蓝牙维护。'),
+                  ],
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.pop(c),

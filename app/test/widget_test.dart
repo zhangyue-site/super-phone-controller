@@ -145,6 +145,37 @@ void main() {
         ThemeMode.light);
     await tester.pumpWidget(const SizedBox());
   });
+  testWidgets('settings appearance stays usable on a narrow enlarged screen',
+      (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.6;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(UsbLaunch.channel, (_) async => null);
+    addTearDown(
+        () => messenger.setMockMethodCallHandler(UsbLaunch.channel, null));
+    await tester.pumpWidget(const PcFlashApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('深色'), 160,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('深色'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
+        ThemeMode.dark);
+    await tester.scrollUntilVisible(find.text('App 版本与更新'), 160,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
+    expect(find.text('App 版本与更新').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('Bluetooth off shows actionable recovery without scanning',
       (tester) async {
     tester.view.physicalSize = const Size(320, 568);

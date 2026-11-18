@@ -170,21 +170,21 @@ class OverlayPill with WidgetsBindingObserver {
     final shortText = share == pillRed
         ? '共享已断开'
         : hid != pillGreen
-            ? (hid == pillGray ? '未连接' : '待恢复')
+            ? (hid == pillGray ? '未中转' : '中转待恢复')
             : share == pillYellow
                 ? '共享检查中'
                 : (battery != null && battery < 20)
                     ? '电量 $battery%'
                     : task == pillYellow
                         ? '回执滞后'
-                        : '已连接';
+                        : '中转已连';
     return {
       'battery': batteryDot,
       'share': share,
       'hid': hid,
       'task': task,
       'short': shortText,
-      'line1': '$batteryText · $shareText · $hidText',
+      'line1': '$batteryText\n屏幕：$shareText\n$hidText',
       'line2': taskText,
     };
   }
@@ -217,10 +217,10 @@ class OverlayPill with WidgetsBindingObserver {
 
   (int, String) _readTask() {
     final receipt = TargetSession.retainedClient?.lastReceiptAt;
-    if (receipt == null) return (pillGray, '云端任务暂无回执');
+    if (receipt == null) return (pillGray, '任务：暂无云端回执');
     final minutes = DateTime.now().difference(receipt).inMinutes;
-    if (minutes >= 10) return (pillYellow, '云端任务回执 $minutes 分钟前');
-    return (pillGreen, '云端任务回执 ${minutes <= 0 ? '刚刚' : '$minutes 分钟前'}');
+    if (minutes >= 10) return (pillYellow, '最近回执：$minutes 分钟前');
+    return (pillGreen, '最近回执：${minutes <= 0 ? '刚刚' : '$minutes 分钟前'}');
   }
 }
 
@@ -296,15 +296,18 @@ class _OverlayPillCardState extends State<OverlayPillCard> {
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('悬浮状态条', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
-              Text(_allowed
-                  ? '已开启。App 退到后台且共享或链路仍在时，屏幕上角会显示电量、屏幕共享、板端链路、云端任务四个状态灯；可拖动、点按展开详情或关闭。'
-                  : '尚未授权。App 退到后台且共享或链路仍在时，屏幕上角会显示上述四个状态灯，需要"显示在其他应用上层"权限。'),
+              Text(_allowed ? '已允许在其他应用上层显示' : '未开启显示权限，不影响在 App 内查看状态'),
+              const SizedBox(height: 8),
+              const Text(
+                  '离开 App 后，若共享仍在或本机仍中转，状态条会显示电量、共享、中转和最近回执。点按展开，拖动可移位。'),
+              const SizedBox(height: 8),
+              const Text('关闭浮窗只会隐藏它，不会停止控制或共享。要停止，请回到被控手机页面。'),
               if (!_allowed) ...[
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
                     onPressed: _settings,
                     icon: const Icon(Icons.layers_outlined),
-                    label: const Text('前往系统设置开启悬浮窗权限')),
+                    label: const Text('去设置允许显示浮窗')),
               ],
               if (_error != null)
                 Padding(

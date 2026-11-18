@@ -1,10 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pcflash/product_widgets.dart';
 import 'package:pcflash/theme.dart';
 import 'package:pcflash/widgets.dart';
 
 void main() {
   for (final dark in [false, true]) {
+    testWidgets('stop action retains contrast in ${dark ? "dark" : "light"}',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: dark ? AppTheme.build() : AppTheme.light(),
+        home: Scaffold(
+          bottomNavigationBar: Builder(
+            builder: (context) => ProductActionBar(
+              child: FilledButton(
+                style: productStopButtonStyle(context),
+                onPressed: () {},
+                child: const Text('停止手机操作'),
+              ),
+            ),
+          ),
+        ),
+      ));
+      final button = tester.widget<FilledButton>(find.byType(FilledButton));
+      final foreground = button.style!.foregroundColor!.resolve({})!;
+      final background = button.style!.backgroundColor!.resolve({})!;
+      expect(_contrast(foreground, background), greaterThanOrEqualTo(4.5));
+    });
+
     testWidgets(
         'shared firmware widgets remain legible at 320px, scale 1.6 (${dark ? "dark" : "light"})',
         (tester) async {
@@ -34,12 +57,15 @@ void main() {
       final bg =
           (dark ? AppTheme.build() : AppTheme.light()).colorScheme.surface;
       final fg = banner.style!.color!;
-      final a = fg.computeLuminance();
-      final b =
-          Color.alphaBlend(fg.withValues(alpha: .1), bg).computeLuminance();
       final contrast =
-          (a > b ? a + .05 : b + .05) / (a > b ? b + .05 : a + .05);
+          _contrast(fg, Color.alphaBlend(fg.withValues(alpha: .1), bg));
       expect(contrast, greaterThanOrEqualTo(4.5));
     });
   }
+}
+
+double _contrast(Color foreground, Color background) {
+  final ink = foreground.computeLuminance() + .05;
+  final surface = background.computeLuminance() + .05;
+  return ink > surface ? ink / surface : surface / ink;
 }

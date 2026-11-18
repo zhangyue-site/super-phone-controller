@@ -53,9 +53,12 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
 
   Future<void> _message(String title, String body) => showDialog<void>(
       context: context,
-      builder: (c) => AlertDialog(
-              title: Text(title),
-              content: SingleChildScrollView(child: Text(body)),
+      builder: (c) => ProductDialog(
+              icon: Icons.info_outline,
+              title: title,
+              details: [
+                Text(body)
+              ],
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(c), child: const Text('关闭'))
@@ -70,18 +73,16 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     if (!mounted) return;
     await showDialog<void>(
         context: context,
-        builder: (c) => AlertDialog(
-              title: const Text('连接诊断与兼容说明'),
-              content: SingleChildScrollView(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                    const Text(
-                        '仅记录固定事件、阶段、操作码、HTTP状态与USB代次；不记录凭据、动作包或响应正文。中文输入仍取决于现有输入法与可见候选，正常使用不要求开发者调试。'),
-                    const SizedBox(height: 12),
-                    SelectableText(rows),
-                  ])),
+        builder: (c) => ProductDialog(
+              icon: Icons.monitor_heart_outlined,
+              title: '连接诊断与兼容说明',
+              details: [
+                const ProductDialogDetail(
+                    '可复制给维护者', '日志只记录连接阶段、事件、状态码与 USB 会话代次，不含凭据或任务内容。'),
+                const ProductDialogDetail(
+                    '输入兼容', '中文依赖当前输入法和屏幕上的可见候选。正常使用不用开启开发者调试。'),
+                SelectableText(rows),
+              ],
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(c), child: const Text('关闭')),
@@ -107,14 +108,18 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
   Future<void> _wifi() async {
     final accepted = await showDialog<bool>(
         context: context,
-        builder: (c) => AlertDialog(
-                title: const Text('检查控制板更新'),
-                content: const Text(
-                    '控制板会先检查版本。有更新时会中断手机操作并升级；请先停止当前任务。重启后需重新连接并核对版本，收到请求回执不代表升级成功。'),
+        builder: (c) => ProductDialog(
+                icon: Icons.system_update_alt,
+                title: '检查控制板更新',
+                details: const [
+                  ProductDialogDetail('先停止当前任务', '发现更新后，控制板可能中断手机操作并自动升级。'),
+                  ProductDialogDetail(
+                      '重启后核对版本', '请重新连接控制板，再查看版本。收到请求回执不代表升级完成。'),
+                ],
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(c, false),
-                      child: const Text('继续当前任务')),
+                      child: const Text('暂不更新')),
                   FilledButton(
                       onPressed: () => Navigator.pop(c, true),
                       child: const Text('检查并请求升级'))
@@ -139,93 +144,136 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     final appearance = ProductAppearance.of(context);
     return Scaffold(
         appBar: AppBar(title: const Text('设置与设备维护')),
-        body: ListView(padding: const EdgeInsets.all(20), children: [
-          if (Theme.of(context).platform == TargetPlatform.android) const AccessibilityAssistCard(),
-          if (Theme.of(context).platform == TargetPlatform.android) const CaptureSamplingCard(),
-          Text('外观', style: Theme.of(context).textTheme.titleLarge),
-          RadioGroup<ThemeMode>(
-              groupValue: appearance?.mode ?? ThemeMode.system,
-              onChanged: (value) {
-                if (value != null) appearance?.onChanged(value);
-              },
-              child: Column(children: [
-                for (final entry in [
-                  (ThemeMode.system, '跟随系统'),
-                  (ThemeMode.light, '浅色'),
-                  (ThemeMode.dark, '深色')
-                ])
-                  RadioListTile<ThemeMode>(
-                      value: entry.$1, title: Text(entry.$2)),
-              ])),
-          const Divider(),
-          ListTile(
-              leading: const Icon(Icons.settings_ethernet),
-              title: const Text('联网方式'),
-              subtitle: const Text('控制板直连 Wi-Fi / 手机蓝牙中转'),
-              onTap: () => _message('联网方式',
-                  '控制板直连请在板端网络页设置 Wi-Fi。手机中转在连接页建立，同一时间只能有一台中转手机。切换前先停止操作并释放原连接。未取得实际状态时，App不会把蓝牙连接当作云端在线。')),
-          Text('升级与恢复', style: Theme.of(context).textTheme.titleLarge),
-          ListTile(
-              leading: const Icon(Icons.system_update_alt),
-              title: const Text('App 版本与更新'),
-              subtitle: const Text('保留原应用，从官方下载页获取同签名新版'),
-              onTap: () => AppRelease.show(context)),
-          ListTile(
-              leading: const Icon(Icons.wifi),
-              title: const Text('控制板 Wi-Fi 升级'),
-              subtitle: Text(widget.client?.canWifiUpgrade == true
-                  ? '先检查版本，再按控制板实际阶段更新'
-                  : '当前连接尚不可从此手机发起，可在控制板上检查更新'),
-              onTap: widget.client?.canWifiUpgrade == true
-                  ? _wifi
-                  : () => _message('控制板 Wi-Fi 升级',
-                      '请在控制板的升级入口操作，或先建立此手机的蓝牙中转连接。网络连接成功不代表云端授权有效。')),
-          if (widget.client?.canWifiUpgrade == true)
-            Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(widget.client!.upgradeStatus)),
-          if (_upgradeNotice != null &&
-              !_upgradeError &&
-              widget.client?.canWifiUpgrade != true)
-            const Text('连接已中断，升级结果待核验。请重新连接并核对版本。'),
-          if (_upgradeNotice != null && _upgradeError)
-            ProductError(_upgradeNotice!),
-          if (_upgradeNotice != null && !_upgradeError)
-            Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(_upgradeNotice!)),
-          ListTile(
-              leading: const Icon(Icons.bluetooth),
-              title: const Text('蓝牙固件维护'),
-              subtitle: const Text('无需 USB 或本机屏幕共享；保留官方固件下载与本地镜像恢复'),
-              onTap: _maintenance),
-          ListTile(
-              leading: const Icon(Icons.bookmark_outline),
-              title: const Text('专项技能与保存'),
-              subtitle: Text(widget.client?.supportsSkillReplay == true
-                  ? '可从任务页查看已有专项技能'
-                  : '已保存技能保留，当前云端回放暂不可用'),
-              onTap: () => _message('专项技能与保存',
-                  '任务结果核验后仍可保存为技能。已保存内容保留；保存不代表当前即可回放。回放不可用时，请继续使用普通文字任务，不会自动执行或重复旧操作。')),
-          const Divider(),
-          Text('控制板功能', style: Theme.of(context).textTheme.titleLarge),
-          ListTile(
-              leading: const Icon(Icons.volume_up_outlined),
-              title: const Text('声音与试听'),
-              subtitle: const Text('音量、静音和试听可在控制板上调节'),
-              onTap: () =>
-                  _message('声音与试听', '请在控制板的声音入口调节音量、静音或试听。App 远程声音控制尚未接通。')),
-          ListTile(
-              leading: const Icon(Icons.touch_app_outlined),
-              title: const Text('语音、手动控制与额度'),
-              subtitle: const Text('保留原控制板能力与专项技能概念'),
-              onTap: () => _message('控制板上的功能',
-                  '语音、方向与点击、返回与桌面、额度和网络方式仍在控制板上可用。未接通的 App 远程入口不会假装已执行。技能可保存，当前云端回放暂不可用。')),
-          ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('连接诊断与兼容说明'),
-              subtitle: const Text('查看底层连接信息与输入兼容范围'),
-              onTap: _diagnostics),
-        ]));
+        body: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            children: [
+              const ProductHeader(
+                icon: Icons.tune_outlined,
+                label: '偏好与维护',
+                title: '外观、连接与更新',
+                description: '从这里调整主题、查看连接说明，或检查 App 和控制板更新。',
+              ),
+              const ProductSectionTitle('外观'),
+              Card(
+                  child: RadioGroup<ThemeMode>(
+                      groupValue: appearance?.mode ?? ThemeMode.system,
+                      onChanged: (value) {
+                        if (value != null) appearance?.onChanged(value);
+                      },
+                      child: Column(children: [
+                        for (final entry in [
+                          (
+                            ThemeMode.system,
+                            '跟随系统',
+                            Icons.brightness_auto_outlined
+                          ),
+                          (ThemeMode.light, '浅色', Icons.light_mode_outlined),
+                          (ThemeMode.dark, '深色', Icons.dark_mode_outlined)
+                        ])
+                          RadioListTile<ThemeMode>(
+                              value: entry.$1,
+                              title: Text(entry.$2),
+                              secondary: Icon(entry.$3)),
+                      ]))),
+              const ProductSectionTitle('连接与辅助'),
+              _SettingsGroup(children: [
+                ListTile(
+                    leading: const Icon(Icons.settings_ethernet),
+                    title: const Text('联网方式'),
+                    subtitle: const Text('控制板直连 Wi-Fi / 手机蓝牙中转'),
+                    onTap: () => _message('联网方式',
+                        '控制板直连请在板端网络页设置 Wi-Fi。手机中转在连接页建立，同一时间只能有一台中转手机。切换前先停止操作并释放原连接。未取得实际状态时，App不会把蓝牙连接当作云端在线。')),
+                ListTile(
+                    leading: const Icon(Icons.info_outline),
+                    title: const Text('连接诊断与兼容说明'),
+                    subtitle: const Text('查看底层连接信息与输入兼容范围'),
+                    onTap: _diagnostics),
+              ]),
+              if (Theme.of(context).platform == TargetPlatform.android) ...[
+                const AccessibilityAssistCard(),
+                const CaptureSamplingCard(),
+              ],
+              const ProductSectionTitle('升级与恢复'),
+              _SettingsGroup(children: [
+                ListTile(
+                    leading: const Icon(Icons.system_update_alt),
+                    title: const Text('App 版本与更新'),
+                    subtitle: const Text('保留原应用，从官方下载页获取同签名新版'),
+                    onTap: () => AppRelease.show(context)),
+                ListTile(
+                    leading: const Icon(Icons.wifi),
+                    title: const Text('控制板 Wi-Fi 升级'),
+                    subtitle: Text(widget.client?.canWifiUpgrade == true
+                        ? '先检查版本，再按控制板实际阶段更新'
+                        : '当前连接尚不可从此手机发起，可在控制板上检查更新'),
+                    onTap: widget.client?.canWifiUpgrade == true
+                        ? _wifi
+                        : () => _message('控制板 Wi-Fi 升级',
+                            '请在控制板的升级入口操作，或先建立此手机的蓝牙中转连接。网络连接成功不代表云端授权有效。')),
+                if (widget.client?.canWifiUpgrade == true)
+                  Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(widget.client!.upgradeStatus)),
+                if (_upgradeNotice != null &&
+                    !_upgradeError &&
+                    widget.client?.canWifiUpgrade != true)
+                  const Text('连接已中断，升级结果待核验。请重新连接并核对版本。'),
+                if (_upgradeNotice != null && _upgradeError)
+                  ProductError(_upgradeNotice!),
+                if (_upgradeNotice != null && !_upgradeError)
+                  Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(_upgradeNotice!)),
+                ListTile(
+                    leading: const Icon(Icons.bluetooth),
+                    title: const Text('蓝牙固件维护'),
+                    subtitle: const Text('无需 USB 或本机屏幕共享；保留官方固件下载与本地镜像恢复'),
+                    onTap: _maintenance),
+              ]),
+              const ProductSectionTitle('控制板功能'),
+              _SettingsGroup(children: [
+                ListTile(
+                    leading: const Icon(Icons.bookmark_outline),
+                    title: const Text('专项技能与保存'),
+                    subtitle: Text(widget.client?.supportsSkillReplay == true
+                        ? '可从任务页查看已有专项技能'
+                        : '已保存技能保留，当前云端回放暂不可用'),
+                    onTap: () => _message('专项技能与保存',
+                        '任务结果核验后仍可保存为技能。已保存内容保留；保存不代表当前即可回放。回放不可用时，请继续使用普通文字任务，不会自动执行或重复旧操作。')),
+                ListTile(
+                    leading: const Icon(Icons.volume_up_outlined),
+                    title: const Text('声音与试听'),
+                    subtitle: const Text('音量、静音和试听可在控制板上调节'),
+                    onTap: () => _message(
+                        '声音与试听', '请在控制板的声音入口调节音量、静音或试听。App 远程声音控制尚未接通。')),
+                ListTile(
+                    leading: const Icon(Icons.touch_app_outlined),
+                    title: const Text('语音、手动控制与额度'),
+                    subtitle: const Text('保留原控制板能力与专项技能概念'),
+                    onTap: () => _message('控制板上的功能',
+                        '语音、方向与点击、返回与桌面、额度和网络方式仍在控制板上可用。未接通的 App 远程入口不会假装已执行。技能可保存，当前云端回放暂不可用。')),
+              ]),
+            ]));
   }
+}
+
+class _SettingsGroup extends StatelessWidget {
+  const _SettingsGroup({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => Card(
+        clipBehavior: Clip.antiAlias,
+        child: ListTileTheme(
+          data: ListTileThemeData(
+            iconColor: Theme.of(context).colorScheme.primary,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: children,
+          ),
+        ),
+      );
 }

@@ -397,11 +397,11 @@ class _ControlScreenState extends State<ControlScreen>
     };
     final accepted = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-                title: Text(skill['name'] as String),
-                content: SingleChildScrollView(
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  Text(skill['description'] as String? ?? ''),
+        builder: (context) => ProductDialog(
+                icon: Icons.bookmark_outline,
+                title: skill['name'] as String,
+                details: [
+                  ProductDialogDetail('技能说明', skill['description'] as String? ?? '此技能没有补充说明。'),
                   for (final r in skill['requirements'] as List? ?? [])
                     Text('要求：$r'),
                   for (final p in parameters)
@@ -411,7 +411,9 @@ class _ControlScreenState extends State<ControlScreen>
                         decoration: InputDecoration(
                             labelText:
                                 p['label'] as String? ?? p['name'] as String)),
-                ])),
+                  const SizedBox(height: 12),
+                  const Text('先核对任务范围。预览不会自动确认执行。'),
+                ],
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(context, false),
@@ -476,12 +478,9 @@ class _ControlScreenState extends State<ControlScreen>
           builder: (settingsContext, update) => Scaffold(
                 body:
                     ProductSettingsScreen(client: _client, diagnostic: _error),
-                bottomNavigationBar: SafeArea(
-                    child: Padding(
-                  padding: const EdgeInsets.all(16),
+                bottomNavigationBar: ProductActionBar(
                   child: FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                        backgroundColor: Theme.of(context).colorScheme.error),
+                    style: productStopButtonStyle(settingsContext),
                     icon: const Icon(Icons.stop_circle_outlined),
                     label: Text(pending
                         ? '正在请求停止…'
@@ -498,7 +497,7 @@ class _ControlScreenState extends State<ControlScreen>
                             }
                           },
                   ),
-                )),
+                ),
               )),
     ));
     if (mounted && !_taskTerminal && !_visionStopped) _prepareVision();
@@ -508,6 +507,7 @@ class _ControlScreenState extends State<ControlScreen>
   Widget build(BuildContext context) {
     final state = _task['state'];
     final previewTaskId = _task['task_id'];
+    final theme = Theme.of(context);
     final labels = {
       'pending': '等待你的确认',
       'queued': '已确认，等待控制板',
@@ -536,13 +536,8 @@ class _ControlScreenState extends State<ControlScreen>
           children: [
             if (_error != null) ProductError(_error!),
             if (_stopUnconfirmed)
-              Card(
-                  child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Semantics(
-                          liveRegion: true,
-                          child: const Text(
-                              '停止请求尚未确认。已发动作结果未知；必要时请使用板子上的停止按钮。')))),
+              const ProductError(
+                  '停止请求尚未确认。已发动作结果未知；必要时请使用板子上的停止按钮。'),
             if (_task.isNotEmpty)
               Card(
                   child: Padding(
@@ -550,9 +545,17 @@ class _ControlScreenState extends State<ControlScreen>
                       child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Text(labels[state] ?? '任务状态',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.bold, fontSize: 18)),
+                            Row(children: [
+                              const ProductIcon(Icons.assignment_outlined),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Semantics(
+                                  header: true,
+                                  child: Text(labels[state] ?? '任务状态',
+                                      style: theme.textTheme.titleMedium),
+                                ),
+                              ),
+                            ]),
                             const SizedBox(height: 8),
                             Text(_task['reply'] as String? ?? ''),
                             if (state == 'pending')
@@ -600,29 +603,24 @@ class _ControlScreenState extends State<ControlScreen>
                             if (state == 'done')
                               const Text('结果由服务核验，本端未提供关联结果图'),
                           ]))),
-            const Text('发给龙虾',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
+            const ProductSectionTitle('发送手机任务'),
             Text(_busy
-                ? '正在生成任务确认信息…'
+                ? '正在准备任务，请稍等…'
                 : _client.authorized
-                    ? '说说你想让手机做什么，核对任务后执行。'
-                    : '控制连接已结束'),
+                    ? '写下要做的事。先核对目标和任务范围，再确认执行。'
+                    : '控制连接已结束，请先重新连接，再发送任务。'),
             if (!_busy && !_client.authorized)
               OutlinedButton(
                   onPressed: _connect, child: const Text('重新连接云端控制')),
             if (_task.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Row(children: [
-                  Icon(
-                      _client.authorized
-                          ? Icons.check_circle_outline
-                          : Icons.link_off,
-                      size: 18),
-                  const SizedBox(width: 8),
-                  Text(_client.authorized ? '连接已建立' : '需要重新连接'),
-                ]),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: Chip(
+                  avatar: Icon(_client.authorized
+                      ? Icons.link
+                      : Icons.link_off),
+                  label: Text(_client.authorized ? '连接已建立' : '需要重新连接'),
+                ),
               ),
             if (_client.supportsSkillReplay)
               OutlinedButton(
@@ -674,8 +672,7 @@ class _ControlScreenState extends State<ControlScreen>
                     labelText: '想让被控手机做什么？',
                     helperText: '目标：当前已连接手机',
                     helperMaxLines: 2,
-                    hintText: '打开设置 / 打开设置搜索电池',
-                    border: OutlineInputBorder())),
+                    hintText: '打开设置 / 打开设置搜索电池')),
             FilledButton(
                 key: const ValueKey('phone-task-prepare'),
                 onPressed: _busy || _stopping ? null : () => _run('prepare'),
@@ -685,19 +682,17 @@ class _ControlScreenState extends State<ControlScreen>
             const SizedBox(height: 12),
             const Text('执行时可随时请求停止，结果以真实画面核验为准。'),
           ]),
-      bottomNavigationBar: SafeArea(
-          child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                      backgroundColor: Theme.of(context).colorScheme.error),
-                  onPressed: _stopping ? null : _stop,
-                  icon: const Icon(Icons.stop_circle_outlined),
-                  label: Text(_stopping
-                      ? '正在请求停止…'
-                      : _stopUnconfirmed
-                          ? '停止未确认 · 再次请求'
-                          : '停止手机操作')))),
+      bottomNavigationBar: ProductActionBar(
+        child: FilledButton.icon(
+            style: productStopButtonStyle(context),
+            onPressed: _stopping ? null : _stop,
+            icon: const Icon(Icons.stop_circle_outlined),
+            label: Text(_stopping
+                ? '正在请求停止…'
+                : _stopUnconfirmed
+                    ? '停止未确认 · 再次请求'
+                    : '停止手机操作')),
+      ),
     );
   }
 }

@@ -108,7 +108,7 @@ object OverlayPill {
         }
         bar.addView(summary)
         val close = android.widget.Button(app).apply {
-            text = "关闭"; contentDescription = "关闭浮窗"
+            text = "关闭"; contentDescription = "仅关闭浮窗，不停止共享或控制"
             minimumWidth = dip(app, 48); minimumHeight = dip(app, 48)
             minWidth = dip(app, 48); minHeight = dip(app, 48)
             setPadding(0, 0, 0, 0)
@@ -128,11 +128,14 @@ object OverlayPill {
         content.addView(header)
         val details = LinearLayout(app).apply {
             orientation = LinearLayout.VERTICAL
+            setPadding(dip(app, 8), dip(app, 4), dip(app, 8), dip(app, 12))
             visibility = View.GONE
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         }
-        line1 = label(app, "").apply { maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END }
-        line2 = label(app, "", dim = true).apply { maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END }
+        line1 = label(app, "", size = 14f).apply { setLineSpacing(dip(app, 4).toFloat(), 1f) }
+        line2 = label(app, "", size = 14f, dim = true).apply {
+            setPadding(0, dip(app, 4), 0, 0)
+        }
         details.addView(line1); details.addView(line2)
         // Long content scrolls inside a bounded panel rather than exceeding the safe screen.
         val scroll = android.widget.ScrollView(app).apply {
@@ -208,8 +211,9 @@ object OverlayPill {
         summary?.text = text(data, "short").ifBlank { "状态" } + if (expanded) " ▴" else " ▾"
         line1?.text = text(data, "line1")
         line2?.text = text(data, "line2")
-        headerView?.contentDescription = listOf(text(data, "short"), text(data, "line1"),
-            text(data, "line2"), if (expanded) "点按收起" else "点按展开").filter { it.isNotBlank() }.joinToString("，")
+        headerView?.contentDescription = if (expanded) "点按收起状态详情" else
+            listOf(text(data, "short"), text(data, "line1").replace('\n', '，'),
+                text(data, "line2"), "点按展开状态详情").filter { it.isNotBlank() }.joinToString("，")
         body?.visibility = if (expanded) View.VISIBLE else View.GONE
         body?.importantForAccessibility = if (expanded) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
             else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS

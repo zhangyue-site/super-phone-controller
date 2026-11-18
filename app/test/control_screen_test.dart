@@ -96,6 +96,8 @@ void main() {
     expect(find.text('停止手机操作'), findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.byType(TextField), 120,
+        scrollable: find.byType(Scrollable).first);
     expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
         '打开微信找到测试联系人');
     expect(operations, ['prepare']);
