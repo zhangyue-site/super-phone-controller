@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.app.PendingIntent
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
@@ -59,10 +60,20 @@ object UsbLaunchBridge {
  private var owner: Any?=null
  private var changed: ((Map<String,Any?>?)->Unit)?=null
  private var lost: ((String)->Unit)?=null
+ @Volatile private var permissionAsked=0L
  private fun manager()=app.getSystemService(Context.USB_SERVICE) as UsbManager
  private fun identity(d: UsbDevice): String? {
   if(!UsbControllerProfile.supports(d.vendorId,d.productId,d.productName)) return null
-  if(!manager().hasPermission(d))return null
+  if(!manager().hasPermission(d)){
+   val now=SystemClock.elapsedRealtime()
+   if(now-permissionAsked>5000){permissionAsked=now
+    runCatching{
+     val pi=PendingIntent.getBroadcast(app,0,Intent("org.example.phonecontroller.USB_PERMISSION").setPackage(app.packageName),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+     manager().requestPermission(d,pi)
+    }
+   }
+   return null
+  }
   return try { d.serialNumber?.uppercase()?.takeIf { Regex("[0-9A-F]{12}").matches(it) } } catch(_: Exception){null}
  }
  private fun live(value: String)=manager().deviceList.values.firstOrNull { identity(it)==value && (productId==null || it.productId==productId) && (deviceName==null || it.deviceName==deviceName) }
