@@ -195,10 +195,29 @@ object RelayIme {
         val selfId = "${app.packageName}/${RelayImeService.SERVICE_CLASS}"
         val cur = RelayImeService.currentImeId(app) ?: return null
         if (cur == selfId) return null
-        return if (Settings.Secure.putString(app.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD, selfId)) cur else null
+        val switched = Settings.Secure.putString(app.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD, selfId)
+        if (switched) runCatching { java.io.File(app.filesDir, "ime_previous.txt").writeText(cur) }
+        return if (switched) cur else null
     }
     fun restore(context: Context, id: String) {
         if (id.isEmpty()) return
-        runCatching { Settings.Secure.putString(context.applicationContext.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD, id) }
+        runCatching {
+            Settings.Secure.putString(context.applicationContext.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD, id)
+            java.io.File(context.applicationContext.filesDir, "ime_previous.txt").delete()
+        }
+    }
+    fun recoverIfStuck(context: Context) {
+        val app = context.applicationContext
+        val selfId = "${app.packageName}/${RelayImeService.SERVICE_CLASS}"
+        val cur = RelayImeService.currentImeId(app) ?: return
+        if (cur != selfId) { java.io.File(app.filesDir, "ime_previous.txt").delete(); return }
+        val f = java.io.File(app.filesDir, "ime_previous.txt")
+        if (!f.exists()) return
+        val prev = runCatching { f.readText().trim() }.getOrNull() ?: return
+        if (prev.isEmpty() || prev == selfId) return
+        runCatching {
+            Settings.Secure.putString(app.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD, prev)
+            f.delete()
+        }
     }
 }

@@ -41,6 +41,7 @@ class MainActivity: FlutterActivity() {
  }
 
  override fun configureFlutterEngine(engine: FlutterEngine) {
+  RelayIme.recoverIfStuck(applicationContext)
   super.configureFlutterEngine(engine)
   SafeDiagnostics.initialize(this)
   WorkbenchDiagnostics.record("plugins",0,
