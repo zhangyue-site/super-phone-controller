@@ -172,6 +172,8 @@ object RelayIme {
                     reason = if (RelayImeService.instance == null) "ime_switch_failed" else "paste_failed"
                     return@Thread
                 }
+                // IME 已是自身时系统不会再发 onStartInput，主动触发一次消费
+                main.post { RelayImeService.instance?.runCatching { drain() } }
                 if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
                     RelayImeService.cancelPending()
                     ok = false; reason = "paste_timeout"

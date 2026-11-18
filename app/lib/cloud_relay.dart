@@ -135,7 +135,7 @@ class CloudRelay {
 
   void _armImeRestoreTimer() {
     _imeRestoreTimer?.cancel();
-    _imeRestoreTimer = Timer(const Duration(seconds: 45), _restoreTaskIme);
+    _imeRestoreTimer = Timer(const Duration(seconds: 90), _restoreTaskIme);
   }
 
   Future<void> _tick() async {
@@ -177,7 +177,8 @@ class CloudRelay {
         command = await post("poll", {"nonce": _nonce});
       }
       if (_closed) return;
-      if (command["state"] != "action" && command["state"] != "action_text") { _restoreTaskIme(); return; }
+      if (command["state"] == "done") { _restoreTaskIme(); return; }
+      if (command["state"] != "action" && command["state"] != "action_text") return;
       // 任务期把默认输入法切到无界面中转输入法（避免第三方键盘触发误分类/污染帧流），任务结束恢复。
       _imeRestoreTimer?.cancel();
       _taskImeOriginal ??= await ImeRelay.activate();
