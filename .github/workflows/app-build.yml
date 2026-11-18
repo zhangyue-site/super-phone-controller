@@ -29,7 +29,7 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 concurrency:
