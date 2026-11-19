@@ -55,6 +55,8 @@ object UsbLaunchBridge {
  @Volatile private var installed=false
  @Volatile private var serial: String?=null
  @Volatile private var session: String?=null
+ /** 与 identity() 里 requestPermission 的 PendingIntent action 必须一致。 */
+ private const val USB_PERMISSION_ACTION="org.example.phonecontroller.USB_PERMISSION"
  val detachGeneration: Long get()=lease.generation()
  private var error: String?=null
  private var owner: Any?=null
@@ -86,13 +88,27 @@ object UsbLaunchBridge {
     onUsbEvent(intent)
    }
   }
-  val filter=IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED).apply { addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED) }
+  val filter=IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED).apply { addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);addAction(USB_PERMISSION_ACTION) }
   if(Build.VERSION.SDK_INT>=33)app.registerReceiver(receiver,filter,Context.RECEIVER_NOT_EXPORTED)
   else app.registerReceiver(receiver,filter)
  }
  @Synchronized
+ private fun onPermission(intent: Intent) {
+  @Suppress("DEPRECATION") val device=intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)?:return
+  val granted=intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED,false)
+  SafeDiagnostics.record(mapOf("event" to "usb_permission","phase" to "usb","granted" to granted,"pid" to device.productId,"generation" to detachGeneration))
+  if(granted) {
+   // 授权落地后立即重扫并采纳，前端不必等下一次轮询（重装/重插自愈闭环）。
+   changed?.invoke(snapshot())
+  } else {
+   error="USB控制板授权被拒绝，请重新插入并在系统弹窗中选择本App"
+   changed?.invoke(mapOf("error" to error))
+  }
+ }
+ @Synchronized
  private fun onUsbEvent(intent: Intent) {
     checkExpiry()
+    if(intent.action==USB_PERMISSION_ACTION) { onPermission(intent);return }
     val oldSession=session?:return
     @Suppress("DEPRECATION") val device=intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)?:return
     if(intent.action==UsbManager.ACTION_USB_DEVICE_ATTACHED) { accept(intent);return }
