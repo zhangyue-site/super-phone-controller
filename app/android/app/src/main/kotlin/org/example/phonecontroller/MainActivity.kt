@@ -310,6 +310,26 @@ class MainActivity: FlutterActivity() {
     else -> result.notImplemented()
    }
   }
+  // vc90 自绘光标：动作分发前红圈=意图坐标、板端回执后绿圈；画进共享帧供引擎 OCR 核验落点。
+  val cursor = MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/cursor")
+  cursor.setMethodCallHandler { call,result ->
+   when(call.method) {
+    "canShow" -> result.success(CursorMarker.canShow(this))
+    "intent" -> {
+     CursorMarker.intent(this,
+      (call.argument<Number>("x") ?: 0).toDouble(),(call.argument<Number>("y") ?: 0).toDouble(),
+      call.argument<Number>("frameW")?.toDouble(),call.argument<Number>("frameH")?.toDouble())
+     result.success(null)
+    }
+    "ack" -> {
+     CursorMarker.ack(this,
+      (call.argument<Number>("x") ?: 0).toDouble(),(call.argument<Number>("y") ?: 0).toDouble(),
+      call.argument<Number>("frameW")?.toDouble(),call.argument<Number>("frameH")?.toDouble())
+     result.success(null)
+    }
+    else -> result.notImplemented()
+   }
+  }
  }
  override fun onDestroy() {
   billTextLoop.close()
@@ -317,6 +337,7 @@ class MainActivity: FlutterActivity() {
   UsbLaunchBridge.detachOwner(this)
   // Flutter 引擎随 Activity 一起销毁，pill 不再刷新；必须摘掉窗口避免残留。
   OverlayPill.hide();OverlayPill.setNotifier(null)
+  CursorMarker.remove()
   ticket?.let { ScreenShareService.revoke(it) };ticket=null
   pending?.error("cancelled","共享授权已中断，请重新开启",null);pending=null
   super.onDestroy()

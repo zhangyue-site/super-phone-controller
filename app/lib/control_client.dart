@@ -475,6 +475,7 @@ class ControlClient implements LocalVisionSource {
         write: service.writeLocalControl,
         disconnect: service.disconnect,
         onError: _relayErrorSink,
+        onCursor: _cursorSink,
       );
       _relay = relay;
       _keepalive('keepaliveHold');
@@ -494,6 +495,22 @@ class ControlClient implements LocalVisionSource {
     unawaited(_keepaliveChannel
         .invokeMethod<void>(method, {'tag': 'task'})
         .catchError((_) {}));
+  }
+
+  /// vc90 反馈闭环：把动作意图/回执坐标交给原生悬浮窗画光标
+  /// （红圈=分发前的意图坐标，绿圈=板端回执后）。通道不可用时静默忽略。
+  static const MethodChannel _cursorChannel = MethodChannel('pcflash/cursor');
+  void _cursorSink(
+      String phase, double x, double y, double? frameW, double? frameH) {
+    unawaited(_cursorChannel.invokeMethod<void>(
+      phase == 'ack' ? 'ack' : 'intent',
+      {
+        'x': x,
+        'y': y,
+        if (frameW != null) 'frameW': frameW,
+        if (frameH != null) 'frameH': frameH,
+      },
+    ).catchError((_) {}));
   }
 
   /// Every relay failure enters here once. Only a capability denial starts a
@@ -713,6 +730,7 @@ class ControlClient implements LocalVisionSource {
       write: board.writeLocalControl,
       disconnect: board.disconnect,
       onError: _relayErrorSink,
+      onCursor: _cursorSink,
     );
     _relay = next;
     try {
@@ -855,6 +873,7 @@ class ControlClient implements LocalVisionSource {
         write: board.writeLocalControl,
         disconnect: board.disconnect,
         onError: _relayErrorSink,
+        onCursor: _cursorSink,
       );
       _relay = next;
       await next.start(beforePolling: current);

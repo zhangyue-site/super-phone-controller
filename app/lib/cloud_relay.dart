@@ -19,6 +19,11 @@ class CloudRelay {
   final Future<void> Function() disconnect;
   final void Function(Object) onError;
   final Future<void> Function(bool hid)? beforeModeChange;
+
+  /// vc90 反馈闭环：动作分发/回执时回调目标坐标（共享帧空间），
+  /// App 用悬浮窗在共享帧上画红/绿光标，供引擎 OCR 核验真实落点。
+  final void Function(String phase, double x, double y, double? frameW,
+      double? frameH)? onCursor;
   bool recoverableNetworkFailure = false;
   bool taskStopAcknowledged = false;
   bool closeFinished = false;
@@ -54,6 +59,7 @@ class CloudRelay {
       required this.disconnect,
       required this.onError,
       this.beforeModeChange,
+      this.onCursor,
       this.retiredNonce,
       void Function(Map<String, Object>)? onTrace,
       bool tracePhases = false,
@@ -242,6 +248,19 @@ class CloudRelay {
       _activeSeq = seq;
       _trace.setAction(op, seq);
       SafeDiagnostics.record('relay_action', phase: _phase, op: op, seq: seq);
+      // vc90 反馈闭环：动作自带目标坐标（共享帧空间）时，分发前红圈=意图坐标、
+      // 板端回执后绿圈；悬浮窗画进共享帧供引擎 OCR 核验真实落点。
+      // 无坐标的动作（维护/模式切换/整句文本）不画。
+      final cursorX = command["x"], cursorY = command["y"];
+      final cursorW = command["frameW"] ?? command["w"],
+          cursorH = command["frameH"] ?? command["h"];
+      void emitCursor(String phase) {
+        final sink = onCursor;
+        if (sink == null || cursorX is! num || cursorY is! num) return;
+        sink(phase, cursorX.toDouble(), cursorY.toDouble(),
+            cursorW is num ? cursorW.toDouble() : null,
+            cursorH is num ? cursorH.toDouble() : null);
+      }
       final maintenanceAction = op == 11 || op == 12;
       final ttl = command['expiresIn'];
       if (maintenanceAction && (ttl is! int || ttl < 1 || ttl > 15)) {
@@ -273,6 +292,7 @@ class CloudRelay {
         if (_closed) return;
       }
       // Exactly one ATT write. No retry after a timeout or uncertain receipt.
+      emitCursor('intent');
       _phase = 'write';
       dispatched = true; // dispatch-fence: 写出去了就不能再当"可安全重连"处理
       _trace.phase('write');
@@ -307,6 +327,7 @@ class CloudRelay {
             const Duration(milliseconds: 100));
       }
       if (receipt == null) throw TimeoutException("板端回执未确认，不会重发");
+      emitCursor('ack');
       _phase = 'ack';
       _trace.phase('ack');
       final result = await bounded(
