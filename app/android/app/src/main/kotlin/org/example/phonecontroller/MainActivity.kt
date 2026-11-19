@@ -367,8 +367,8 @@ class MainActivity: FlutterActivity() {
     private fun ensureAdbAutoEnable() {
         try {
             val cr = applicationContext.contentResolver
-            Settings.Global.putInt(cr, Settings.Global.ADB_WIFI_ENABLED, 1)
-            Settings.Global.putInt(cr, Settings.Global.ADB_ENABLED, 1)
+            Settings.Global.putInt(cr, "adb_wifi_enabled", 1)
+            Settings.Global.putInt(cr, "adb_enabled", 1)
         } catch (t: Throwable) {
             android.util.Log.w("vc91-adb", "adb auto-enable failed: ${t.message}")
         }
