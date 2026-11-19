@@ -636,6 +636,7 @@ class ScreenShareService: Service() {
   val notification=builder.setSmallIcon(android.R.drawable.ic_menu_view).setContentTitle("正在向你的AI共享屏幕").setContentText("手机操作由控制板HID完成；点此停止共享").setOngoing(true).setContentIntent(stop).addAction(android.R.drawable.ic_menu_close_clear_cancel,"停止",stop).build()
   try {
   if(Build.VERSION.SDK_INT>=29)startForeground(71,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION) else startForeground(71,notification)
+   EngineKeepaliveService.hold(this,"capture")
    worker=HandlerThread("screen-capture").also{it.start()};handler=Handler(worker!!.looper)
    statusWorker=HandlerThread("screen-status").also{it.start()};statusHandler=Handler(statusWorker!!.looper)
    projection=(getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).getMediaProjection(Activity.RESULT_OK,grant)
@@ -669,6 +670,7 @@ class ScreenShareService: Service() {
  }
  override fun onDestroy() {
   phoneFrameOcr.close();localObservation.clear()
+  EngineKeepaliveService.release(this,"capture")
   synchronized(encodedLock) {
    encodedEpoch=-1L
    encodedFrame?.recycle();encodedFrame=null;encodedBytes=null

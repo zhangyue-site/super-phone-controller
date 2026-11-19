@@ -10,6 +10,7 @@ import 'screen_share.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble_ota_service.dart';
 
@@ -476,6 +477,7 @@ class ControlClient implements LocalVisionSource {
         onError: _relayErrorSink,
       );
       _relay = relay;
+      _keepalive('keepaliveHold');
       await relay.start();
       if (_closed) {
         await relay.close();
@@ -483,6 +485,15 @@ class ControlClient implements LocalVisionSource {
       }
       _startHealWatch();
     }
+  }
+
+  /// vc90 灭屏保活：任务窗口（授权成功→会话关闭）请求前台服务 + WakeLock，
+  /// MIUI 灭屏也保持云端轮询。通道不可用（测试环境/无插件）时静默忽略。
+  static const MethodChannel _keepaliveChannel = MethodChannel('pcflash/app');
+  void _keepalive(String method) {
+    unawaited(_keepaliveChannel
+        .invokeMethod<void>(method, {'tag': 'task'})
+        .catchError((_) {}));
   }
 
   /// Every relay failure enters here once. Only a capability denial starts a
@@ -943,6 +954,7 @@ class ControlClient implements LocalVisionSource {
       try {
         if (relay != null) await relay.close(reason: 'owner_shutdown');
       } finally {
+        _keepalive('keepaliveRelease');
         _ticket = null;
         _expires = null;
         _board = null;

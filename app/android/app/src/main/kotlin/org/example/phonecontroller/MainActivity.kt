@@ -194,6 +194,8 @@ class MainActivity: FlutterActivity() {
       result.success(null)
      } catch(_: Exception) { result.error("browser_unavailable","无法打开官方下载页",null) }
     }
+    "keepaliveHold" -> { EngineKeepaliveService.hold(this,call.argument<String>("tag") ?: "task");result.success(null) }
+    "keepaliveRelease" -> { EngineKeepaliveService.release(this,call.argument<String>("tag") ?: "task");result.success(null) }
     else -> result.notImplemented()
    }
   }

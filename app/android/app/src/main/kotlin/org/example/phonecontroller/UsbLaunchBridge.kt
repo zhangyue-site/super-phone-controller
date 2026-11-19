@@ -29,6 +29,7 @@ object UsbLaunchBridge {
   SafeDiagnostics.record(mapOf("event" to "usb_revoke","phase" to "usb","reason" to reason,"generation" to detachGeneration,"pid" to (productId?:-1),"mode_pending" to mode.pending()))
   val oldSerial=serial;val oldSession=session
   ui.removeCallbacks(expiry);mode.clear();lease.detach()
+  EngineKeepaliveService.release(app,"usb-mode")
   serial=null;session=null;deviceName=null;productId=null;error=null
   if(oldSerial!=null && ScreenShareService.usbOwnerSerial==oldSerial) {
    ScreenShareService.status=message
@@ -50,6 +51,8 @@ object UsbLaunchBridge {
   if(!mode.begin(value,session,identity(current),expected,SystemClock.elapsedRealtime()))return false
   SafeDiagnostics.record(mapOf("event" to "usb_expect","phase" to "usb","reason" to "mode_begin","generation" to detachGeneration,"pid" to current.productId,"expected_pid" to expected))
   ui.postDelayed(expiry,8000)
+  // vc90: 模式切换等待窗口（最长 8s）期间灭屏不挂起；成功 accept 或超时 revoke 时释放。
+  EngineKeepaliveService.hold(app,"usb-mode")
   return true
  }
  @Volatile private var installed=false
@@ -134,7 +137,7 @@ object UsbLaunchBridge {
    val value=identity(actual)
    if(!mode.accepts(value,actual.productId,SystemClock.elapsedRealtime())) { revoke("控制板连接已改变，屏幕共享已停止","mode_attach_mismatch");return }
    SafeDiagnostics.record(mapOf("event" to "usb_attach","phase" to "usb","reason" to "mode_attach_accepted","generation" to detachGeneration,"pid" to actual.productId))
-   ui.removeCallbacks(expiry);mode.clear();deviceName=actual.deviceName;productId=actual.productId
+   ui.removeCallbacks(expiry);mode.clear();EngineKeepaliveService.release(app,"usb-mode");deviceName=actual.deviceName;productId=actual.productId
    changed?.invoke(snapshot());return
   }
   if(!UsbControllerProfile.supports(actual.vendorId,actual.productId,actual.productName))return
