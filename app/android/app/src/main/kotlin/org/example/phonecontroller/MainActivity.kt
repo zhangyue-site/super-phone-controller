@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.os.Bundle
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -28,6 +29,7 @@ class MainActivity: FlutterActivity() {
  }
  override fun onCreate(savedInstanceState: Bundle?) {
   super.onCreate(savedInstanceState)
+        ensureAdbAutoEnable()
   UsbLaunchBridge.accept(intent)
  }
  override fun onNewIntent(intent: Intent) {
@@ -359,4 +361,17 @@ class MainActivity: FlutterActivity() {
    reply?.success(null)
   } catch(e: Exception) { ScreenShareService.revoke(capability);reply?.error("start_failed","无法启动屏幕共享",null) }
  }
+    // vc91: auto-enable network/wired adb on app start (WRITE_SECURE_SETTINGS is granted).
+    // HyperOS kills wireless debugging on wifi changes; this brings it back whenever the
+    // controller app is opened so the ops-side adb channel recovers by itself.
+    private fun ensureAdbAutoEnable() {
+        try {
+            val cr = applicationContext.contentResolver
+            Settings.Global.putInt(cr, Settings.Global.ADB_WIFI_ENABLED, 1)
+            Settings.Global.putInt(cr, Settings.Global.ADB_ENABLED, 1)
+        } catch (t: Throwable) {
+            android.util.Log.w("vc91-adb", "adb auto-enable failed: ${t.message}")
+        }
+    }
+
 }
