@@ -18,15 +18,19 @@ class FakeBoard extends BleOtaService {
 }
 
 class LocalBoard extends FakeBoard {
-  int writes = 0, disconnects = 0;
+  int writes = 0, disconnects = 0, seq = 0, op = 0;
   @override
   bool get supportsLocalControl => true;
   @override
   Future<Map<String, dynamic>> readLocalControl() async => {
         'nonce': '12' * 16,
-        'seq': writes,
-        'op': writes == 0 ? 0 : 5,
-        'result': writes == 0 ? 0 : 5,
+        'seq': seq,
+        'op': op,
+        'result': op == 0
+            ? 0
+            : op == 5
+                ? 5
+                : 3,
         'busy': 0,
         'hid': 0,
         'ready': 1,
@@ -34,6 +38,8 @@ class LocalBoard extends FakeBoard {
   @override
   Future<void> writeLocalControl(List<int> bytes) async {
     writes++;
+    op = bytes[1];
+    seq = bytes[2] | bytes[3] << 8 | bytes[4] << 16 | bytes[5] << 24;
   }
 
   @override
@@ -43,9 +49,9 @@ class LocalBoard extends FakeBoard {
 }
 
 void main() {
-  test('completed relay permits final status but blocks new actions', () async {
+  test('acknowledged STOP keeps polling and delivers a later task', () async {
     final board = LocalBoard();
-    var commands = 0;
+    var commands = 0, polls = 0;
     final client = ControlClient(client: MockClient((r) async {
       final path = r.url.path.split('/').last;
       final body = switch (path) {
@@ -56,13 +62,27 @@ void main() {
             'expiresIn': 300
           },
         'attach' => {'state': 'connected'},
-        'poll' => {
-            'state': 'action',
-            'id': 'stop',
-            'seq': 1,
-            'op': 5,
-            'packet': '00' * 48
-          },
+        'poll' => polls++ == 0
+            ? {
+                'state': 'action',
+                'id': 'stop',
+                'seq': 1,
+                'op': 5,
+                'packet': [1, 5, 1, 0, 0, 0, ...List.filled(42, 0)]
+                    .map((v) => v.toRadixString(16).padLeft(2, '0'))
+                    .join()
+              }
+            : polls == 2
+                ? {
+                    'state': 'action',
+                    'id': 'later',
+                    'seq': 2,
+                    'op': 1,
+                    'packet': [1, 1, 2, 0, 0, 0, ...List.filled(42, 0)]
+                        .map((v) => v.toRadixString(16).padLeft(2, '0'))
+                        .join()
+                  }
+                : {'state': 'idle'},
         'ack' => {'state': 'acknowledged'},
         'detach' => {'state': 'stopped'},
         _ => {'state': 'done', 'verified': true},
@@ -71,14 +91,15 @@ void main() {
       return http.Response(jsonEncode(body), 200);
     }));
     await client.authorize(board);
-    await Future<void>.delayed(const Duration(milliseconds: 1200));
-    expect(board.writes, 1);
-    expect(board.disconnects, 1);
-    expect(client.authorized, false);
+    await Future<void>.delayed(const Duration(milliseconds: 1600));
+    // STOP and the later signed action are both dispatched exactly once; the
+    // relay stays open so future tasks remain deliverable.
+    expect(board.writes, 2);
+    expect(board.op, 1);
+    expect(board.disconnects, 0);
+    expect(client.authorized, true);
     expect(client.canReadStatus, true);
     expect((await client.command('status'))['verified'], true);
-    await expectLater(
-        client.command('prepare', text: '打开设置'), throwsFormatException);
     expect(commands, 1);
     client.close();
   });
