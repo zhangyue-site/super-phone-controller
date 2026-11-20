@@ -517,9 +517,22 @@ class ControlClient implements LocalVisionSource {
   /// bounded re-authorization; anything else keeps the old terminal stop.
   void _relayErrorSink(Object error) {
     if (_closed) return;
+    final relay = _relay;
     _relayError = error;
     _stopHealWatch();
-    if (RelaySelfHeal.permissionError(error)) _beginSelfHeal(error);
+    final leaseHeld = error is ControlHttpFailure && error.relayLeaseExpired;
+    // A transport failure before dispatch (or after a confirmed receipt) may
+    // reconnect through the same full handshake. A lease hold directly after
+    // an acknowledged STOP is also safe to re-establish: no task is running.
+    final transportRecoverable =
+        relay != null && relay.recoverableNetworkFailure && !leaseHeld;
+    final stoppedLeaseRecoverable =
+        leaseHeld && relay != null && relay.taskStopAcknowledged;
+    if (RelaySelfHeal.permissionError(error) ||
+        transportRecoverable ||
+        stoppedLeaseRecoverable) {
+      _beginSelfHeal(error);
+    }
   }
 
   DateTime? _lastHealAt;

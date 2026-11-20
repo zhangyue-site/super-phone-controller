@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- vc92 灭屏保活：任务窗口内持 WifiLock，避免灭屏后 Wi-Fi 休眠导致 cloud poll 断流。 -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <!-- 输入法中转打字（paste_text）：development 级权限，安装后必须一次性
          adb shell pm grant 授权；未授权时运行时降级报 ime_not_authorized。 -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"/>

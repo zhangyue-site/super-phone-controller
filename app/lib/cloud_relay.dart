@@ -1,6 +1,7 @@
 import 'gateway_recovery.dart';
 import 'diagnostics.dart';
 import "dart:async";
+import 'package:http/http.dart' as http;
 import 'relay_phase_trace.dart';
 import 'ime_relay.dart';
 
@@ -51,6 +52,8 @@ class CloudRelay {
   }
 
   bool _busy = false, _closed = false;
+  int _pollRetryAttempt = 0;
+  Duration? _pollRetryAt;
   late final RelayPhaseTrace _trace;
   CloudRelay(
       {required this.post,
@@ -147,6 +150,8 @@ class CloudRelay {
   Future<void> _tick() async {
     if (_busy || _closed) return;
     final now = _elapsed();
+    final retryAt = _pollRetryAt;
+    if (retryAt != null && now < retryAt) return;
     final fast =
         _lastControlAt != null && (now - _lastControlAt!).inMilliseconds < 3000;
     if (!fast &&
@@ -182,9 +187,14 @@ class CloudRelay {
         requestClock = Stopwatch()..start();
         command = await post("poll", {"nonce": _nonce});
       }
+      _pollRetryAttempt = 0;
+      _pollRetryAt = null;
       if (_closed) return;
       if (command["state"] == "done") { _restoreTaskIme(); return; }
       if (command["state"] != "action" && command["state"] != "action_text") return;
+      // A new signed action means the relay is active again; a previous STOP
+      // no longer describes this session.
+      taskStopAcknowledged = false;
       // 任务期把默认输入法切到无界面中转输入法（避免第三方键盘触发误分类/污染帧流），任务结束恢复。
       _imeRestoreTimer?.cancel();
       _taskImeOriginal ??= await ImeRelay.activate();
@@ -349,13 +359,41 @@ class CloudRelay {
       }
       if (op == 11) _upgradeRequested = false;
       if (op == 5) {
+        // A STOp revokes the old input session, not the relay itself. Closing
+        // here cancelled the poll timer, so no later wake/new task could ever
+        // be delivered. Keep the same authenticated session polling; the next
+        // poll re-adopts the board turn after the server-side STOP.
         taskStopAcknowledged = true;
-        await close(reason: 'opcode_stop');
-        onError(TaskRelayStopped());
+        _restoreTaskIme();
+        _phase = 'poll';
+        _trace.phase('poll', clearAction: true);
+        _activeOp = null;
+        _activeSeq = null;
+        SafeDiagnostics.record('relay_task_stopped', phase: 'poll', op: op);
+        return;
       }
     } catch (error) {
       if (_closed) return; // Late completions belong to the closed session.
       _trace.fail(error);
+      // A transport failure before any packet is written is not a session
+      // failure. Keep the relay and its timer alive and retry with a capped
+      // backoff: screen-off Wi-Fi suspension must not become a detach plus a
+      // permanently stopped poll loop.
+      if (!dispatched && _retryablePollFailure(error)) {
+        _pollRetryAttempt++;
+        final delay = _pollRetryDelay(_pollRetryAttempt);
+        _pollRetryAt = _elapsed() + delay;
+        SafeDiagnostics.record('relay_poll_retry',
+            phase: _phase,
+            reason: 'transport',
+            error: error,
+            httpStatus: error is ControlHttpFailure ? error.status : null,
+            attempt: _pollRetryAttempt,
+            remainingMs: delay.inMilliseconds);
+        return;
+      }
+      _pollRetryAttempt = 0;
+      _pollRetryAt = null;
       // A lost heartbeat ACK may reconnect only through the existing STOP,
       // detach and fresh-nonce handshake. Never replay its issued packet.
       // Input or USB-mode ACK uncertainty still cannot opt into recovery.
@@ -375,6 +413,28 @@ class CloudRelay {
       _trace.finish();
       _busy = false;
     }
+  }
+
+  static Duration _pollRetryDelay(int attempt) {
+    const seconds = [1, 2, 4, 8, 16, 30, 30, 30];
+    final index = attempt <= 1
+        ? 0
+        : (attempt - 1 >= seconds.length ? seconds.length - 1 : attempt - 1);
+    return Duration(seconds: seconds[index]);
+  }
+
+  /// Only failures that happen before a packet is written and that cannot be
+  /// fixed by a fresh capability are retried in place. Capability denials,
+  /// lease holds and validation/format failures keep their existing terminal
+  /// recovery paths.
+  static bool _retryablePollFailure(Object error) {
+    if (error is TimeoutException || error is http.ClientException) return true;
+    if (error is ControlHttpFailure) {
+      return !error.relayDenial &&
+          !error.relayLeaseExpired &&
+          (error.status >= 500 || error.status == 408 || error.status == 429);
+    }
+    return false;
   }
 
   /// The board acks its status ping every few seconds. A long silence with

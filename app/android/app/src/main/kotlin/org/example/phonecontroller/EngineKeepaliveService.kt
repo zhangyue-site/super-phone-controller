@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -45,14 +46,16 @@ class EngineKeepaliveService : Service() {
   private const val STOP_DEBOUNCE_MS=800L
   private val holds: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
   @Volatile private var wakeLock: PowerManager.WakeLock?=null
+  @Volatile private var wifiLock: WifiManager.WifiLock?=null
   private val ui=Handler(Looper.getMainLooper())
   private val stopCheck=Runnable {
    if(holds.isEmpty()) {
     wakeLock?.let{if(it.isHeld)it.release()};wakeLock=null
+    wifiLock?.let{if(it.isHeld)it.release()};wifiLock=null
     SafeDiagnostics.record(mapOf("event" to "keepalive_stop","phase" to "keepalive"))
    }
   }
-  /** 任务窗口开始。持 partial WakeLock；前台服务启动失败（后台限制）仅降级记录。 */
+  /** 任务窗口开始。持 partial WakeLock + WifiLock；前台服务启动失败（后台限制）仅降级记录。 */
   fun hold(context: Context,tag: String) {
    val app=context.applicationContext
    if(!holds.add(tag))return
@@ -67,6 +70,20 @@ class EngineKeepaliveService : Service() {
     }
    } catch(e: Exception) {
     SafeDiagnostics.record(mapOf("event" to "keepalive_wakelock_failed","phase" to "keepalive","reason" to (e.message?:"wake")))
+   }
+   try {
+    if(wifiLock==null) {
+     val wifi=app.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+     if(wifi!=null) {
+      @Suppress("DEPRECATION")
+      val lock=wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF,"pcflash:EngineKeepaliveWifi")
+      lock.setReferenceCounted(false);lock.acquire()
+      wifiLock=lock
+     }
+    }
+   } catch(e: Exception) {
+    // Wi-Fi lock is best effort; a partial WakeLock still keeps the poller alive.
+    SafeDiagnostics.record(mapOf("event" to "keepalive_wifilock_failed","phase" to "keepalive","reason" to (e.message?:"wifi")))
    }
    if(holds.size==1) {
     try {
