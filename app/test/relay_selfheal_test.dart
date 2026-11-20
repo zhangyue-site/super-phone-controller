@@ -188,7 +188,11 @@ void main() {
           if (op == 'detach') return http.Response('{}', 403);
           if (op == 'poll') {
             polls++;
-            return http.Response(jsonEncode({'code': 'relay_lease_expired'}), 403);
+            // A persistent relay capability denial is what the bounded
+            // self-heal budget covers. A bare 409 lease is app-owned recovery,
+            // not automatic re-authorization.
+            return http.Response(
+                jsonEncode({'reply': 'relay expired; reconcile first'}), 403);
           }
           if (op == 'authorize') {
             authorizations++;
@@ -260,15 +264,30 @@ void main() {
     await client.shutdown();
   });
 
-  test('non-capability relay failure never re-authorizes', () async {
+  test('non-capability, non-transport relay failure never re-authorizes',
+      () async {
     final board = HealBoard();
-    var authorizations = 0;
+    var authorizations = 0, polls = 0;
     final client = ControlClient(
         healDelay: (_) => const Duration(milliseconds: 5),
         client: MockClient((request) async {
           final op = request.url.path.split('/').last;
           if (op == 'detach') return http.Response('{}', 403);
-          if (op == 'poll') return http.Response('{}', 500);
+          if (op == 'poll') {
+            polls++;
+            // Malformed action shape is a protocol/validation failure before
+            // dispatch: non-capability, non-transport and not a stopped lease.
+            // It must stay terminal exactly like the old contract.
+            return http.Response(
+                jsonEncode({
+                  'state': 'action',
+                  'id': 'bad',
+                  'seq': 1,
+                  'op': 1,
+                  'packet': 'invalid'
+                }),
+                200);
+          }
           if (op == 'authorize') {
             authorizations++;
             return http.Response(
@@ -288,10 +307,55 @@ void main() {
           return http.Response('{}', 404);
         }));
     await client.authorize(board);
-    await waitFor(() => !client.authorized && client.selfHealStatus == null);
+    await waitFor(() => !client.authorized && polls > 0);
     await Future<void>.delayed(const Duration(milliseconds: 300));
-    expect(authorizations, 1);
+    expect(authorizations, 1, reason: 'no capability was denied');
+    expect(client.selfHealing, false);
+    expect(client.selfHealStatus, isNull);
     expect(client.selfHealExhausted, false);
+    expect(board.writes, 0);
+    await client.shutdown();
+  });
+
+  test('pre-dispatch transport 5xx retries in place without re-authorization',
+      () async {
+    final board = HealBoard();
+    var authorizations = 0, polls = 0;
+    final client = ControlClient(
+        healDelay: (_) => const Duration(milliseconds: 5),
+        client: MockClient((request) async {
+          final op = request.url.path.split('/').last;
+          if (op == 'detach') return http.Response('{}', 403);
+          if (op == 'poll') {
+            polls++;
+            return http.Response('{}', 500);
+          }
+          if (op == 'authorize') {
+            authorizations++;
+            return http.Response(
+                jsonEncode({
+                  'ticket': 't' * 43,
+                  'expiresIn': 300,
+                  'scope': 'phone-commands'
+                }),
+                200);
+          }
+          if (op == 'challenge') {
+            return http.Response(jsonEncode({'challenge': 'a' * 64}), 200);
+          }
+          if (op == 'attach') {
+            return http.Response(jsonEncode({'state': 'connected'}), 200);
+          }
+          return http.Response('{}', 404);
+        }));
+    await client.authorize(board);
+    await waitFor(() => polls >= 2);
+    expect(authorizations, 1, reason: 'transport retry keeps the same grant');
+    expect(client.authorized, true);
+    expect(client.selfHealing, false);
+    expect(client.selfHealStatus, isNull);
+    expect(client.selfHealExhausted, false);
+    expect(board.writes, 0);
     await client.shutdown();
   });
 

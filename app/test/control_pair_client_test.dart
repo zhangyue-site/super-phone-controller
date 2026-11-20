@@ -256,17 +256,16 @@ void main() {
     final client = ControlClient(client: MockClient((request) async {
       final path = request.url.path.split('/').last;
       paths.add(path);
+      if (path == 'poll') {
+        // A non-stopped lease expiry closes the relay without auto-heal, so
+        // the subsequent refresh must still not renew through BLE proof.
+        return http.Response(
+            jsonEncode({'code': 'relay_lease_expired'}), 409);
+      }
       final result = switch (path) {
         'challenge' => {'challenge': 'a' * 64},
         'authorize' => grant(),
         'attach' => {'state': 'connected'},
-        'poll' => {
-            'state': 'action',
-            'id': 'stop',
-            'seq': 1,
-            'op': 5,
-            'packet': '00' * 48
-          },
         'ack' => {'state': 'acknowledged'},
         _ => {'state': 'stopped'},
       };

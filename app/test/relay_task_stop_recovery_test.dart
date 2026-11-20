@@ -38,7 +38,7 @@ void main() {
         'acknowledged task STOP recovers passive gateway with expired=$expired',
         () async {
       final board = StopBoard(), calls = <String>[];
-      var polls = 0, authorizations = 0;
+      var polls = 0, authorizations = 0, leaseSent = false;
       final packet = [1, 5, 1, 0, 0, 0, ...List.filled(42, 0)]
           .map((v) => v.toRadixString(16).padLeft(2, '0'))
           .join();
@@ -46,6 +46,30 @@ void main() {
         final op = request.url.path.split('/').last;
         calls.add(op);
         if (op == 'authorize') authorizations++;
+        if (op == 'poll') {
+          final first = polls++ == 0;
+          if (first) {
+            return http.Response(
+                jsonEncode({
+                  'state': 'action',
+                  'id': 'task-stop',
+                  'seq': 1,
+                  'op': 5,
+                  'packet': packet
+                }),
+                200);
+          }
+          // STOP no longer closes the relay. A valid parent ticket keeps
+          // polling; a lease expiry is the new terminal event that triggers
+          // the full self-heal. An already-expired ticket is covered by the
+          // ticket-expiry watch path instead, so do not race both triggers.
+          if (!expired && !leaseSent) {
+            leaseSent = true;
+            return http.Response(
+                jsonEncode({'code': 'relay_lease_expired'}), 409);
+          }
+          return http.Response(jsonEncode({'state': 'idle'}), 200);
+        }
         return http.Response(
             jsonEncode(switch (op) {
               'challenge' => {'challenge': 'a' * 64},
@@ -55,15 +79,6 @@ void main() {
                   'expiresIn': expired && authorizations == 1 ? 1 : 300
                 },
               'renew' => {'scope': 'phone-commands', 'expiresIn': 300},
-              'poll' => polls++ == 0
-                  ? {
-                      'state': 'action',
-                      'id': 'task-stop',
-                      'seq': 1,
-                      'op': 5,
-                      'packet': packet
-                    }
-                  : {'state': 'idle'},
               'ack' => {'state': 'acknowledged'},
               'command' => {'state': 'stopped'},
               _ => {'state': 'idle'}
@@ -72,37 +87,31 @@ void main() {
       }));
       try {
         await client.authorize(board);
-        await until(() => board.disconnects > 0);
+        await until(() => board.writes == 1);
         await Future<void>.delayed(const Duration(milliseconds: 30));
         expect(board.writes, 1, reason: 'only original STOP, never any input');
-        if (expired) {
-          await Future<void>.delayed(const Duration(milliseconds: 650));
-          expect(client.canReadStatus, false);
+        if (!expired) {
+          // Acknowledged STOP keeps the same authenticated session polling:
+          // no close, no detach and no TaskRelayStopped error.
+          expect(board.disconnects, 0);
+          expect(client.authorized, true);
+          expect(calls.where((x) => x == 'detach'), isEmpty);
+          // The stopped lease then reaches the error sink and must start a
+          // full challenge+authorize+attach handshake.
+          await until(() => leaseSent);
         }
-        expect(client.canRecoverGateway, true,
-            reason:
-                'stopped input authority must not kill passive future-task transport');
-        await client.recoverGateway(
-            check: () async {},
-            reconnect: () async {
-              calls.add('fresh-nonce');
-              board.reconnect();
-            });
+        // expired=true reaches the same full re-handshake through the ticket
+        // expiry watch while the STOP session is still polling.
+        await until(() => authorizations >= 2 && client.authorized);
         expect(client.authorized, true);
-        expect(board.writes, 1);
+        expect(board.writes, 1, reason: 'old STOP is never replayed');
         expect(calls.where((x) => x == 'command').length, 0,
             reason:
                 'ACKed STOP already reconciled the old task; preserve new queued requests');
-        expect(calls.where((x) => x == 'detach').length, 0);
-        if (expired) {
-          expect(authorizations, 2);
-          expect(calls.lastIndexOf('authorize'),
-              lessThan(calls.lastIndexOf('attach')));
-        } else {
-          expect(authorizations, 1);
-          expect(calls.indexOf('fresh-nonce'),
-              lessThan(calls.lastIndexOf('attach')));
-        }
+        expect(calls.where((x) => x == 'renew'), isEmpty,
+            reason: 'self-heal always re-proves capability, not renew');
+        expect(calls.where((x) => x == 'challenge').length, 2);
+        expect(calls.where((x) => x == 'attach').length, 2);
       } finally {
         await client.shutdown();
       }

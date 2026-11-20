@@ -524,8 +524,13 @@ class ControlClient implements LocalVisionSource {
     // A transport failure before dispatch (or after a confirmed receipt) may
     // reconnect through the same full handshake. A lease hold directly after
     // an acknowledged STOP is also safe to re-establish: no task is running.
-    final transportRecoverable =
-        relay != null && relay.recoverableNetworkFailure && !leaseHeld;
+    // recoverableNetworkFailure alone also covers validation/protocol failures
+    // before dispatch; those must stay terminal, so require a real transport
+    // error as well.
+    final transportRecoverable = relay != null &&
+        relay.recoverableNetworkFailure &&
+        !leaseHeld &&
+        GatewayRecoveryGate.transportError(error);
     final stoppedLeaseRecoverable =
         leaseHeld && relay != null && relay.taskStopAcknowledged;
     if (RelaySelfHeal.permissionError(error) ||
