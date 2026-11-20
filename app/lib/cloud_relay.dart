@@ -358,6 +358,17 @@ class CloudRelay {
         _heartbeatAt = _elapsed();
       }
       if (op == 11) _upgradeRequested = false;
+      // Idempotent STOP: a repeated identical STOP (same op+seq) was already
+      // written and acked once. Re-affirm the stopped state without touching
+      // the board again; the relay just keeps polling.
+      if (op == 5 && op == _lastOp && seq == _lastSeq) {
+        taskStopAcknowledged = true;
+        _phase = 'poll';
+        _trace.phase('poll', clearAction: true);
+        _activeOp = null;
+        _activeSeq = null;
+        return;
+      }
       if (op == 5) {
         // A STOp revokes the old input session, not the relay itself. Closing
         // here cancelled the poll timer, so no later wake/new task could ever
