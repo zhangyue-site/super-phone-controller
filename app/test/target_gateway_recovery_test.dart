@@ -68,7 +68,12 @@ void main() {
         final op = request.url.path.split('/').last;
         if (op == 'poll' && firstPoll) {
           firstPoll = false;
-          throw http.ClientException('transient transport');
+          // New contract: pre-dispatch transport failures retry in place, so
+          // app-owned recovery is entered through a non-stopped lease expiry,
+          // which closes the relay without auto-heal. The physical-owner and
+          // singleflight guards below still gate every recovery attempt.
+          return http.Response(
+              jsonEncode({'code': 'relay_lease_expired'}), 409);
         }
         if (op == 'command') requests++;
         return http.Response(

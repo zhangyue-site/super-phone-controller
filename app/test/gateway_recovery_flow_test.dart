@@ -72,7 +72,13 @@ void main() {
         }
         if (op == 'poll' && firstPoll) {
           firstPoll = false;
-          throw http.ClientException('test network loss');
+          // New contract: a pre-dispatch transport failure retries in place,
+          // so it can no longer reach the app-owned recovery entry. A lease
+          // expiry without an acknowledged STOP still closes the relay without
+          // automatic self-heal; that close is the recovery evidence below.
+          // (The acknowledged-STOP + lease path lives in the task-stop tests.)
+          return http.Response(
+              jsonEncode({'code': 'relay_lease_expired'}), 409);
         }
         if (op == 'detach') return http.Response('{}', 403);
         if (op == 'renew' && scenario == 'forbidden') {
