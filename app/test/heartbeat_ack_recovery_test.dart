@@ -105,6 +105,7 @@ void main() {
       () async {
     final board = HeartbeatBoard(), calls = <String>[], nonces = <String>[];
     var delivered = false, acks = 0, authorizations = 0;
+    var leaseArmed = false, leaseSent = false;
     final client = ControlClient(client: MockClient((request) async {
       final op = request.url.path.split('/').last;
       calls.add(op);
@@ -125,6 +126,11 @@ void main() {
               'expiresIn': 15,
             }),
             200);
+      }
+      if (op == 'maintenance' && leaseArmed && !leaseSent) {
+        leaseSent = true;
+        return http.Response(
+            jsonEncode({'code': 'relay_lease_expired'}), 409);
       }
       if (op == 'ack') {
         acks++;
@@ -147,9 +153,20 @@ void main() {
           200);
     }));
     await client.authorize(board);
-    await fixture.until(() => client.canRecoverGateway);
+    // The transport ACK failure still forces recovery, but it is now the
+    // in-place self-heal: the same board nonce is re-attached, so this path
+    // cannot mint a new nonce before the old issued heartbeat is reconciled.
+    await fixture.until(
+        () => authorizations == 2 && client.authorized && !client.selfHealing);
+    expect(nonces, ['12' * 16, '12' * 16],
+        reason: 'the forced ACK-loss recovery adopts the same nonce');
     expect(board.writes, 1);
     expect(acks, 1);
+    // An expired lease without an acknowledged STOP is the terminal event
+    // that closes this relay without another in-place self-heal, so the
+    // explicit STOP-before-new-nonce recovery path becomes reachable.
+    leaseArmed = true;
+    await fixture.until(() => leaseSent && client.canRecoverGateway);
     calls.clear();
     await client.recoverGateway(
         check: () async {},
@@ -161,8 +178,9 @@ void main() {
     expect(calls.indexOf('command'), greaterThanOrEqualTo(0));
     expect(calls.indexOf('command'), lessThan(calls.indexOf('reconnect')));
     expect(calls.indexOf('reconnect'), lessThan(calls.indexOf('attach')));
-    expect(nonces, ['12' * 16, '34' * 16]);
-    expect(authorizations, 1,
+    // Only the final recovery may rotate the nonce, and only after STOP.
+    expect(nonces, ['12' * 16, '12' * 16, '34' * 16]);
+    expect(authorizations, 2,
         reason: 'reuse valid parent grant, not a new authorization');
     expect(board.writes, 1,
         reason: 'old heartbeat and input packets are not replayed');
