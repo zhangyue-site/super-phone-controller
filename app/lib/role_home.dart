@@ -1,5 +1,113 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'product_settings.dart';
+
+/// vc93: shows wireless-debugging / ADB status and the pairing code captured by the
+/// accessibility auto-guide. Polls `adbGuideStatus` so it self-heals on every visit.
+class AdbGuideCard extends StatefulWidget {
+  const AdbGuideCard({super.key});
+  @override
+  State<AdbGuideCard> createState() => _AdbGuideCardState();
+}
+
+class _AdbGuideCardState extends State<AdbGuideCard> {
+  static const _ch = MethodChannel('pcflash/app');
+  Map<String, dynamic> _status = const {};
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final r = await _ch.invokeMethod<dynamic>('adbGuideStatus');
+      if (r is Map && mounted) {
+        setState(() => _status = r.map((k, v) => MapEntry(k.toString(), v)));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _arm() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await _ch.invokeMethod<dynamic>('adbGuideArm');
+      // The guide runs in the Settings UI; poll until it reports a result.
+      for (var i = 0; i < 30; i++) {
+        await Future.delayed(const Duration(seconds: 2));
+        await _refresh();
+        final code = _status['pairCode']?.toString() ?? '';
+        final err = _status['err']?.toString() ?? '';
+        if (code.isNotEmpty || (err.isNotEmpty && err != '')) break;
+        if (!mounted) return;
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _busy = false);
+    _refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final port = _status['debugPort']?.toString() ?? '';
+    final code = _status['pairCode']?.toString() ?? '';
+    final pairPort = _status['pairPort']?.toString() ?? '';
+    final err = _status['err']?.toString() ?? '';
+    final wired = port.isNotEmpty;
+    return Card(
+        child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Icon(wired ? Icons.usb_outlined : Icons.usb_off_outlined,
+                        color: wired ? colors.primary : colors.error),
+                    const SizedBox(width: 12),
+                    Expanded(
+                        child: Text('网络调试通道',
+                            style: Theme.of(context).textTheme.titleMedium)),
+                  ]),
+                  const SizedBox(height: 8),
+                  Text(wired ? '无线调试已开启，端口 $port' : '无线调试未开启',
+                      style: TextStyle(
+                          color: wired ? colors.primary : colors.error)),
+                  if (code.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text('配对码：$code'),
+                    Text('配对地址：$pairPort'),
+                    const SizedBox(height: 4),
+                    Row(children: [
+                      OutlinedButton(
+                          onPressed: () async {
+                            await Clipboard.setData(ClipboardData(
+                                text: 'adb pair $pairPort $code'));
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('已复制配对命令')));
+                            }
+                          },
+                          child: const Text('复制配对命令')),
+                    ]),
+                  ],
+                  if (!wired && code.isEmpty) ...[
+                    const SizedBox(height: 12),
+                    Row(children: [
+                      FilledButton(
+                          onPressed: _busy ? null : _arm,
+                          child: Text(_busy ? '引导中…（请看手机设置页）'
+                              : '一键开启无线调试')),
+                    ]),
+                    if (err.isNotEmpty && err != 'timeout')
+                      Text('引导信息：$err',
+                          style: TextStyle(color: colors.error, fontSize: 12)),
+                  ],
+                ])));
+  }
+}
 
 /// Entry point for role selection; lifecycle and routing remain owned by caller.
 class RoleHome extends StatelessWidget {
@@ -89,6 +197,8 @@ class RoleHome extends StatelessWidget {
                 onTap: onMaintenance,
               )),
             ],
+            const SizedBox(height: 12),
+            const AdbGuideCard(),
           ])),
     );
   }

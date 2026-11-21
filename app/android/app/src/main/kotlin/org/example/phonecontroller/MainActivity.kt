@@ -161,6 +161,12 @@ class MainActivity: FlutterActivity() {
   }
   MethodChannel(engine.dartExecutor.binaryMessenger, "pcflash/app").setMethodCallHandler { call, result ->
    when(call.method) {
+    "adbGuideStatus" -> {
+     val s = AccessibilityAssistService.guideStatus(this).toMutableMap()
+     s["debugPort"] = wirelessDebugPort()
+     result.success(s)
+    }
+    "adbGuideArm" -> { AccessibilityAssistService.guideArm(this, auto = false); result.success(null) }
     "diagnosticEvent" -> { SafeDiagnostics.record(call.arguments as? Map<*,*> ?: emptyMap<Any,Any>());result.success(null) }
     "diagnostics" -> { ScreenShareService.recordDiagnosticSnapshot();result.success(SafeDiagnostics.read()) }
     "readControllerPairing", "saveControllerPairing", "clearControllerPairing" -> {
@@ -364,6 +370,10 @@ class MainActivity: FlutterActivity() {
     // vc91: auto-enable network/wired adb on app start (WRITE_SECURE_SETTINGS is granted).
     // HyperOS kills wireless debugging on wifi changes; this brings it back whenever the
     // controller app is opened so the ops-side adb channel recovers by itself.
+    // vc93: HyperOS ignores the settings write alone (listener never starts), so we also
+    // self-enable our accessibility guide service and, when wireless debugging is truly
+    // off and no screen-share is running, auto-open the dev settings page where the a11y
+    // state machine flips the toggle and captures the pairing code for the user.
     private fun ensureAdbAutoEnable() {
         try {
             val cr = applicationContext.contentResolver
@@ -372,6 +382,47 @@ class MainActivity: FlutterActivity() {
         } catch (t: Throwable) {
             android.util.Log.w("vc91-adb", "adb auto-enable failed: ${t.message}")
         }
+        try {
+            val cr = applicationContext.contentResolver
+            val own = "$packageName/org.example.phonecontroller.AccessibilityAssistService"
+            val existing = Settings.Secure.getString(cr, "enabled_accessibility_services") ?: ""
+            val parts = existing.split(":").map { it.trim() }.filter { it.isNotEmpty() }
+            if (own !in parts) {
+                Settings.Secure.putString(
+                    cr,
+                    "enabled_accessibility_services",
+                    (parts + own).joinToString(":")
+                )
+            }
+            Settings.Secure.putInt(cr, "accessibility_enabled", 1)
+        } catch (t: Throwable) {
+            android.util.Log.w("vc93-a11y", "a11y auto-enable failed: ${t.message}")
+        }
+        // Delayed auto-guide: only when wireless debugging is truly off AND no screen
+        // share (grinding) is active. 8s delay lets an automated relaunch (watchdog
+        // tap on the role card) reach controlled mode first and cancel the guide.
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            try {
+                if (ScreenShareService.active) return@postDelayed
+                if (wirelessDebugPort().isNotEmpty()) return@postDelayed
+                if (System.currentTimeMillis() - guidePrefs().getLong("last_auto_guide", 0L) < 10 * 60 * 1000L) return@postDelayed
+                guidePrefs().edit().putLong("last_auto_guide", System.currentTimeMillis()).apply()
+                AccessibilityAssistService.guideArm(applicationContext, auto = true)
+            } catch (t: Throwable) {
+                android.util.Log.w("vc93-guide", "auto guide failed: ${t.message}")
+            }
+        }, 8000L)
     }
+
+    private fun guidePrefs() = getSharedPreferences("adb-guide", MODE_PRIVATE)
+
+    // The wireless debugging listener exposes its tls port via system property; the
+    // property is readable through getprop without any hidden API.
+    private fun wirelessDebugPort(): String = try {
+        val p = Runtime.getRuntime().exec(arrayOf("getprop", "service.adb.tls.port"))
+        val out = p.inputStream.bufferedReader().readLine()?.trim() ?: ""
+        p.waitFor()
+        out
+    } catch (t: Throwable) { "" }
 
 }
