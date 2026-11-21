@@ -85,8 +85,29 @@ class RelayImeService : InputMethodService() {
         return super.onUnbind(intent)
     }
 
-    /** 无 UI：返回 null，系统不会渲染任何候选栏/键盘面板。 */
-    override fun onCreateInputView(): android.view.View? = null
+    /** 迷你工具条：🌐 弹出系统输入法选择器（地球键同款行为），免进设置切换。 */
+    override fun onCreateInputView(): android.view.View {
+        val row = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER
+            setBackgroundColor(0xEE11141B.toInt())
+            setPadding(16, 10, 16, 10)
+        }
+        val btn = android.widget.Button(this).apply {
+            text = "🌐 切换输入法"
+            textSize = 14f
+            isAllCaps = false
+            setOnClickListener {
+                runCatching {
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
+                        as android.view.inputmethod.InputMethodManager
+                    imm.showInputMethodPicker()
+                }
+            }
+        }
+        row.addView(btn)
+        return row
+    }
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         drain()
