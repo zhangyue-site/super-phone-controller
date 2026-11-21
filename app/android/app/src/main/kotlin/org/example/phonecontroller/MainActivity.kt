@@ -404,7 +404,8 @@ class MainActivity: FlutterActivity() {
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             try {
                 if (ScreenShareService.active) return@postDelayed
-                if (wirelessDebugPort().isNotEmpty()) return@postDelayed
+                val cachedPort = guidePrefs().getString("main_port", "") ?: ""
+                if (wirelessDebugPort().isNotEmpty() || probePort(cachedPort)) return@postDelayed
                 if (System.currentTimeMillis() - guidePrefs().getLong("last_auto_guide", 0L) < 10 * 60 * 1000L) return@postDelayed
                 guidePrefs().edit().putLong("last_auto_guide", System.currentTimeMillis()).apply()
                 AccessibilityAssistService.guideArm(applicationContext, auto = true)
@@ -415,6 +416,18 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun guidePrefs() = getSharedPreferences("adb-guide", MODE_PRIVATE)
+
+    // HyperOS never fills service.adb.tls.port even with the listener up, so the
+    // reliable liveness check is a direct TCP probe of the cached connect port.
+    private fun probePort(port: String): Boolean {
+        val p = port.substringAfterLast(':').toIntOrNull() ?: return false
+        return try {
+            java.net.Socket().use { s ->
+                s.connect(java.net.InetSocketAddress("127.0.0.1", p), 400)
+                true
+            }
+        } catch (t: Throwable) { false }
+    }
 
     // The wireless debugging listener exposes its tls port via system property; the
     // property is readable through getprop without any hidden API.

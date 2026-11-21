@@ -55,6 +55,7 @@ class AccessibilityAssistService : AccessibilityService() {
     "step" to prefs.getInt("step",0),
     "pairCode" to (prefs.getString("pair_code","")?:""),
     "pairPort" to (prefs.getString("pair_port","")?:""),
+    "mainPort" to (prefs.getString("main_port","")?:""),
     "err" to (prefs.getString("err","")?:""))
  }
   fun snapshot(frameNanos: Long,width: Int,height: Int,epoch: Long): JSONObject? {
@@ -149,6 +150,10 @@ class AccessibilityAssistService : AccessibilityService() {
     }
     // wireless debugging page: has device name section + pair rows
     joined.contains("扫描二维码配对设备")||joined.contains("输入配对码配对设备")||joined.contains("使用配对码配对设备") -> {
+     // capture the main connect endpoint ("IP 地址和端口" row) for status/probe use
+     val mp=Regex("\\d{1,3}(\\.\\d{1,3}){3}:\\d{2,5}").find(joined)?.value?:""
+     if(mp.isNotEmpty()&&(prefs.getString("main_port","")?:"").isEmpty())
+      prefs.edit().putString("main_port",mp).apply()
      val sw=switches.firstOrNull()
      if(sw!=null && !sw.isChecked){
       var cur: AccessibilityNodeInfo?=sw;var hops=0
