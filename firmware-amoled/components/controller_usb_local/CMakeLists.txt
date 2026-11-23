@@ -1,13 +1,7 @@
 # Default builds keep this component empty (inert, no usb-local symbols reach the ELF);
-# the usb-local variant build has CONFIG_CONTROLLER_USB_LOCAL=y in its generated sdkconfig.
-set(_usb_local_enabled FALSE)
-if(EXISTS "${PROJECT_BINARY_DIR}/sdkconfig")
-    file(READ "${PROJECT_BINARY_DIR}/sdkconfig" _sdkcfg)
-    if(_sdkcfg MATCHES "CONFIG_CONTROLLER_USB_LOCAL=y")
-        set(_usb_local_enabled TRUE)
-    endif()
-endif()
-if(_usb_local_enabled)
+# the usb-local variant build passes -D CONTROLLER_USB_LOCAL_VARIANT=1 (sdkconfig is NOT
+# available at component-CMake time, kconfig runs after component scan).
+if(CONTROLLER_USB_LOCAL_VARIANT)
     set(_usb_local_srcs SRCS "usb_network.cpp" "adb_local.cpp")
 else()
     set(_usb_local_srcs)
