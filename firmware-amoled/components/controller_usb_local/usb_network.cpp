@@ -158,3 +158,5 @@ int controller_usb_net_stage(){return 0;}
 void controller_usb_net_backend(bool){}
 void controller_usb_net_counters(uint32_t *rx,uint32_t *tx){*rx=0;*tx=0;}
 #endif
+
+extern "C" __attribute__((weak)) void controller_net_changed() {}

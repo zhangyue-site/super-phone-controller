@@ -1,6 +1,9 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 void controller_usb_net_init();
 void controller_usb_net_attach();
 void controller_usb_net_mac_string(char *out);
@@ -16,3 +19,6 @@ void controller_usb_net_counters(uint32_t *rx,uint32_t *tx);
 void controller_net_changed();
 
 uint32_t controller_usb_net_peer();
+#ifdef __cplusplus
+}
+#endif
