@@ -1,6 +1,7 @@
 /* Imported plugin metadata never selects executable code. Private server aliases
  * resolve only to the existing bounded task planner. No phone import protocol. */
 #include "plugin.h"
+#include "companion_task.h"
 #include "identity.h"
 #include "wifi.h"
 #include "relay.h"
@@ -34,12 +35,17 @@ bool amoled_plugin_text(char *out,size_t size){
  taskENTER_CRITICAL(&text_lock);memcpy(out,reply_text,sizeof(reply_text));taskEXIT_CRITICAL(&text_lock);return out[0]!=0;
 }
 static void message(unsigned state,const char *text){
- taskENTER_CRITICAL(&text_lock);snprintf(reply_text,sizeof(reply_text),"%s",text);atomic_store(&stage,state);taskEXIT_CRITICAL(&text_lock);
+ taskENTER_CRITICAL(&text_lock);snprintf(reply_text,sizeof(reply_text),"%s",text);atomic_store(&stage,state);
+ if(state==5)amoled_companion_event(0,atomic_load(&generation),PC_ERROR,0,0,text,false);
+ taskEXIT_CRITICAL(&text_lock);
 }
 static bool message_current(unsigned epoch,unsigned state,const char *text){
  taskENTER_CRITICAL(&text_lock);
  bool current=atomic_load(&generation)==epoch;
- if(current){snprintf(reply_text,sizeof(reply_text),"%s",text);atomic_store(&stage,state);}
+ if(current){
+  if(state==7){amoled_companion_begin(0,epoch,"");amoled_companion_event(0,epoch,PC_PLAN,0,0,text,false);}
+  else if(state==5)amoled_companion_event(0,epoch,PC_ERROR,0,0,text,false);
+  snprintf(reply_text,sizeof(reply_text),"%s",text);atomic_store(&stage,state);}
  taskEXIT_CRITICAL(&text_lock);return current;
 }
 static const char *str(cJSON *o,const char *name){cJSON *v=cJSON_GetObjectItemCaseSensitive(o,name);return cJSON_IsString(v)?v->valuestring:"";}
@@ -114,12 +120,14 @@ static bool apply(cJSON *reply,unsigned epoch){
   if(!hex(str(reply,"confirmation")))return false;
   memcpy(confirmation,str(reply,"confirmation"),33);pending_until=esp_timer_get_time()+120000000;
  }
- return message_current(epoch,value,*text?text:"插件响应无效，请重新预览")&&value!=5;
+ bool accepted=message_current(epoch,value,*text?text:"插件响应无效，请重新预览");
+ if(accepted)amoled_companion_remote(0,epoch,reply);
+ return accepted&&value!=5;
 }
 static void worker(void *unused){
  Request job;int64_t next_status=0;
  for(;;){
-  if(atomic_exchange(&stop_requested,false)){atomic_store(&busy,true);unsigned epoch=atomic_load(&generation);bool stopped=stop_server(epoch);message_current(epoch,6,stopped?"插件已停止":"停止未确认，板端许可已撤销");atomic_store(&busy,false);}
+  if(atomic_exchange(&stop_requested,false)){atomic_store(&busy,true);unsigned epoch=atomic_load(&generation);bool stopped=stop_server(epoch);if(stopped)amoled_companion_stop_ack(0);message_current(epoch,6,stopped?"插件已停止":"停止未确认，板端许可已撤销");atomic_store(&busy,false);}
   bool received=xQueueReceive(queue,&job,pdMS_TO_TICKS(100))==pdTRUE;
   if(!received){
    unsigned current=atomic_load(&stage);
@@ -170,8 +178,9 @@ bool amoled_plugin_prepare(const char *entry,const char *parameters){
  if(!atomic_compare_exchange_strong(&generation,&entered,next)){atomic_store(&busy,false);return false;}
  Request job={.op=1,.epoch=next};
  memcpy(job.entry,entry,strlen(entry)+1);memcpy(job.parameters,parameters,strlen(parameters)+1);
- if(xQueueSend(queue,&job,0)!=pdTRUE){atomic_store(&busy,false);return false;}
- return message_current(job.epoch,7,"正在请求插件计划，尚未执行");
+ if(!message_current(job.epoch,7,"正在请求插件计划，尚未执行")){atomic_store(&busy,false);return false;}
+ if(xQueueSend(queue,&job,0)!=pdTRUE){message_current(job.epoch,5,"插件请求未进入队列");atomic_store(&busy,false);return false;}
+ return true;
 }
 bool amoled_plugin_confirm(void){
  unsigned entered=atomic_load(&generation),permission_epoch=amoled_direct_epoch();
@@ -184,6 +193,7 @@ bool amoled_plugin_confirm(void){
 }
 void amoled_plugin_cancel(void){
  if(!atomic_load(&started))return;
- atomic_fetch_add(&generation,1);atomic_store(&stop_requested,true);
+ amoled_companion_stop();
+ unsigned next=atomic_fetch_add(&generation,1)+1;amoled_companion_fence(0,next);atomic_store(&stop_requested,true);
  amoled_direct_cancel();amoled_usb_gate(false);message(6,"插件停止已请求，等待服务端确认");
 }

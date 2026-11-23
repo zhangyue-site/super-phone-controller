@@ -1,6 +1,7 @@
 """Per-device turn mailbox. No cloud process gets an ADB socket or arbitrary shell."""
 import json,re,threading,time,uuid,xml.etree.ElementTree as ET
 from dataclasses import dataclass,field
+from .task_progress import mark_progress
 DENY=re.compile(r'发送|支付|付款|转账|购买|充值|删除|清空|授权|权限|登录|退出|保存|提交|开启|关闭|修改|重置|卸载|安装|send|pay|buy|delete|remove|confirm|allow|permission|sign.?in|save|submit|install|reset',re.I)
 NAV=re.compile(r'打开|进入|查看|返回|列表|详情|账单|设置|菜单|分类|首页|明细|记录|关于|帮助|搜索|home|settings|menu|details|list|back|help',re.I)
 
@@ -131,6 +132,7 @@ class Mailbox:
     validate_command(command)
    if j.command:raise ValueError('command busy')
    j.result=None;j.delivered=False;j.command=dict(command,id=uuid.uuid4().hex);j.event.clear()
+   mark_progress(j,'dispatching')
    print('PHONE_COMMAND device=%s turn=%d id=%s op=%s'%(j.device,j.sequence,j.command['id'][:8],command['op']),flush=True)
  def poll(self,device,session,seq,pointer_protocol=None):
   with self.lock:
@@ -139,7 +141,7 @@ class Mailbox:
    ui={'uiRevision':j.ui_revision} if j.ui_protocol=='plan-v1' else {}
    if j.command and not j.delivered:
     # Pointer packets have a strict firmware key allowlist; UI metadata belongs to status packets.
-    j.delivered=True;return dict(j.command,**({} if j.command['op']=='hid_pointer' else ui))
+    j.delivered=True;mark_progress(j,'operating');return dict(j.command,**({} if j.command['op']=='hid_pointer' else ui))
    return dict({'op':'done' if j.done else 'wait','state':j.state,'reply':j.reply,'audio':bool(j.audio),'speechError':j.speech_error},**ui)
  def ui_seen(self,device,session,seq,revision):
   with self.lock:
@@ -158,6 +160,7 @@ class Mailbox:
    print('PHONE_RECEIPT device=%s turn=%d id=%s ok=%s err=%s'%(device,seq,ident[:8],ok,error or '-'),flush=True)
    j.last_receipt={'id':ident,'op':j.command['op'],'ok':ok,'barrier_before':j.video_barrier}
    j.result=(ok,output,error);j.command=None;j.touched=self.clock()
+   if ok:mark_progress(j,'awaiting_frame')
    if j.fenced:j.video_barrier=uuid.uuid4().hex;j.video=b''
    j.event.set()
  def execute(self,j,command):

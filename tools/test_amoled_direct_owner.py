@@ -11,6 +11,13 @@ def fn(source,name):
 relay=(root/"firmware-amoled/main/relay.c").read_text()
 direct=(root/"firmware-amoled/main/direct.c").read_text()
 code=r"""
+#define amoled_companion_begin(...) ((void)0)
+#define amoled_companion_event(...) ((void)0)
+#define amoled_companion_remote(...) ((void)0)
+#define amoled_companion_stop(...) ((void)0)
+#define amoled_companion_fence(source,epoch) ((void)(source),(void)(epoch))
+#define amoled_companion_stop_ack(...) ((void)0)
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdatomic.h>

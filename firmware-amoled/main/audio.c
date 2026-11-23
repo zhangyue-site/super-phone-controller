@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "companion_speech.h"
 #include "audio_policy.h"
 #include "identity.h"
 #include "wifi.h"
@@ -12,9 +13,11 @@
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_random.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 #include "cJSON.h"
 #include <stdatomic.h>
 #include <stdint.h>
@@ -23,6 +26,11 @@
 #include <math.h>
 #include <time.h>
 static atomic_bool held,busy;
+static atomic_bool chat_mode;
+static atomic_uint stack_low_water;
+static atomic_uint test_runs,test_result;
+unsigned amoled_audio_test_runs(void){return atomic_load(&test_runs);}
+unsigned amoled_audio_test_result(void){return atomic_load(&test_result);}
 static atomic_uint generation=1,stage,duration;
 static esp_codec_dev_handle_t microphone;
 static bool codec_attempted;
@@ -36,13 +44,15 @@ bool amoled_audio_result(char *out,size_t size){
 bool amoled_audio_busy(void){return atomic_load(&busy);}
 unsigned amoled_audio_stage(void){return atomic_load(&stage);}
 unsigned amoled_audio_duration_ms(void){return atomic_load(&duration);}
+unsigned amoled_audio_stack_high_water(void){return atomic_load(&stack_low_water);}
 void amoled_audio_release(void){atomic_store(&held,false);}
 void amoled_audio_cancel(void){
  atomic_fetch_add(&generation,1);atomic_store(&held,false);
+ if(atomic_load(&chat_mode)&&amoled_audio_busy())companion_speech_stop();
  clear_result();
  atomic_store(&stage,amoled_audio_busy()?5:0);
 }
-static bool live(unsigned epoch){
+static bool live(uint32_t epoch){
  return atomic_load(&generation)==epoch&&amoled_relay_audio_owned()&&amoled_wifi_connected()&&
   !amoled_relay_connected()&&!amoled_ota_busy();
 }
@@ -122,6 +132,7 @@ static bool upload(const uint8_t *pcm,size_t size,unsigned epoch,const char *ses
  cJSON_Delete(result);return recognized;
 }
 static void recorder(void *context){
+ const bool chat=atomic_load(&chat_mode);
  unsigned epoch=atomic_load(&generation);uint8_t nonce[8];char session[17];
  esp_fill_random(nonce,sizeof(nonce));amoled_hex(nonce,sizeof(nonce),session);
  uint8_t *pcm=heap_caps_malloc(320000,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
@@ -147,25 +158,57 @@ static void recorder(void *context){
  }
  recorded=live(epoch)&&pc_audio_take_finish(&take);
  if(opened){esp_codec_dev_close(microphone);opened=false;}amplifier_off();
- if(recorded){atomic_store(&stage,2);bool recognized=upload(pcm,take.bytes,epoch,session,false);atomic_store(&stage,recognized?3:4);}
+ if(recorded){atomic_store(&stack_low_water,uxTaskGetStackHighWaterMark(NULL));atomic_store(&stage,2);bool recognized=chat?companion_speech_run(pcm,take.bytes,epoch,session,live):upload(pcm,take.bytes,epoch,session,false);atomic_store(&stage,recognized?3:4);}
  else if(live(epoch))atomic_store(&stage,4);
  done:
  if(opened)esp_codec_dev_close(microphone);
  amplifier_off();memset(block,0,sizeof(block));
  if(pcm){memset(pcm,0,320000);heap_caps_free(pcm);}
- if(atomic_load(&generation)!=epoch){upload(NULL,0,epoch,session,true);atomic_store(&stage,5);}
+ if(atomic_load(&generation)!=epoch){if(!chat)upload(NULL,0,epoch,session,true);atomic_store(&stage,5);}
  else if(atomic_load(&stage)==0||atomic_load(&stage)==1)atomic_store(&stage,4);
- atomic_store(&held,false);amoled_relay_audio_release();atomic_store(&busy,false);vTaskDelete(NULL);
+ atomic_store(&stack_low_water,uxTaskGetStackHighWaterMark(NULL));
+ atomic_store(&held,false);amoled_relay_audio_release();atomic_store(&busy,false);
+ if(chat)vTaskDeleteWithCaps(NULL);else vTaskDelete(NULL);
 }
 static bool reserve_audio(void){return !amoled_ota_busy()&&amoled_relay_audio_acquire();}
-bool amoled_audio_press(void){
+static bool audio_press(bool chat){
  bool expected=false;
  if(!amoled_identity_ready()||!amoled_wifi_connected()||amoled_usb_armed()||amoled_ota_busy()||
     !atomic_compare_exchange_strong(&busy,&expected,true))return false;
  if(!amoled_usb_reserve_ota(reserve_audio)){atomic_store(&busy,false);return false;}
+ atomic_store(&stack_low_water,0);atomic_store(&chat_mode,chat);if(chat)companion_speech_reset();
  clear_result();atomic_fetch_add(&generation,1);atomic_store(&held,true);atomic_store(&duration,0);atomic_store(&stage,0);
- if(xTaskCreate(recorder,"amoled_audio",8192,NULL,3,NULL)!=pdPASS){
+ /* Only the new conversation task uses the enabled PSRAM stack allocator.
+  * Keep internal RAM for the existing I2S DMA, USB and radio buffers. */
+ BaseType_t created=chat?xTaskCreateWithCaps(recorder,"pet_voice",12288,NULL,3,NULL,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT):xTaskCreate(recorder,"amoled_audio",8192,NULL,3,NULL);
+ if(created!=pdPASS){
   atomic_store(&held,false);amoled_relay_audio_release();atomic_store(&busy,false);atomic_store(&stage,4);return false;
  }
  return true;
+}
+
+bool amoled_audio_press(void){return audio_press(false);}
+bool amoled_audio_chat_press(void){return audio_press(true);}
+const char *amoled_audio_unavailable_reason(void){
+ if(!amoled_identity_ready())return "设备身份未就绪，请稍后再试";
+ if(!amoled_wifi_connected())return "Wi-Fi未连接，联网后再说话";
+ if(amoled_usb_armed())return "手机输入已开启，请先停止输入";
+ if(amoled_ota_busy())return "正在升级，请稍后再说话";
+ if(amoled_audio_busy())return "上一轮语音还在处理";
+ if(amoled_relay_connected()||amoled_relay_direct_owned())return "控制会话占用中，请先结束任务";
+ return "麦克风暂不可用，请稍后再试";
+}
+
+static bool speaker_test_live(uint32_t epoch){return atomic_load(&generation)==epoch&&amoled_relay_audio_owned()&&!amoled_ota_busy()&&!amoled_relay_connected();}
+static void speaker_test_task(void *unused){
+ (void)unused;unsigned epoch=atomic_load(&generation);atomic_fetch_add(&test_runs,1);atomic_store(&test_result,1);ESP_LOGI("pet_audio","local speaker test started");
+ bool ok=companion_speech_test(epoch,speaker_test_live);atomic_store(&test_result,ok?2:3);ESP_LOGI("pet_audio","local speaker test completed ok=%d",ok);atomic_store(&stage,ok?3:4);
+ atomic_store(&stack_low_water,uxTaskGetStackHighWaterMark(NULL));
+ amoled_relay_audio_release();atomic_store(&busy,false);vTaskDeleteWithCaps(NULL);
+}
+bool amoled_audio_test_speaker(void){
+ bool expected=false;if(amoled_usb_armed()||amoled_ota_busy()||!atomic_compare_exchange_strong(&busy,&expected,true))return false;
+ if(!amoled_usb_reserve_ota(reserve_audio)){atomic_store(&busy,false);return false;}
+ atomic_store(&chat_mode,true);atomic_fetch_add(&generation,1);atomic_store(&stage,2);companion_speech_reset();
+ if(xTaskCreateWithCaps(speaker_test_task,"pet_test",12288,NULL,3,NULL,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)!=pdPASS){amoled_relay_audio_release();atomic_store(&busy,false);return false;}return true;
 }

@@ -1,6 +1,7 @@
 """Owner-confirmed text plans; bridge never exposes device credentials or shell."""
 import json,os,re,threading,time,uuid
 from pathlib import Path
+from .task_progress import task_progress
 from .wechat_nav import parse_task
 from .general_nav import parse_task as parse_general
 TERMINAL=frozenset(('done','error','stopped','expired','replaced'))
@@ -57,7 +58,7 @@ class RemoteControl:
    changed=changed or before!=(r.get('state'),r.get('reply'),r.get('verified'))
   if changed:self._save()
  def _reply(self,ident,r):
-  return dict(task_id=ident,state=r['state'],reply=r['reply'],verified=bool(r.get('verified')),terminal=r['state'] in TERMINAL)
+  return dict(task_id=ident,state=r['state'],reply=r['reply'],verified=bool(r.get('verified')),terminal=r['state'] in TERMINAL,progress=task_progress(r,self.jobs.get(ident)))
  def prepare(self,owner,text):
   owner=self._owner(owner)
   if not isinstance(text,str) or len(text)>120 or (parse_task(text) is None and parse_general(text) is None):raise ValueError('仅支持打开、导航和搜索。')
@@ -131,7 +132,7 @@ class RemoteControl:
       self.c.mailbox.cancel(device,session,sequence)
       r.update(state='error',reply='屏幕共享授权已结束，本次任务已取消。',verified=False)
       self._save()
-     return {'op':'wait' if r['state']=='running' else 'done' if r['state']=='done' else 'cancelled'}
+     return dict(self._reply(ident,r),op='wait' if r['state']=='running' else 'done' if r['state']=='done' else 'cancelled')
    return {'op':'cancelled'}
  def status(self,owner,ident=None):
   with self.lock:
@@ -145,6 +146,16 @@ class RemoteControl:
     labels={0:'板端心跳：可以执行。',1:'板端心跳：未插入USB。',2:'板端心跳：未连上服务器。',3:'板端心跳：键鼠未开启。',4:'板端心跳：上一次任务失败。'}
     out['reply']=out['reply']+' '+(labels[code] if code in labels else '还没有板端心跳。')
    return out
+ def companion_status(self,device):
+  # Device-authenticated read-only view. No owner identities, credentials or commands.
+  with self.lock:
+   self._sync()
+   candidates=[(ident,r) for ident,r in self.records.items() if r['owner'][3]==device]
+   active=[item for item in candidates if item[1]['state'] not in TERMINAL]
+   choices=active or candidates
+   if not choices:return {'state':'idle','verified':False,'terminal':True,'reply':'当前没有任务'}
+   ident,r=choices[-1]
+   return self._reply(ident,r)
  def stop_device(self,device):
   with self.lock,self.runtime_lock:
    self._sync();self.cancel_voice(device)

@@ -23,8 +23,14 @@ code=r"""
 #define MALLOC_CAP_SPIRAM 1
 #define MALLOC_CAP_8BIT 2
 #define pdPASS 1
-static atomic_bool held,busy;
-static atomic_uint generation=1,stage,duration;
+typedef int BaseType_t;
+static bool external_stack;static unsigned caps_deleted;
+static atomic_bool held,busy,chat_mode;
+static int chats;
+static void companion_speech_reset(void){}
+static void companion_speech_stop(void){}
+static bool companion_speech_run(const uint8_t *p,size_t n,unsigned e,const char *s,bool (*live)(uint32_t)){assert(p&&n==12800&&strlen(s)==16&&live(e));chats++;return true;}
+static atomic_uint generation=1,stage,duration,stack_low_water;
 static void *microphone=(void *)1;
 static bool wifi=true,owner,ble,ota,armed,identity=true,codec_ok=true,heap_ok=true;
 static int reads,closes,uploads,stops,amp_off,zero_frees,mode;
@@ -35,6 +41,8 @@ static void amoled_audio_cancel(void);
 static int64_t esp_timer_get_time(void){return clock_us;}
 static bool amoled_wifi_connected(void){return wifi;}
 static bool amoled_relay_audio_owned(void){return owner;}
+static bool direct;
+static bool amoled_relay_direct_owned(void){return direct;}
 static bool amoled_relay_connected(void){return ble;}
 static bool amoled_ota_busy(void){return ota;}
 static bool amoled_usb_armed(void){return armed;}
@@ -69,18 +77,23 @@ static bool upload(const uint8_t *pcm,size_t size,unsigned epoch,const char *ses
  assert(pcm&&size==12800&&atomic_load(&generation)==epoch);
  uploads++;return true;
 }
-static void vTaskDelete(void *p){assert(!p);}
+static unsigned uxTaskGetStackHighWaterMark(void *p){assert(!p);return 2000;}
+static void vTaskDelete(void *p){assert(!p&&!external_stack);}
+static void vTaskDeleteWithCaps(void *p){assert(!p&&external_stack);caps_deleted++;}
 static int xTaskCreate(void (*task)(void *),const char *name,unsigned stack,void *ctx,int priority,void *out){
- (void)name;(void)ctx;(void)priority;(void)out;assert(stack==8192);scheduled=task;return pdPASS;
+ (void)name;(void)ctx;(void)priority;(void)out;assert(stack==8192);external_stack=false;scheduled=task;return pdPASS;
+}
+static int xTaskCreateWithCaps(void (*task)(void *),const char *name,unsigned stack,void *ctx,int priority,void *out,unsigned caps){
+ (void)name;(void)ctx;(void)priority;(void)out;assert(stack==12288&&caps==3);external_stack=true;scheduled=task;return pdPASS;
 }
 """
-code+="\n".join(fn(n) for n in ["amoled_audio_cancel","amoled_audio_release","live","recorder","reserve_audio","amoled_audio_press"])
+code+="\n".join(fn(n) for n in ["amoled_audio_cancel","amoled_audio_release","live","recorder","reserve_audio","audio_press","amoled_audio_press","amoled_audio_chat_press","amoled_audio_unavailable_reason"])
 # Production cancel calls the public busy getter.
 code=code.replace('static void amoled_audio_cancel(void);','static void amoled_audio_cancel(void);\nstatic bool amoled_audio_busy(void){return busy;}')
 code+=r"""
 static void reset(void){
- held=busy=false;generation=1;stage=duration=0;
- wifi=identity=codec_ok=heap_ok=true;owner=ble=ota=armed=false;
+ held=busy=chat_mode=false;chats=0;generation=1;external_stack=false;caps_deleted=0;stack_low_water=0;stage=duration=0;
+ wifi=identity=codec_ok=heap_ok=true;owner=ble=ota=armed=direct=false;
  reads=closes=uploads=stops=amp_off=zero_frees=mode=0;clock_us=1000;scheduled=NULL;
 }
 int main(void){
@@ -100,6 +113,14 @@ int main(void){
  reset();ble=true;assert(!amoled_audio_press());assert(!busy&&!scheduled);
  reset();ota=true;assert(!amoled_audio_press());assert(!busy&&!scheduled);
  reset();armed=true;assert(!amoled_audio_press());assert(!busy&&!scheduled);
+ reset();assert(amoled_audio_chat_press());scheduled(NULL);assert(chats==1&&!uploads&&stage==3&&!owner&&caps_deleted==1&&stack_low_water==2000);
+ reset();mode=2;assert(amoled_audio_chat_press());scheduled(NULL);assert(!chats&&!uploads&&!stops&&stage==5&&!owner&&caps_deleted==1);
+ reset();wifi=false;assert(strstr(amoled_audio_unavailable_reason(),"Wi-Fi"));
+ reset();armed=true;assert(strstr(amoled_audio_unavailable_reason(),"停止输入"));
+ reset();ble=true;assert(strstr(amoled_audio_unavailable_reason(),"控制会话"));
+ reset();direct=true;assert(strstr(amoled_audio_unavailable_reason(),"控制会话"));
+ reset();ota=true;assert(strstr(amoled_audio_unavailable_reason(),"升级"));
+ reset();identity=false;assert(strstr(amoled_audio_unavailable_reason(),"身份"));
  puts("Production recorder: explicit PRESS, real PCM bounds, RELEASE, silence, STOP/late read, network, timeout, zeroization and owner release passed");
 }
 """

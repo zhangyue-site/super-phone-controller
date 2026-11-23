@@ -46,8 +46,15 @@ def claim_direct(device,session,seq,ready,pointer,lease):
 
 def handle(handler,device_config):
  path=handler.path
- if path not in ('/bridge/phone','/remote/claim','/remote/status'):return False
+ if path not in ('/bridge/phone','/remote/claim','/remote/status','/board-companion'):return False
  try:
+  if path=='/board-companion':
+   if handler.command!='GET':handler.reply(405,b'{}');return True
+   device=handler.device()
+   if device is None:raise PermissionError('device auth')
+   if os.environ.get('EPAPER_REMOTE_CONTROL')!='1':handler.reply(503,b'{}');return True
+   handler.reply(200,json.dumps(REMOTE.companion_status(device),ensure_ascii=False).encode())
+   return True
   if handler.command!='POST':handler.reply(405,b'{}');return True
   if os.environ.get('EPAPER_REMOTE_CONTROL')!='1':handler.reply(503,b'{"error":"remote control disabled"}');return True
   if path=='/bridge/phone':

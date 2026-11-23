@@ -10,3 +10,11 @@ unsigned amoled_audio_stage(void);
 unsigned amoled_audio_duration_ms(void);
 
 bool amoled_audio_result(char *,size_t);
+
+bool amoled_audio_chat_press(void);
+const char *amoled_audio_unavailable_reason(void);
+unsigned amoled_audio_stack_high_water(void);
+
+bool amoled_audio_test_speaker(void);
+unsigned amoled_audio_test_runs(void);
+unsigned amoled_audio_test_result(void);

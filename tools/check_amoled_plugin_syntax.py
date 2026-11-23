@@ -6,6 +6,13 @@ ap=argparse.ArgumentParser();ap.add_argument("--cjson-dir",required=True);args=a
 source=(root/"firmware-amoled/main/plugin.c").read_text()
 source="\n".join(line for line in source.splitlines() if not line.startswith('#include "'))
 shim=r"""
+#define amoled_companion_begin(...) ((void)0)
+#define amoled_companion_event(...) ((void)0)
+#define amoled_companion_remote(...) ((void)0)
+#define amoled_companion_stop(...) ((void)0)
+#define amoled_companion_fence(source,epoch) ((void)(source),(void)(epoch))
+#define amoled_companion_stop_ack(...) ((void)0)
+
 #include "cJSON.h"
 #include "direct_policy.h"
 #include <stdbool.h>

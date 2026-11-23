@@ -1,6 +1,7 @@
 /* Existing e-paper HTTPS direct protocol, fixed composite USB descriptors.
  * No USB mode switch, target capture, task creation or confirmation occurs here. */
 #include "direct.h"
+#include "companion_task.h"
 #include "direct_policy.h"
 #include "wifi.h"
 #include "relay.h"
@@ -33,7 +34,7 @@ static uint64_t now_ms(void){return (uint64_t)esp_timer_get_time()/1000;}
 void amoled_direct_cancel(void){
  SemaphoreHandle_t held_lock=atomic_load(&enable_lock);
  if(held_lock)xSemaphoreTake(held_lock,portMAX_DELAY);
- atomic_store(&enabled,false);atomic_fetch_add(&generation,1);atomic_store(&online,false);amoled_usb_gate(false);
+ atomic_store(&enabled,false);unsigned next=atomic_fetch_add(&generation,1)+1;amoled_companion_fence(1,next);atomic_store(&online,false);amoled_usb_gate(false);
  if(held_lock)xSemaphoreGive(held_lock);
 }
 bool amoled_direct_online(void){return atomic_load(&online);}
@@ -120,6 +121,7 @@ static cJSON *post(const char *path,const char *body,unsigned epoch,bool stoppin
 }
 static bool status_live(unsigned epoch){
  cJSON *o=post("/remote/status",NULL,epoch,false);
+ if(o&&str(o,"state")[0])amoled_companion_remote(1,epoch,o);
  bool ok=o&&!strcmp(str(o,"op"),"wait");cJSON_Delete(o);return ok&&live(epoch);
 }
 static bool integer(cJSON *o,const char *name,unsigned max,uint16_t *value){
@@ -220,6 +222,7 @@ static void worker(void *unused){
   if(!strcmp(op,"wait")){cJSON_Delete(claim);vTaskDelay(pdMS_TO_TICKS(300));continue;}
   bool begin=had_lease&&!strcmp(op,"start")&&expected_claim(str(claim,"task_id"))&&pc_direct_begin(&policy,str(claim,"task_id"),now_ms(),
       amoled_usb_ready(),amoled_usb_armed(),amoled_relay_connected(),amoled_ota_busy());
+  if(begin)amoled_companion_begin(1,epoch,str(claim,"task_id"));
   cJSON_Delete(claim);
   if(!begin){retire(epoch);continue;}
   atomic_store(&action_until,esp_timer_get_time()+180000000);
@@ -233,10 +236,13 @@ static void worker(void *unused){
    bool reserved=pc_direct_reserve(&policy,str(action,"id"),now_ms(),
        amoled_usb_ready(),amoled_usb_armed(),amoled_relay_connected(),amoled_ota_busy());
    if(!reserved){cJSON_Delete(action);break;}
+   amoled_companion_event(1,epoch,PC_DISPATCH,0,7,"已收到板端指令，等待执行",false);
    const char *output="";
+   amoled_companion_event(1,epoch,PC_OPERATE,0,23,"正在提交USB输入，结果尚未核验",false);
    bool ok=execute(action,epoch,&output);
    bool ack=result(action,ok,output,epoch);cJSON_Delete(action);
-   if(!ok||!ack)break;
+   if(!ok||!ack){amoled_companion_event(1,epoch,PC_ERROR,0,23,"输入或回执未确认，未重发",false);break;}
+   amoled_companion_event(1,epoch,PC_UNKNOWN,0,55,"USB回执已送达，等待新画面核验",false);
   }
   retire(epoch);
  }

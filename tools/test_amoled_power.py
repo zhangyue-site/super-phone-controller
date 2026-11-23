@@ -17,7 +17,7 @@ typedef int esp_err_t;
 #define ESP_ERR_INVALID_RESPONSE 3
 const char *esp_err_to_name(int);
 ''')
-    (p / 'esp_log.h').write_text('#define ESP_LOGE(...) ((void)0)\n#define ESP_LOGI(...) ((void)0)\n')
+    (p / 'esp_log.h').write_text('#define ESP_LOGW(...) ((void)0)\n#define ESP_LOGE(...) ((void)0)\n#define ESP_LOGI(...) ((void)0)\n')
     (p / 'driver/i2c_master.h').write_text('''#pragma once
 #include "esp_err.h"
 #include <stdint.h>

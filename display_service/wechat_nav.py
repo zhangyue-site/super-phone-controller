@@ -1,5 +1,6 @@
 """Bounded WeChat navigation and explicit per-device verified replay skills."""
 from .model_routing import task_model_session
+from .task_progress import mark_progress
 import base64,hashlib,io,json,math,os,re,threading,time,zlib
 from pathlib import Path
 from PIL import Image
@@ -36,6 +37,7 @@ class WechatNavigator:
    time.sleep(.025)
   raise ValueError("未收到新的手机画面，请在App中共享整个屏幕")
  def _observe(self,j,raw,query,verify=False):
+  mark_progress(j,'verifying' if verify else 'recognizing')
   start=time.monotonic()
   with self.m.lock:
    self.m._live(j);barrier=j.video_barrier;session=j.screen_session
@@ -62,6 +64,7 @@ class WechatNavigator:
    self.m._live(j)
    if barrier!=j.video_barrier or session!=j.screen_session:raise ValueError("画面会话已经改变")
   self._log(j,"vision",verify=verify,ms=round((time.monotonic()-start)*1000))
+  if not verify:mark_progress(j,'recognized')
   return result
  def _matches_action_frame(self,expected,sig,current):
   return matches(expected,sig) and ('target' not in expected or region_matches(expected['target'],current))

@@ -24,7 +24,7 @@ typedef struct {uint32_t schema;char ssid[33],password[64],endpoint[191];char ba
 typedef struct {struct {unsigned char ssid[32],password[64];struct{int authmode;}threshold;struct{bool capable;}pmf_cfg;}sta;} wifi_config_t;
 static MultiConfig config;
 static atomic_uint config_generation=1,generation=1,stage,requested_epoch;
-static atomic_bool configured=true,connected,requested,transfer,auto_enabled=true;
+static atomic_bool configured=true,connected,requested,transfer,auto_enabled=true,user_check;
 static bool automatic_download,armed,ble,direct,audio;
 static int mutex,calls,sets;static int64_t now,until;
 static const char *available;static char chosen[33],seen[8][33];static jmp_buf done;
@@ -38,7 +38,7 @@ static bool amoled_relay_connected(void){return ble;}
 static bool amoled_relay_direct_owned(void){return direct;}
 static bool amoled_relay_audio_owned(void){return audio;}
 static bool amoled_identity_ready(void){return true;}
-static void download(const char *endpoint,unsigned epoch){assert(!strcmp(endpoint,"https://controller.test")&&epoch==1&&automatic_download);calls++;}
+static void download(const char *endpoint,unsigned epoch,bool check_only){assert(!check_only);assert(!strcmp(endpoint,"https://controller.test")&&epoch==1&&automatic_download);calls++;}
 static void vTaskDelay(int ticks){now+=(int64_t)ticks*1000;if(now>=until)longjmp(done,1);}
 '''
 code+=s[a:b]+r'''

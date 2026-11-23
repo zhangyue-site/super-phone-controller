@@ -119,29 +119,29 @@ static void reset(void){
 int main(void){
  reset();automatic_download=true;
  strcpy(manifest,"PCOTA1\n4096\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n0.3.0-amoled\n");
- download("https://controller.test",1);assert(!begins&&opened==1&&closed==1&&atomic_load(&stage)==0);
+ download("https://controller.test",1,false);assert(!begins&&opened==1&&closed==1&&atomic_load(&stage)==0);
  reset();strcpy(manifest,"PCOTA1\n4096\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n0.2.9-amoled\n");
- download("https://controller.test",1);assert(!begins&&atomic_load(&stage)==0);
+ download("https://controller.test",1,false);assert(!begins&&atomic_load(&stage)==0);
  automatic_download=false;
- reset();download("https://controller.test",1);
+ reset();download("https://controller.test",1,false);
  assert(bytes==4096&&begins==1&&finishes==1&&!cancels&&opened==2&&closed==2&&auth_calls==2);
  for(int mode=1;mode<=5;mode++){
-  reset();content_mode=mode;download("https://controller.test",1);
+  reset();content_mode=mode;download("https://controller.test",1,false);
   assert(!finishes&&atomic_load(&stage)==4&&opened==closed);
  }
  for(int mode=1;mode<=5;mode++){
-  reset();read_mode=mode;download("https://controller.test",1);
+  reset();read_mode=mode;download("https://controller.test",1,false);
   assert(!finishes&&cancels==1&&bytes==0&&opened==closed);
  }
- reset();status_code=302;download("https://controller.test",1);assert(!begins&&opened==1&&closed==1);
- reset();certificate_ok=false;download("https://controller.test",1);assert(!begins&&opened==1&&closed==1);
- reset();clock_valid=false;download("https://controller.test",1);assert(!opened&&!begins);
- reset();queue_mode=2;download("https://controller.test",1);assert(!finishes&&cancels==1);
- reset();queue_mode=1;download("https://controller.test",1);assert(!finishes&&cancels==1&&bytes==0);
- reset();manifest[10]='x';download("https://controller.test",1);assert(!begins&&opened==1);
- reset();atomic_store(&generation,2);download("https://controller.test",1);assert(!opened&&!begins);
- reset();read_mode=6;download("https://controller.test",1);assert(finishes==1&&!cancels);
- reset();ble=true;atomic_store(&transfer,false);download("https://controller.test",1);assert(!opened&&!begins);
+ reset();status_code=302;download("https://controller.test",1,false);assert(!begins&&opened==1&&closed==1);
+ reset();certificate_ok=false;download("https://controller.test",1,false);assert(!begins&&opened==1&&closed==1);
+ reset();clock_valid=false;download("https://controller.test",1,false);assert(!opened&&!begins);
+ reset();queue_mode=2;download("https://controller.test",1,false);assert(!finishes&&cancels==1);
+ reset();queue_mode=1;download("https://controller.test",1,false);assert(!finishes&&cancels==1&&bytes==0);
+ reset();manifest[10]='x';download("https://controller.test",1,false);assert(!begins&&opened==1);
+ reset();atomic_store(&generation,2);download("https://controller.test",1,false);assert(!opened&&!begins);
+ reset();read_mode=6;download("https://controller.test",1,false);assert(finishes==1&&!cancels);
+ reset();ble=true;atomic_store(&transfer,false);download("https://controller.test",1,false);assert(!opened&&!begins);
  puts("Production Wi-Fi TLS/redirect/bounds/partial-read/STOP/disconnect/deadline/queue adapter passed");
 }
 """

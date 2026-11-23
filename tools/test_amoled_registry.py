@@ -62,6 +62,8 @@ static void render(long long lock_wait_us){(void)lock_wait_us;}
 static bool amoled_usb_armed(void){return false;}
 /* Registry tests keep unrelated Wi-Fi maintenance in its separately exercised adapter. */
 static bool amoled_wifi_console(cJSON *request){return false;}
+/* Page switches can cancel audio; audio behavior has its own host tests. */
+static void amoled_audio_cancel(void){}
 static bool ota_busy;
 static bool amoled_ota_busy(void){return ota_busy;}
 static const char *amoled_usb_serial(void){return "host-test-device";}

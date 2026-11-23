@@ -12,6 +12,7 @@
 #include "esp_heap_caps.h"
 #include "cJSON.h"
 #include "lvgl.h"
+#include "esp_lv_adapter.h"
 #include "bsp/esp-bsp.h"
 #include "identity.h"
 #include "wifi.h"
@@ -25,10 +26,20 @@
 #define CONSOLE_PORT 10006
 #define LINE_MAX 1024
 
+/* One deadline for the entire payload, including a peer that stops reading. */
 static int send_all(int fd,const char *buf,size_t n){
+ const int64_t deadline=esp_timer_get_time()+3000000;
  size_t sent=0;
  while(sent<n){
-  int w=send(fd,buf+sent,n-sent,0);
+  int64_t remaining=deadline-esp_timer_get_time();
+  if(remaining<=0)return -1;
+  fd_set ws;FD_ZERO(&ws);FD_SET(fd,&ws);
+  struct timeval tv={remaining/1000000,remaining%1000000};
+  int ready=select(fd+1,NULL,&ws,NULL,&tv);
+  if(ready<0&&errno==EINTR)continue;
+  if(ready<=0)return -1;
+  int w=send(fd,buf+sent,n-sent,MSG_DONTWAIT);
+  if(w<0&&(errno==EAGAIN||errno==EWOULDBLOCK||errno==EINTR))continue;
   if(w<=0)return -1;
   sent+=(size_t)w;
  }
@@ -51,28 +62,26 @@ static int hex_decode(const char *in,uint8_t *out,size_t n){
  }
  return 0;
 }
-/* Reads a LF-terminated line; returns length without newline, -1 on timeout/close. */
-static int read_line(int fd,char *buf,int cap){
+/* Deadline covers every byte, not just the first readable byte. */
+static bool read_line_deadline(int fd,char *buf,int cap,int seconds){
+ const int64_t deadline=esp_timer_get_time()+(int64_t)seconds*1000000;
  int used=0;
  for(;;){
-  char c;
-  int n=recv(fd,&c,1,0);
-  if(n<=0)return -1;
-  if(c=='\n'){buf[used]=0;return used;}
+  int64_t remaining=deadline-esp_timer_get_time();
+  if(remaining<=0)return false;
+  fd_set rs;FD_ZERO(&rs);FD_SET(fd,&rs);
+  struct timeval tv={remaining/1000000,remaining%1000000};
+  int ready=select(fd+1,&rs,NULL,NULL,&tv);
+  if(ready<0&&errno==EINTR)continue;
+  if(ready<=0)return false;
+  char c;int n=recv(fd,&c,1,MSG_DONTWAIT);
+  if(n<0&&(errno==EAGAIN||errno==EWOULDBLOCK||errno==EINTR))continue;
+  if(n<=0)return false;
+  if(c=='\n'){buf[used]=0;return true;}
   if(c=='\r')continue;
-  if(used+1>=cap)return -1;
+  if(used+1>=cap)return false;
   buf[used++]=c;
  }
-}
-static bool read_line_deadline(int fd,char *buf,int cap,int seconds){
- int waited=0;
- while(waited<seconds*10){
-  fd_set rs;struct timeval tv={0,100000};
-  FD_ZERO(&rs);FD_SET(fd,&rs);
-  if(select(fd+1,&rs,NULL,NULL,&tv)<=0){waited++;continue;}
-  return read_line(fd,buf,cap)>=0;
- }
- return false;
 }
 static void info_reply(int fd){
  char body[640];
@@ -88,16 +97,16 @@ static void info_reply(int fd){
  send_text(fd,body);
 }
 static void snapshot_reply(int fd){
- bsp_display_lock(-1);
+ if(esp_lv_adapter_lock(250)!=ESP_OK){send_text(fd,"SNAP-BUSY\n");return;}
  lv_obj_t *screen=lv_screen_active();
  lv_draw_buf_t *buf=lv_snapshot_take(screen,LV_COLOR_FORMAT_RGB565);
- if(!buf){bsp_display_unlock();send_text(fd,"SNAP-FAILED\n");return;}
+ esp_lv_adapter_unlock();
+ if(!buf){send_text(fd,"SNAP-FAILED\n");return;}
  char head[64];
  snprintf(head,sizeof(head),"SNAP %u %u %u\n",buf->header.w,buf->header.h,(unsigned)(buf->header.stride*buf->header.h));
  send_text(fd,head);
  send_all(fd,(const char*)buf->data,buf->header.stride*buf->header.h);
  lv_draw_buf_destroy(buf);
- bsp_display_unlock();
 }
 static void serve(int fd){
  char line[LINE_MAX];
