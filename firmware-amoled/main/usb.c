@@ -10,7 +10,7 @@
 #include "tinyusb_cdc_acm.h"
 #include "class/hid/hid_device.h"
 #include "esp_mac.h"
-#ifdef CONFIG_TINYUSB_NET_MODE_NCM
+#if defined(CONFIG_CONTROLLER_USB_LOCAL) && defined(CONFIG_TINYUSB_NET_MODE_NCM)
 #include "usb_network.h"
 #endif
 #ifdef CONFIG_CONTROLLER_USB_LOCAL
@@ -32,7 +32,7 @@ static atomic_uint completed[2];
 static SemaphoreHandle_t input_mutex;
 static char serial[13];
 static const uint8_t reports[]={TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(1)),TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(2)),TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(3))};
-#ifdef CONFIG_TINYUSB_NET_MODE_NCM
+#if defined(CONFIG_CONTROLLER_USB_LOCAL) && defined(CONFIG_TINYUSB_NET_MODE_NCM)
 #define USBLOC_NET_DESC TUD_CDC_NCM_DESCRIPTOR(4,6,7,0x85,64,0x04,0x86,64,1514)
 #define USBLOC_NET_LEN TUD_CDC_NCM_DESC_LEN
 #define USBLOC_ITF_COUNT 6
@@ -57,11 +57,11 @@ uint16_t tud_hid_get_report_cb(uint8_t instance,uint8_t id,hid_report_type_t typ
 void tud_hid_set_report_cb(uint8_t instance,uint8_t id,hid_report_type_t type,uint8_t const *b,uint16_t len){}
 void tud_hid_report_complete_cb(uint8_t instance,uint8_t const *report,uint16_t len){if(instance<2)atomic_fetch_add(&completed[instance],1);}
 static void event(tinyusb_event_t *e,void *arg){
-#ifdef CONFIG_TINYUSB_NET_MODE_NCM
+#if defined(CONFIG_CONTROLLER_USB_LOCAL) && defined(CONFIG_TINYUSB_NET_MODE_NCM)
  if(e->id==TINYUSB_EVENT_ATTACHED)controller_usb_net_link(true);
 #endif
  if(e->id==TINYUSB_EVENT_DETACHED){
-#ifdef CONFIG_TINYUSB_NET_MODE_NCM
+#if defined(CONFIG_CONTROLLER_USB_LOCAL) && defined(CONFIG_TINYUSB_NET_MODE_NCM)
   controller_usb_net_link(false);
 #endif
   armed=false;amoled_relay_usb_detached();}}

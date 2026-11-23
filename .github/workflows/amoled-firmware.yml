@@ -106,7 +106,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install test deps
-        run: python3 -m pip install cryptography --quiet
+        run: |
+          . "$IDF_PATH/export.sh"
+          python3 -m pip install cryptography --quiet
       - name: Architecture boundary test (ADB input-only)
         run: python3 -m unittest discover -s tests -p "test_amoled_adb_boundary.py" -v
       - name: Provision throwaway ADB identity
