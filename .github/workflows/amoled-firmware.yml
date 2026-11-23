@@ -119,7 +119,7 @@ jobs:
         working-directory: firmware-amoled
         run: |
           . "$IDF_PATH/export.sh"
-          idf.py -DIDF_TARGET=esp32s3 -D CONTROLLER_USB_LOCAL_VARIANT=1 -B build-usb-local -D SDKCONFIG=sdkconfig.usb-local -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usb-local.defaults" build
+          idf.py -DIDF_TARGET=esp32s3 -D CONTROLLER_USB_LOCAL_VARIANT=1 -DPROJECT_VER=0.6.48-usblocal -B build-usb-local -D SDKCONFIG=sdkconfig.usb-local -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usb-local.defaults" build
           grep -q "#define CONFIG_TINYUSB_NET_MODE_NCM 1" build-usb-local/config/sdkconfig.h
           grep -q "#define CONFIG_CONTROLLER_USB_LOCAL 1" build-usb-local/config/sdkconfig.h
           nm build-usb-local/*.elf | grep -q controller_usb_net_init
