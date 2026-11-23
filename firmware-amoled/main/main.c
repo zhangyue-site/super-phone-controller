@@ -31,6 +31,10 @@
 #include "esp_attr.h"
 #include "esp_private/panic_internal.h"
 #include "boot_recovery_policy.h"
+#ifdef CONFIG_CONTROLLER_USB_LOCAL
+#include "usb_network.h"
+#include "adb_local.h"
+#endif
 LV_FONT_DECLARE(ui_font);
 _Static_assert(LVGL_VERSION_MAJOR==9 && LVGL_VERSION_MINOR==6 && LVGL_VERSION_PATCH==0,"Unexpected LVGL version");
 #define MAX_PLUGINS 4
