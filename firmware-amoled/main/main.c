@@ -103,6 +103,11 @@ static void process(char *line){
  else if(!strcmp(op,"snapshot")){if(refresh){render();refresh=false;}lv_draw_buf_t *buf=lv_snapshot_take(root,LV_COLOR_FORMAT_RGB565);if(!buf){status("snapshot-failed");goto done;}cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","snapshot");cJSON_AddNumberToObject(meta,"width",buf->header.w);cJSON_AddNumberToObject(meta,"height",buf->header.h);cJSON_AddNumberToObject(meta,"stride",buf->header.stride);cJSON_AddNumberToObject(meta,"bytes",buf->header.stride*buf->header.h);reply(meta);amoled_usb_write_bytes(buf->data,buf->header.stride*buf->header.h);lv_draw_buf_destroy(buf);amoled_usb_write("\n");}
  else if(!strcmp(op,"maintenance.restart")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("restarting");vTaskDelay(pdMS_TO_TICKS(100));esp_restart();}
  else if(!strcmp(op,"maintenance.bootloader")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("entering-bootloader");vTaskDelay(pdMS_TO_TICKS(100));if(amoled_usb_enter_bootloader()!=ESP_OK)status("bootloader-failed");}
+ #ifdef CONFIG_CONTROLLER_USB_LOCAL
+ else if(!strcmp(op,"adblocal.status")){cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","adblocal");cJSON_AddNumberToObject(meta,"adb",controller_adb_stage());cJSON_AddNumberToObject(meta,"net",controller_usb_net_stage());cJSON_AddBoolToObject(meta,"ip",controller_usb_net_has_ip());cJSON_AddBoolToObject(meta,"backend",controller_usb_net_backend());reply(meta);}
+ else if(!strcmp(op,"adblocal.activate")){cJSON *cs=cJSON_GetObjectItem(o,"consent");uint32_t cv=cs?(cJSON_IsString(cs)?(uint32_t)strtoul(cs->valuestring,NULL,0):(uint32_t)cs->valuedouble):0;bool ok=controller_adb_activate(cv);status(ok?"activating":"invalid-consent");}
+ else if(!strcmp(op,"adblocal.cancel")){controller_adb_cancel();status("cancelled");}
+#endif
  else status("unsupported-operation");
  done:cJSON_Delete(o);
 }
@@ -238,6 +243,9 @@ void app_main(void){
  bool boot_pending=image_state==ESP_OTA_IMG_PENDING_VERIFY;
  int64_t healthy_since=esp_timer_get_time();
  for(;;){
+#ifdef CONFIG_CONTROLLER_USB_LOCAL
+  controller_usb_net_service();
+#endif
   int requested=atomic_exchange(&power_request,0);
   if(requested&&!pending_power){
    if(requested==2&&power_error!=ESP_OK){

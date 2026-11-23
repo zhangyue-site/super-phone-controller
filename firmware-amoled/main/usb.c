@@ -10,6 +10,12 @@
 #include "tinyusb_cdc_acm.h"
 #include "class/hid/hid_device.h"
 #include "esp_mac.h"
+#ifdef CONFIG_TINYUSB_NET_MODE_NCM
+#include "usb_network.h"
+#endif
+#ifdef CONFIG_CONTROLLER_USB_LOCAL
+#include "adb_local.h"
+#endif
 #include "esp_private/usb_phy.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -26,24 +32,49 @@ static atomic_uint completed[2];
 static SemaphoreHandle_t input_mutex;
 static char serial[13];
 static const uint8_t reports[]={TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(1)),TUD_HID_REPORT_DESC_CONSUMER(HID_REPORT_ID(2)),TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(3))};
+#ifdef CONFIG_TINYUSB_NET_MODE_NCM
+#define USBLOC_NET_DESC TUD_CDC_NCM_DESCRIPTOR(4,6,7,0x85,64,0x04,0x86,64,1514)
+#define USBLOC_NET_LEN TUD_CDC_NCM_DESC_LEN
+#define USBLOC_ITF_COUNT 6
+#define USBLOC_STR_COUNT 8
+#else
+#define USBLOC_NET_DESC
+#define USBLOC_NET_LEN 0
+#define USBLOC_ITF_COUNT 4
+#define USBLOC_STR_COUNT 6
+#endif
+static char network_mac[13];
 static const uint8_t config[]={
- TUD_CONFIG_DESCRIPTOR(1,4,0,TUD_CONFIG_DESC_LEN+TUD_CDC_DESC_LEN+2*TUD_HID_DESC_LEN,0,100),
+ TUD_CONFIG_DESCRIPTOR(1,USBLOC_ITF_COUNT,0,TUD_CONFIG_DESC_LEN+TUD_CDC_DESC_LEN+2*TUD_HID_DESC_LEN+USBLOC_NET_LEN,0,100),
  TUD_CDC_DESCRIPTOR(0,4,0x81,8,0x02,0x82,64),
  TUD_HID_DESCRIPTOR(2,5,HID_ITF_PROTOCOL_NONE,sizeof(reports),0x83,16,5),
- TUD_HID_DESCRIPTOR(3,5,HID_ITF_PROTOCOL_NONE,sizeof(amoled_touch_descriptor),0x84,16,5)};
-static const char *strings[]={"\x09\x04","Personal Controller","AMOLED Plugin Controller",serial,"Plugin Console","Phone Input"};
+ TUD_HID_DESCRIPTOR(3,5,HID_ITF_PROTOCOL_NONE,sizeof(amoled_touch_descriptor),0x84,16,5),
+ USBLOC_NET_DESC};
+static const char *strings[]={"\x09\x04","Personal Controller","AMOLED Plugin Controller",serial,"Plugin Console","Phone Input","USB Network",network_mac};
 static const tusb_desc_device_t device={.bLength=sizeof(tusb_desc_device_t),.bDescriptorType=TUSB_DESC_DEVICE,.bcdUSB=0x0200,.bDeviceClass=TUSB_CLASS_MISC,.bDeviceSubClass=MISC_SUBCLASS_COMMON,.bDeviceProtocol=MISC_PROTOCOL_IAD,.bMaxPacketSize0=CFG_TUD_ENDPOINT0_SIZE,.idVendor=0x303a,.idProduct=0x4005,.bcdDevice=0x0200,.iManufacturer=1,.iProduct=2,.iSerialNumber=3,.bNumConfigurations=1};
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance){return instance==1?amoled_touch_descriptor:reports;}
 uint16_t tud_hid_get_report_cb(uint8_t instance,uint8_t id,hid_report_type_t type,uint8_t *b,uint16_t len){if(instance==1&&id==5&&type==HID_REPORT_TYPE_FEATURE&&len){b[0]=2;return 1;}return 0;}
 void tud_hid_set_report_cb(uint8_t instance,uint8_t id,hid_report_type_t type,uint8_t const *b,uint16_t len){}
 void tud_hid_report_complete_cb(uint8_t instance,uint8_t const *report,uint16_t len){if(instance<2)atomic_fetch_add(&completed[instance],1);}
-static void event(tinyusb_event_t *e,void *arg){if(e->id==TINYUSB_EVENT_DETACHED){armed=false;amoled_relay_usb_detached();}}
+static void event(tinyusb_event_t *e,void *arg){
+#ifdef CONFIG_TINYUSB_NET_MODE_NCM
+ if(e->id==TINYUSB_EVENT_ATTACHED)controller_usb_net_link(true);
+#endif
+ if(e->id==TINYUSB_EVENT_DETACHED){
+#ifdef CONFIG_TINYUSB_NET_MODE_NCM
+  controller_usb_net_link(false);
+#endif
+  armed=false;amoled_relay_usb_detached();}}
 esp_err_t amoled_usb_start(void){
  input_mutex=xSemaphoreCreateMutex();if(!input_mutex)return ESP_ERR_NO_MEM;
  uint8_t mac[6];esp_err_t result=esp_read_mac(mac,ESP_MAC_BASE);if(result!=ESP_OK)return result;
  snprintf(serial,sizeof(serial),"%02X%02X%02X%02X%02X%02X",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
  tinyusb_config_t cfg=TINYUSB_DEFAULT_CONFIG();cfg.event_cb=event;cfg.descriptor.device=&device;cfg.descriptor.full_speed_config=config;cfg.descriptor.string=strings;cfg.descriptor.string_count=6;
- result=tinyusb_driver_install(&cfg);if(result!=ESP_OK)return result;installed=true;tinyusb_config_cdcacm_t cdc={0};result=tinyusb_cdcacm_init(&cdc);started=result==ESP_OK;return result;
+ result=tinyusb_driver_install(&cfg);if(result!=ESP_OK)return result;installed=true;tinyusb_config_cdcacm_t cdc={0};result=tinyusb_cdcacm_init(&cdc);started=result==ESP_OK;
+#ifdef CONFIG_CONTROLLER_USB_LOCAL
+ if(started){snprintf(network_mac,sizeof(network_mac),"%02X%02X%02X%02X%02X%02X",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);controller_usb_net_init();controller_usb_net_mac_string(network_mac);controller_adb_init();controller_usb_net_attach();}
+#endif
+ return result;
 }
 bool amoled_usb_ready(void){return started&&tud_mounted();}
 bool amoled_usb_armed(void){return armed&&amoled_usb_ready();}

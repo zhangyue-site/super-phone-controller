@@ -1,0 +1,11 @@
+menu "Controller USB Local (NCM + ADB bridge)"
+
+    config CONTROLLER_USB_LOCAL
+        bool "Enable USB local network bridge (NCM 192.168.77.0/24 + ADB 5555 ticket gate)"
+        default n
+        help
+            Port of the epaper-lineage USB local net + ADB bridge.
+            Needs CONFIG_TINYUSB_NET_MODE_NCM=y from esp_tinyusb.
+            Build variant: idf.py -B build-usb-local -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usb-local.defaults"
+
+endmenu

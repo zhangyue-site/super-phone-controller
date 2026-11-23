@@ -98,3 +98,28 @@ jobs:
         with:
           path: /github/home/.ccache
           key: amoled-idf552-${{ runner.os }}-${{ github.sha }}
+
+  build-usb-local:
+    name: USB-Local (NCM+ADB) variant + boundary tests
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Architecture boundary test (ADB input-only)
+        run: python3 -m unittest discover -s tests -p "test_amoled_adb_boundary.py" -v
+      - name: Provision throwaway ADB identity
+        run: python3 tools/provision_amlite_adb_key.py --ci
+      - name: Build usb-local variant
+        working-directory: firmware-amoled
+        run: |
+          idf.py -B build-usb-local -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usb-local.defaults" build
+          grep -q "#define CONFIG_TINYUSB_NET_MODE_NCM 1" build-usb-local/config/sdkconfig.h
+          grep -q "#define CONFIG_CONTROLLER_USB_LOCAL 1" build-usb-local/config/sdkconfig.h
+          nm build-usb-local/*.elf | grep -q controller_usb_net_init
+          nm build-usb-local/*.elf | grep -q controller_adb_init
+      - name: Regression guard (default build carries no usb-local symbols)
+        working-directory: firmware-amoled
+        run: |
+          idf.py -B build-default-regcheck build
+          if nm build-default-regcheck/*.elf | grep -q controller_usb_net_init; then exit 1; fi
+          if nm build-default-regcheck/*.elf | grep -q controller_adb_init; then exit 1; fi
