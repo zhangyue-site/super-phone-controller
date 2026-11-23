@@ -6,7 +6,11 @@
 #include "adb_stream.h"
 #include "device_adb_keys.h"
 #include "usb_network.h"
-#include "voice.h"
+/* epaper lineage hook. AMOLED mainline has no voice.h; a strong extern "C"
+   definition in main overrides the weak stub below (e.g. the companion
+   voice line may want to refresh on net state changes). */
+extern "C" void controller_voice_changed(bool completed);
+extern "C" __attribute__((weak)) void controller_voice_changed(bool completed) {(void)completed;}
 #include <atomic>
 #include <errno.h>
 #include <fcntl.h>
