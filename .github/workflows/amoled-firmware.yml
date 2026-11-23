@@ -112,7 +112,9 @@ jobs:
       - name: Architecture boundary test (ADB input-only)
         run: python3 -m unittest discover -s tests -p "test_amoled_adb_boundary.py" -v
       - name: Provision throwaway ADB identity
-        run: python3 tools/provision_amlite_adb_key.py --ci
+        run: |
+          . "$IDF_PATH/export.sh"
+          python3 tools/provision_amlite_adb_key.py --ci
       - name: Build usb-local variant
         working-directory: firmware-amoled
         run: |
