@@ -143,6 +143,7 @@ int controller_usb_net_stage(){
 }
 uint32_t controller_usb_net_peer(){return peer_ip.load();}
 void controller_usb_net_backend(bool ready){if(backend.exchange(ready)!=ready)controller_net_changed();}
+bool controller_usb_net_backend_ready(){return backend.load();}
 void controller_usb_net_counters(uint32_t *rx,uint32_t *tx){*rx=rx_count;*tx=tx_count;}
 #else
 uint32_t controller_usb_net_peer(){return 0;}
@@ -156,6 +157,7 @@ void controller_usb_net_service(){}
 bool controller_usb_net_has_ip(){return false;}
 int controller_usb_net_stage(){return 0;}
 void controller_usb_net_backend(bool){}
+bool controller_usb_net_backend_ready(){return false;}
 void controller_usb_net_counters(uint32_t *rx,uint32_t *tx){*rx=0;*tx=0;}
 #endif
 

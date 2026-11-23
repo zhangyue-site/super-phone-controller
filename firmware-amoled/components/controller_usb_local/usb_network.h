@@ -14,6 +14,7 @@ void controller_usb_net_service();
 bool controller_usb_net_has_ip();
 int controller_usb_net_stage();
 void controller_usb_net_backend(bool ready);
+bool controller_usb_net_backend_ready();
 void controller_usb_net_counters(uint32_t *rx,uint32_t *tx);
 // Called from event/task context. Must only update application state.
 void controller_net_changed();

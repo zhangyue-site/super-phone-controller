@@ -108,7 +108,7 @@ static void process(char *line){
  else if(!strcmp(op,"maintenance.restart")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("restarting");vTaskDelay(pdMS_TO_TICKS(100));esp_restart();}
  else if(!strcmp(op,"maintenance.bootloader")&&!strcmp(str(o,"device"),amoled_usb_serial())&&!amoled_usb_armed()&&!amoled_ota_busy()){status("entering-bootloader");vTaskDelay(pdMS_TO_TICKS(100));if(amoled_usb_enter_bootloader()!=ESP_OK)status("bootloader-failed");}
  #ifdef CONFIG_CONTROLLER_USB_LOCAL
- else if(!strcmp(op,"adblocal.status")){cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","adblocal");cJSON_AddNumberToObject(meta,"adb",controller_adb_stage());cJSON_AddNumberToObject(meta,"net",controller_usb_net_stage());cJSON_AddBoolToObject(meta,"ip",controller_usb_net_has_ip());cJSON_AddBoolToObject(meta,"backend",controller_usb_net_backend());reply(meta);}
+ else if(!strcmp(op,"adblocal.status")){cJSON *meta=cJSON_CreateObject();cJSON_AddStringToObject(meta,"result","adblocal");cJSON_AddNumberToObject(meta,"adb",controller_adb_stage());cJSON_AddNumberToObject(meta,"net",controller_usb_net_stage());cJSON_AddBoolToObject(meta,"ip",controller_usb_net_has_ip());cJSON_AddBoolToObject(meta,"backend",controller_usb_net_backend_ready());reply(meta);}
  else if(!strcmp(op,"adblocal.activate")){cJSON *cs=cJSON_GetObjectItem(o,"consent");uint32_t cv=cs?(cJSON_IsString(cs)?(uint32_t)strtoul(cs->valuestring,NULL,0):(uint32_t)cs->valuedouble):0;bool ok=controller_adb_activate(cv);status(ok?"activating":"invalid-consent");}
  else if(!strcmp(op,"adblocal.cancel")){controller_adb_cancel();status("cancelled");}
 #endif
