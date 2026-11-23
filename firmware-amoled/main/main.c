@@ -30,12 +30,15 @@
 #include "plugin.h"
 #include "esp_attr.h"
 #include "esp_private/panic_internal.h"
+#include "companion_ui.h"
+#include "companion_monitor.h"
 #include "boot_recovery_policy.h"
 #ifdef CONFIG_CONTROLLER_USB_LOCAL
 #include "usb_network.h"
 #include "adb_local.h"
 #endif
 LV_FONT_DECLARE(ui_font);
+LV_FONT_DECLARE(companion_font);
 _Static_assert(LVGL_VERSION_MAJOR==9 && LVGL_VERSION_MINOR==6 && LVGL_VERSION_PATCH==0,"Unexpected LVGL version");
 #define MAX_PLUGINS 4
 #define MAX_JSON 6144
@@ -118,6 +121,7 @@ static void process(char *line){
 static lv_obj_t *label(lv_obj_t *parent,const char *text,int x,int y,int w,lv_color_t color){lv_obj_t *o=lv_label_create(parent);lv_label_set_text(o,text);lv_obj_set_pos(o,x,y);lv_obj_set_width(o,w);lv_obj_set_style_text_font(o,&ui_font,0);lv_obj_set_style_text_color(o,color,0);lv_label_set_long_mode(o,LV_LABEL_LONG_WRAP);return o;}
 static void action(lv_event_t *e){if(page==5)amoled_audio_cancel();int a=(int)(intptr_t)lv_event_get_user_data(e);notice[0]=0;power_notice_persistent=false;if((pending_power||atomic_load(&power_request))&&a!=20){snprintf(notice,sizeof(notice),"正在处理电源请求，请稍候");refresh=true;return;}
  if(a>=100&&a<104){selected=a-100;page=2;}
+ else if(a==60){page=11;}
  else if(a==10){page=0;}
  else if(a==11){page=1;}
  else if(a==12){page=3;}
@@ -166,10 +170,12 @@ static const char *link_status(void){
  return amoled_identity_ready()?"USB已连 · 等待手机":"USB已连 · 等待配置";
 }
 static void render(void){
- voice_status_label=NULL;plugin_status_label=NULL;plugin_confirm_button=NULL;lv_obj_clean(root);lv_obj_set_style_bg_color(root,lv_color_black(),0);lv_obj_set_style_pad_all(root,0,0);lv_obj_remove_flag(root,LV_OBJ_FLAG_SCROLLABLE);
+ amoled_companion_ui_destroy();voice_status_label=NULL;plugin_status_label=NULL;plugin_confirm_button=NULL;lv_obj_clean(root);lv_obj_set_style_bg_color(root,lv_color_black(),0);lv_obj_set_style_pad_all(root,0,0);lv_obj_remove_flag(root,LV_OBJ_FLAG_SCROLLABLE);
  link_label=label(root,link_status(),80,36,320,lv_color_hex(0x17baf1));lv_obj_set_style_text_align(link_label,LV_TEXT_ALIGN_CENTER,0);
+ if(page==11&&(pending_power||atomic_load(&power_request)||amoled_wifi_ota_stage()==2||amoled_wifi_ota_stage()==3))page=8;
+ if(page==11){amoled_companion_ui_create(root,action,pending_power||atomic_load(&power_request));if(notice[0]){notice_ticks=(pending_power||power_notice_persistent)?0:100;lv_obj_t *box=lv_obj_create(root);lv_obj_set_pos(box,72,180);lv_obj_set_size(box,336,120);lv_obj_set_style_bg_color(box,lv_color_hex(0x21332f),0);lv_obj_set_style_border_width(box,0,0);label(box,notice,0,0,288,lv_color_hex(0xf5f5f5));}return;}
  const char *titles[]={"手机控制器","我的插件","插件详情","导入插件","手动控制","语音任务","设置","插件任务","电源","确认重启","确认关机"};lv_obj_t *title=label(root,titles[page],72,88,336,lv_color_hex(0xf5f5f5));lv_obj_set_style_text_align(title,LV_TEXT_ALIGN_CENTER,0);
- if(page==0){button("语音任务",56,144,176,96,14,false);button("插件",248,144,176,96,11,true);button("手动控制",56,260,176,96,13,false);button("设置",248,260,176,96,15,false);}
+ if(page==0){lv_obj_t *pet_entry=label(root,"大肥鱼",180,372,120,lv_color_hex(0xffe4ba));lv_obj_set_style_text_font(pet_entry,&companion_font,0);lv_obj_set_style_text_align(pet_entry,LV_TEXT_ALIGN_CENTER,0);lv_obj_add_flag(pet_entry,LV_OBJ_FLAG_CLICKABLE);lv_obj_set_ext_click_area(pet_entry,4);lv_obj_add_event_cb(pet_entry,action,LV_EVENT_CLICKED,(void*)(intptr_t)60);button("语音任务",56,144,176,96,14,false);button("插件",248,144,176,96,11,true);button("手动控制",56,260,176,96,13,false);button("设置",248,260,176,96,15,false);}
  else if(page==1){int n=cJSON_GetArraySize(plugins);if(!n){label(root,"尚未导入插件",88,168,304,lv_color_hex(0xf5f5f5));label(root,"业务随插件扩展\n保留通用控制能力",88,224,304,lv_color_hex(0xaaaaaa));}if(n){lv_obj_t *list=lv_obj_create(root);lv_obj_set_pos(list,64,136);lv_obj_set_size(list,352,232);lv_obj_set_style_bg_opa(list,0,0);lv_obj_set_style_border_width(list,0,0);lv_obj_set_style_pad_all(list,0,0);lv_obj_t *saved=root;root=list;for(int i=0;i<n;i++)button(str(cJSON_GetArrayItem(plugins,i),"name"),0,i*76,352,64,100+i,false);root=saved;}button("导入说明",112,386,120,56,12,true);button("首页",248,386,120,56,10,false);}
  else if(page==2){cJSON *p=current();label(root,p?str(p,"name"):"未选择插件",80,140,320,lv_color_hex(0xf5f5f5));label(root,p?str(p,"version"):"",80,186,320,lv_color_hex(0x17baf1));label(root,"描述文件已保存\n执行须私有工作流允许及本地确认",80,232,320,lv_color_hex(0xaaaaaa));button("预览任务计划",80,318,320,56,40,true);button("移除插件",112,386,120,56,41,false);button("插件列表",248,386,120,56,11,false);}
  else if(page==3){label(root,"通过USB导入JSON插件\n支持独立更新与移除\n手机导入待接入",80,144,320,lv_color_hex(0xaaaaaa));label(root,"API 1 · 最多4个插件\n导入后不会自动运行",80,288,320,lv_color_hex(0x17baf1));button("返回插件",112,386,256,56,11,true);}
@@ -289,6 +295,8 @@ void app_main(void){
   char buf[128];size_t count=amoled_usb_read(buf,sizeof(buf));for(size_t i=0;i<count;i++){char c=buf[i];if(c=='\n'){if(!overflow){line[pos]=0;if(!amoled_control_console(line)){bsp_display_lock(-1);process(line);bsp_display_unlock();}memset(line,0,sizeof(line));}else status("request-too-large");pos=0;overflow=false;}else if(c!='\r'){if(pos+1<sizeof(line))line[pos++]=c;else overflow=true;}}
   if(amoled_usb_ready()!=last_usb||amoled_relay_connected()!=last_ble||amoled_relay_online()!=last_relay||amoled_direct_online()!=last_direct){last_direct=amoled_direct_online();last_usb=amoled_usb_ready();last_ble=amoled_relay_connected();last_relay=amoled_relay_online();refresh=true;}
   if(refresh){bsp_display_lock(-1);render();refresh=false;bsp_display_unlock();}
+  if(page==11){static int64_t pet_tick;int64_t now=esp_timer_get_time();if(now-pet_tick>=250000){pet_tick=now;bsp_display_lock(-1);amoled_companion_ui_tick();bsp_display_unlock();}}
+  amoled_companion_monitor_enable(page==11);
   if(plugin_status_label){
    char text[1024];
    if(amoled_plugin_text(text,sizeof(text))){bsp_display_lock(-1);if(plugin_status_label)lv_label_set_text(plugin_status_label,text);if(plugin_confirm_button){if(amoled_plugin_stage()==1)lv_obj_remove_state(plugin_confirm_button,LV_STATE_DISABLED);else lv_obj_add_state(plugin_confirm_button,LV_STATE_DISABLED);}bsp_display_unlock();}
