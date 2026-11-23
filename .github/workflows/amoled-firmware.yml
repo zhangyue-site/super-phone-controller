@@ -131,3 +131,15 @@ jobs:
           idf.py -DIDF_TARGET=esp32s3 -B build-default-regcheck build
           if nm build-default-regcheck/*.elf | grep -q controller_usb_net_init; then exit 1; fi
           if nm build-default-regcheck/*.elf | grep -q controller_adb_init; then exit 1; fi
+      - name: Collect usb-local artifacts
+        working-directory: firmware-amoled
+        run: |
+          mkdir -p out-usb-local
+          cp build-usb-local/*.bin out-usb-local/
+          sha256sum out-usb-local/*.bin > out-usb-local/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amoled-firmware-usb-local-${{ github.run_number }}
+          path: out-usb-local/
+          retention-days: 14
+          if-no-files-found: error
