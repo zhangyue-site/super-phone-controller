@@ -118,6 +118,7 @@ jobs:
       - name: Build usb-local variant
         working-directory: firmware-amoled
         run: |
+          . "$IDF_PATH/export.sh"
           idf.py -B build-usb-local -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usb-local.defaults" build
           grep -q "#define CONFIG_TINYUSB_NET_MODE_NCM 1" build-usb-local/config/sdkconfig.h
           grep -q "#define CONFIG_CONTROLLER_USB_LOCAL 1" build-usb-local/config/sdkconfig.h
@@ -126,6 +127,7 @@ jobs:
       - name: Regression guard (default build carries no usb-local symbols)
         working-directory: firmware-amoled
         run: |
+          . "$IDF_PATH/export.sh"
           idf.py -B build-default-regcheck build
           if nm build-default-regcheck/*.elf | grep -q controller_usb_net_init; then exit 1; fi
           if nm build-default-regcheck/*.elf | grep -q controller_adb_init; then exit 1; fi
