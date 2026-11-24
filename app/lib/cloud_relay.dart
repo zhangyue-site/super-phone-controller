@@ -234,6 +234,7 @@ class CloudRelay {
         final token = _guardAndroidInput ? await _acquireInput() : null;
         if (_closed) return;
         var ok = false;
+        var ownerDenied = _guardAndroidInput && token == null;
         var reason = 'paste_failed';
         if (token != null) {
           // The callback follows the editor commit. Losing it is an unknown result.
@@ -241,6 +242,7 @@ class CloudRelay {
           final outcome = await ImeRelay.pasteText(text, token);
           if (_closed) return;
           ok = outcome['ok'] == true;
+          ownerDenied = !ok && outcome['reason'] == 'manual_or_busy';
           if (!ok && outcome['reason'] == 'paste_unknown') throw _InputHeld();
           // The existing cloud endpoint accepts only these failure codes.
           if (ok) {
@@ -275,6 +277,7 @@ class CloudRelay {
         }
         SafeDiagnostics.record(ok ? 'relay_ack' : 'relay_paste_rejected',
             phase: 'ack', op: op, seq: seq);
+        if (ownerDenied) throw _InputHeld();
         return;
       }
       final packet = command["packet"],

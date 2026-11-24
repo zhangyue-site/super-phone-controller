@@ -142,6 +142,9 @@ void main() {
     await t.relay.start();
     await t.ended.future.timeout(const Duration(seconds: 4));
     expect(calls, ['beginRemote']);
+    expect(t.events.where((e) => e == 'poll').length, 1);
+    expect(
+        t.events, containsAllInOrder(['ack-text', 'disconnected', 'detach']));
     expect(t.acks, [
       {'nonce': nonce, 'id': 'draft-one', 'ok': false, 'reason': 'paste_failed'}
     ]);

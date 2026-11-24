@@ -1,6 +1,8 @@
 package android.os
 
 class Bundle(private val text: String? = null) {
+    var inserted: CharSequence? = null
+    fun putCharSequence(key: String, value: CharSequence) { inserted = value }
     fun getStringArrayList(key: String): ArrayList<String>? = text?.let { arrayListOf(it) }
 }
 

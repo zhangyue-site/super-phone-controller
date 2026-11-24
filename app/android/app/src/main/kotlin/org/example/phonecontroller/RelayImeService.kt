@@ -77,6 +77,15 @@ class RelayImeService : InputMethodService() {
         super.onUnbindInput()
     }
 
+    private fun hardwareToolbarAllowed() = RelayInputOwner.allowHardwareToolbar(
+        this, currentInputEditorInfo?.inputType,
+        resources.configuration.keyboard != android.content.res.Configuration.KEYBOARD_NOKEYS)
+
+    override fun onEvaluateInputViewShown() = super.onEvaluateInputViewShown() || hardwareToolbarAllowed()
+
+    override fun onShowInputRequested(flags: Int, configChange: Boolean) =
+        super.onShowInputRequested(flags, configChange) || hardwareToolbarAllowed()
+
     override fun onCreateInputView(): View {
         val outer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -220,9 +229,14 @@ object RelayIme {
         val token = remoteToken ?: RelayInputOwner.tryBeginRemote(c)
         if (token == null || !RelayInputOwner.permits(c, token)) { onDone(false, "manual_or_busy"); return }
         val deadline = SystemClock.elapsedRealtime() + timeoutMs.coerceIn(1, 8_000)
-        val previous = RelayImeService.instance
+        val previous = RelayImeService.instance?.takeIf { same(RelayImeService.currentImeId(c), self(c)) }
         val previousGeneration = previous?.editorGeneration
-        val previousField = previous?.currentInputEditorInfo?.takeIf { previous.currentInputConnection != null }
+        val previousConnection = previous?.currentInputConnection
+        val previousField = previous?.currentInputEditorInfo?.takeIf {
+            previousConnection != null && it.inputType != android.text.InputType.TYPE_NULL
+        }
+        val focused = AccessibilityAssistService.focusedEditor()
+        val expectedPackage = focused?.packageName?.toString()
         var switchedFrom: String? = null
         var completed = false
         fun finish(ok: Boolean, reason: String?) {
@@ -241,12 +255,18 @@ object RelayIme {
             val svc = RelayImeService.instance
             val ic = svc?.currentInputConnection
             val editor = svc?.currentInputEditorInfo
-            if (previousField != null && (previous !== svc || previousGeneration != svc?.editorGeneration)) {
+            if (focused != null && focused != AccessibilityAssistService.focusedEditor()) {
+                finish(false, "editor_changed"); return
+            }
+            if (previousField != null && (previous !== svc || previousGeneration != svc?.editorGeneration ||
+                        previousConnection !== ic)) {
                 finish(false,"editor_changed"); return
             }
             if (svc == null || ic == null || editor == null) {
                 main.postDelayed({ commitWhenBound() }, 80); return
             }
+            if (editor.inputType == android.text.InputType.TYPE_NULL ||
+                (focused != null && editor.packageName != expectedPackage)) { finish(false, "editor_changed"); return }
             if (ImeVoiceDraft.password(editor.inputType)) { finish(false, "password_field"); return }
             try {
                 val ok = ic.commitText(text, 1)
@@ -261,9 +281,16 @@ object RelayIme {
         main.post {
             if (!RelayInputOwner.permits(c, token)) { finish(false,"manual_or_busy"); return@post }
             try {
-                if (AccessibilityAssistService.setText(c, text)) { finish(true, null); return@post }
-                if (!authorized(c) || enabled(c).none { same(it.id, self(c)) }) { finish(false,"ime_not_authorized"); return@post }
+                if (focused != null) {
+                    val applied = try { AccessibilityAssistService.setFocusedText(focused, text) }
+                        catch (_: Exception) { finish(false, "paste_unknown"); return@post }
+                    if (applied) { finish(true, null); return@post }
+                    if (focused != AccessibilityAssistService.focusedEditor()) { finish(false, "editor_changed"); return@post }
+                }
+                // Without an original editor identity, a future connection could belong to any app.
+                if (focused == null && previousField == null) { finish(false,"editor_unconfirmed"); return@post }
                 if (!same(RelayImeService.currentImeId(c), self(c))) {
+                    if (!authorized(c) || enabled(c).none { same(it.id, self(c)) }) { finish(false,"ime_not_authorized"); return@post }
                     switchedFrom = activate(c)
                     if (switchedFrom == null) { finish(false,"ime_switch_failed"); return@post }
                 }

@@ -94,5 +94,42 @@ fun main() {
     check(!RelayInputOwner.permits(f.service, token))
     RelayInputOwner.endRemote(token)
     check(RelayInputOwner.tryBeginRemote(f.service) == null)
+    val user = RelayImeService()
+    check(RelayInputOwner.allowHardwareToolbar(user, 1, true))
+    check(!RelayInputOwner.allowHardwareToolbar(user, 0, true))
+    check(!RelayInputOwner.allowHardwareToolbar(user, 1, false))
+    check(RelayInputOwner.resumeRemote(user))
+    val cloudLease = checkNotNull(RelayInputOwner.tryBeginRemote(user))
+    check(!RelayInputOwner.allowHardwareToolbar(user, 1, true))
+    RelayInputOwner.endRemote(cloudLease)
+    check(RelayInputOwner.allowHardwareToolbar(user, 1, true))
+
+    val root = android.view.accessibility.AccessibilityNodeInfo()
+    val editor = android.view.accessibility.AccessibilityNodeInfo()
+    fun current() = RelayEditorAccess.focusedEditor(root)
+    check(current() == null)
+    root.focused = editor
+    val pinned = current()
+    check(pinned === editor && RelayEditorAccess.setText(pinned, ::current, "一次"))
+    check(editor.writes == listOf("一次"))
+    root.focused = android.view.accessibility.AccessibilityNodeInfo()
+    check(!RelayEditorAccess.setText(pinned, ::current, "错框"))
+    check(root.focused!!.writes.isEmpty())
+    root.focused = editor
+    editor.isPassword = true
+    check(!RelayEditorAccess.setText(pinned, ::current, "不应写入密码框"))
+    editor.isPassword = false
+    editor.inputType = 129
+    check(current() == null)
+    editor.inputType = 1
+    editor.isFocused = false
+    check(current() == null)
+    editor.isFocused = true
+    editor.isVisibleToUser = false
+    check(current() == null)
+    editor.isVisibleToUser = true
+    editor.windowId = 2
+    check(current() == null && editor.writes == listOf("一次"))
+    println("PASS hardware keyboard toolbar policy and focused accessibility writes")
     println("PASS IME voice draft, focus, partial/final, retries, local-only capability, consent and ownership")
 }

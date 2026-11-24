@@ -11,6 +11,12 @@ object RelayInputOwner {
 
     @Synchronized fun isManual(c: Context) = forcedManual || prefs(c).getBoolean("manual", false)
 
+    // Only extend the platform default for an editable field in the personally selected IME.
+    // No window is shown proactively: hiding the keyboard still clears Android's show request.
+    @Synchronized fun allowHardwareToolbar(c: Context, inputType: Int?, hardwareKeyboard: Boolean): Boolean =
+        hardwareKeyboard && inputType != null && inputType != android.text.InputType.TYPE_NULL &&
+            (active == null || isManual(c))
+
     @Synchronized fun takeManual(c: Context): Boolean {
         forcedManual = true
         prefs(c).edit().putBoolean("manual", true).commit()
