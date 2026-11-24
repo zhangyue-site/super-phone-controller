@@ -98,14 +98,32 @@ jobs:
           COMPAT_MODEL_URL: ${{ vars.CONTROLLER_COMPAT_MODEL_URL }}
         run: |
           set -euo pipefail
+          asset=assets/controller-button.onnx
+          model_sha=45a522a4e47102e32aa6b447e470598012556ef0d37226fc3f793e162a0f8491
+          archive_sha=7310ba7d56a24833297e5e128aaa9981090c45f7701889ad09c31fad4c971c37
+          verified() { [[ -f "$2" ]] && echo "$1  $2" | sha256sum --status -c -; }
+          if verified "$model_sha" "$asset"; then
+            echo "Verified bundled model from checkout or cache."
+            exit 0
+          fi
           modeldir=$(mktemp -d "$RUNNER_TEMP/compatible-model.XXXXXX")
           trap 'rm -rf "$modeldir"' EXIT
-          curl --fail --silent --show-error --proto '=https' --connect-timeout 20 --max-time 180 "$COMPAT_MODEL_URL" -o "$modeldir/model.7z"
-          echo "7310ba7d56a24833297e5e128aaa9981090c45f7701889ad09c31fad4c971c37  $modeldir/model.7z" | sha256sum -c -
+          if git cat-file blob HEAD:app/assets/controller-button.onnx > "$modeldir/checkout.onnx" 2>/dev/null &&
+             verified "$model_sha" "$modeldir/checkout.onnx"; then
+            install -m 0644 "$modeldir/checkout.onnx" "$asset"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            curl --fail --silent --proto '=https' --connect-timeout 20 --max-time 360 \
+              --continue-at - --output "$modeldir/model.7z" "$COMPAT_MODEL_URL" || true
+            if verified "$archive_sha" "$modeldir/model.7z"; then break; fi
+            echo "Pinned archive not complete after attempt $attempt."
+          done
+          verified "$archive_sha" "$modeldir/model.7z" || { echo "Pinned archive verification failed."; exit 1; }
           command -v 7z >/dev/null || sudo apt-get install -y p7zip-full
           7z x -y -p"$PRIVATE_ARTIFACT_PASSWORD" -o"$modeldir/unpacked" "$modeldir/model.7z" >/dev/null
-          echo "45a522a4e47102e32aa6b447e470598012556ef0d37226fc3f793e162a0f8491  $modeldir/unpacked/controller-button.onnx" | sha256sum -c -
-          install -m 0644 "$modeldir/unpacked/controller-button.onnx" assets/controller-button.onnx
+          verified "$model_sha" "$modeldir/unpacked/controller-button.onnx" || { echo "Pinned model verification failed."; exit 1; }
+          install -m 0644 "$modeldir/unpacked/controller-button.onnx" "$asset"
 
       - name: Resolve dependencies
         run: flutter pub get
