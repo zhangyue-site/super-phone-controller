@@ -347,8 +347,10 @@ def run(nav,job,text,*,authority=None,guard=None,policy=None,intake=understand,
                 dispatch_live()
                 self.latest=capture(authority,seq,raw,native,observed_at=clock(),rotation=getattr(job,"video_rotation",None))
                 return raw,seq,sig
-            def _matches_action_frame(self,expected,current_sig,current_raw):
+            def _matches_action_frame(self,expected,current_sig,current_raw,j=None):
                 dispatch_live()
+                if j is not None and j is not job:
+                    raise GateError("observation_binding_changed","authorization","stop","最终输入任务已改变，未执行输入。")
                 valid=self._validate_current_frame(expected,current_sig,current_raw)
                 dispatch_live()
                 return valid
