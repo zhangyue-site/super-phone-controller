@@ -1,6 +1,7 @@
 """Translate one text planning request into an isolated native Dsh headless session."""
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -50,19 +51,41 @@ def parse_events(lines):
     return {"proposal": result if isinstance(result, dict) else None, "usage": usage}
 
 
+def planning_provider(entries):
+    """Tune only the selected model on the existing subscription route."""
+    configs = {entry["id"]: entry["config"] for entry in entries if "config" in entry}
+    selection = configs["agent-default-model"]
+    if selection.get("provider") != "ocg" or selection.get("model") != "deepseek-v4.1-flash":
+        raise ValueError("unexpected phone planning model")
+    route = configs["llm-pi-ai"]["providers"][selection["provider"]]
+    if not route.get("apiKeyEnv") or not route.get("baseURL") or route.get("api") != "openai-completions":
+        raise ValueError("incomplete phone subscription route")
+    model, = (item for item in route["models"] if item["id"] == selection["model"])
+    model["reasoningEfforts"] = {"off": None, "high": "high"}
+    model.setdefault("compat", {})["thinkingFormat"] = "deepseek"
+    route["retryPolicy"] = {"mode": "normal", "maxRetries": 0}
+    selection["reasoningEffort"] = "off"
+    return entries
+
+
 def main():
+    import yaml
     system, user = messages(json.load(sys.stdin))
     # Dsh receives the trusted host rules in its system prompt. Phone text is stdin data.
     with TemporaryDirectory() as directory:
         patch = Path(directory) / "instructions.yml"
         patch.write_text(json.dumps([{"id": "system-prompt", "config": {"personaPrefix": system}}], ensure_ascii=False))
-        cmd = [BINARY, "--profile", "headless", "--patch", PROVIDER, "--patch", str(PROFILE),
+        provider = Path(directory) / "provider.yml"
+        provider.write_text(json.dumps(planning_provider(yaml.safe_load(Path(PROVIDER).read_bytes()))))
+        cmd = [BINARY, "--profile", "headless", "--patch", str(provider), "--patch", str(PROFILE),
                "--patch", str(patch), "--json", "-"]
         process = subprocess.run(cmd, input=user.encode(), cwd=directory, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, check=False)
+                                 stderr=subprocess.PIPE, check=False)
         result = parse_events(process.stdout.splitlines())
         if process.returncode != 0:
             result["proposal"] = None
+            code = re.search(rb"^dsh: ([A-Z][A-Z0-9_]{1,63}):", process.stderr, re.M)
+            result["failureCode"] = code[1].decode("ascii") if code else "NATIVE_ERROR"
         print(json.dumps(result, ensure_ascii=False))
 
 

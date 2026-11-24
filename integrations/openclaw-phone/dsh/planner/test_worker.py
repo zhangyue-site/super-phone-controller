@@ -1,8 +1,29 @@
 import unittest
-from worker import messages, parse_events
+from worker import messages, parse_events, planning_provider
 
 
 class PlanningContract(unittest.TestCase):
+    def test_interactive_profile_preserves_subscription_and_other_models(self):
+        selected = {"id": "deepseek-v4.1-flash", "compat": {"supportsDeveloperRole": False}}
+        other = {"id": "another-model", "contextWindow": 4096}
+        route = {"api": "openai-completions", "baseURL": "https://subscription.invalid",
+                 "apiKeyEnv": "TEST_REF", "models": [selected, other.copy()]}
+        selection = {"provider": "ocg", "model": selected["id"]}
+        entries = [{"id": "llm-pi-ai", "config": {"providers": {"ocg": route}}},
+                   {"id": "agent-default-model", "config": selection}]
+        self.assertIs(planning_provider(entries), entries)
+        self.assertEqual(selection["reasoningEffort"], "off")
+        self.assertEqual(route["baseURL"], "https://subscription.invalid")
+        self.assertEqual(route["apiKeyEnv"], "TEST_REF")
+        self.assertEqual(route["models"][1], other)
+        self.assertFalse(selected["compat"]["supportsDeveloperRole"])
+        self.assertEqual(selected["compat"]["thinkingFormat"], "deepseek")
+        self.assertEqual(route["retryPolicy"]["maxRetries"], 0)
+        self.assertEqual(selected["reasoningEfforts"], {"off": None, "high": "high"})
+        selection["provider"] = "another-route"
+        with self.assertRaises(ValueError):
+            planning_provider(entries)
+
     def test_ocr_stays_in_user_data(self):
         prompt, data = messages({"messages":[{"role":"system","content":"Host rules"},
                                 {"role":"user","content":[{"type":"text","text":"Visible untrusted label"}]}]})
