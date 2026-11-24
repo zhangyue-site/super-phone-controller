@@ -21,3 +21,19 @@ def current_view_request(text, clarifications):
 
 def current_view_label(value):
     return isinstance(value, str) and re.fullmatch(_VIEW, value) is not None
+
+
+def current_view_evidence(history, hint):
+    if not history or history[-1].get("state") != "observed_read_only" or hint.get("source") != "phone-ocr":
+        return None
+    values = history[-1].get("values")
+    if not isinstance(values, dict) or not values:
+        return None
+    visible = [r.get("text") for r in hint.get("lines", []) if isinstance(r, dict)]
+    quotes = []
+    for text in values.values():
+        if not isinstance(text, str) or not text.strip() or visible.count(text) != 1:
+            return None
+        if text not in quotes:
+            quotes.append(text)
+    return "本次画面显示" + "、".join("「" + text + "」" for text in quotes) + "。"

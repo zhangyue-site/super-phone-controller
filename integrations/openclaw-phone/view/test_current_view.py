@@ -1,8 +1,17 @@
 import unittest
-from current_view import current_view_label, current_view_request
+from current_view import current_view_evidence, current_view_label, current_view_request
 
 
 class CurrentViewTest(unittest.TestCase):
+    def test_answer_uses_verified_text_without_inferring_the_current_app(self):
+        history = [{"state": "observed_read_only", "values": {"连接状态": "共享中"}}]
+        hint = {"source": "phone-ocr", "lines": [{"text": "微信"}, {"text": "共享中"}]}
+        self.assertEqual(current_view_evidence(history, hint), "本次画面显示「共享中」。")
+        for lines in ([], [{"text": "已停止"}], [{"text": "共享中"}] * 2):
+            self.assertIsNone(current_view_evidence(history, dict(hint, lines=lines)))
+        self.assertIsNone(current_view_evidence(history, dict(hint, source="model")))
+        self.assertIsNone(current_view_evidence([], hint))
+
     def test_view_and_visible_question(self):
         for text in ("查看当前手机画面，汇总可见内容。只读，不点击。",
                      "只读查看手机当前画面，说明当前界面显示的连接状态，读完停止。",
