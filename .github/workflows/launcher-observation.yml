@@ -1,0 +1,26 @@
+name: Android launcher observation
+on:
+  push:
+    branches: ['fix/launcher-observation-*']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Weixin task entry
+        run: node --test integrations/openclaw-phone/weixin-intake.test.mjs
+      - name: Test intermediate launcher verification
+        working-directory: integrations/openclaw-phone/launcher
+        run: python3 -B -m unittest discover -v
+      - name: Package verified observation helper
+        working-directory: integrations/openclaw-phone/launcher
+        run: sha256sum launcher_check.py > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-observation
+          path: |
+            integrations/openclaw-phone/launcher/launcher_check.py
+            integrations/openclaw-phone/launcher/SHA256SUMS
+          if-no-files-found: error
