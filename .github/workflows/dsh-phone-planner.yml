@@ -1,0 +1,20 @@
+name: Dsh phone planner
+on:
+  push:
+    branches: ['fix/dsh-phone-planner-*']
+permissions:
+  contents: read
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/openclaw-phone/dsh/planner
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh -n plan && python3 -B -m unittest discover -v
+      - run: tar czf phone-planner.tgz plan worker.py planner.patch.yml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-phone-planner
+          path: integrations/openclaw-phone/dsh/planner/phone-planner.tgz
