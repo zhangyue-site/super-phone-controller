@@ -1,3 +1,4 @@
+import json
 import unittest
 from worker import messages, parse_events, planning_provider
 
@@ -39,3 +40,17 @@ class PlanningContract(unittest.TestCase):
         self.assertEqual(parse_events(lines)["proposal"], {"step":None})
         self.assertIsNone(parse_events(['{"type":"tool_call"}']+lines)["proposal"])
         self.assertIsNone(parse_events([lines[0].replace("completed","aborted")])["proposal"])
+
+    def test_only_a_completed_format_error_can_be_replanned(self):
+        def final(text):
+            return json.dumps({"type": "final", "reason": {"kind": "completed"}, "text": text})
+
+        wrapped = final('```JSON\r\n{"goal": "test"}\r\n```')
+        self.assertEqual(parse_events([wrapped])["proposal"], {"goal": "test"})
+        for text in ('{"step": 1} {"step": 2}', 'answer: {"step": 1}', '[]', 'missing'):
+            report = parse_events([final(text)])
+            self.assertIsNone(report["proposal"])
+            self.assertEqual(report["failureCode"], "INVALID_PLAN_JSON")
+        report = parse_events(['{"type":"tool_call"}', final('missing')])
+        self.assertIsNone(report["proposal"])
+        self.assertNotIn("failureCode", report)

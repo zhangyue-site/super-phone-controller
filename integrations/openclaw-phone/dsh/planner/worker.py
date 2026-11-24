@@ -24,7 +24,9 @@ def messages(request):
         content = content[0]["text"]
     if not isinstance(content, str) or not content.strip() or len(content) > 131072:
         raise ValueError("invalid text observation")
-    return system["content"] + "\n" + POLITE, content
+    return (system["content"] + "\n" + POLITE
+            + "\n本轮只做规划。最终回复须为任务协议要求的单个 JSON 对象，首尾使用花括号。"
+              "不要调用工具，不要输出分析、前言、Markdown 或对象以外的文字。"), content
 
 
 def parse_events(lines):
@@ -44,11 +46,16 @@ def parse_events(lines):
                 final = event.get("text")
     result = None
     if not unexpected_tool and isinstance(final, str):
+        body = final.strip()
+        fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", body, re.I | re.S)
         try:
-            result = json.loads(final.strip().removeprefix("```json").removesuffix("```").strip())
+            result = json.loads(fence[1] if fence else body)
         except ValueError:
             pass
-    return {"proposal": result if isinstance(result, dict) else None, "usage": usage}
+    report = {"proposal": result if isinstance(result, dict) else None, "usage": usage}
+    if not unexpected_tool and final is not None and report["proposal"] is None:
+        report["failureCode"] = "INVALID_PLAN_JSON"
+    return report
 
 
 def planning_provider(entries):
