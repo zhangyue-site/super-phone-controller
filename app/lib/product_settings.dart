@@ -1,5 +1,6 @@
 import 'accessibility_assist.dart';
 import 'capture_sampling.dart';
+import 'ime_relay.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'diagnostics.dart';
@@ -34,14 +35,42 @@ class ProductSettingsScreen extends StatefulWidget {
 }
 
 class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
+  bool _manualInput = false, _resumingInput = false;
+  String? _inputNotice;
   String? _upgradeNotice;
   bool _upgradeError = false;
   Timer? _timer;
   @override
   void initState() {
     super.initState();
+    _readInputOwner();
     _timer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (mounted && widget.client != null) setState(() {});
+    });
+  }
+
+  Future<void> _readInputOwner() async {
+    try {
+      final state = await ImeRelay.status();
+      if (mounted) setState(() => _manualInput = state['manualTakeover'] == true);
+    } on MissingPluginException {
+      // Input ownership is provided by the Android target app.
+    } on PlatformException {
+      // Other settings remain available if the IME service is unavailable.
+    }
+  }
+
+  Future<void> _resumeInput() async {
+    if (_resumingInput) return;
+    setState(() => _resumingInput = true);
+    var resumed = false;
+    try { resumed = await ImeRelay.resumeRemote(); }
+    on PlatformException { resumed = false; }
+    if (!mounted) return;
+    setState(() {
+      _resumingInput = false;
+      _manualInput = !resumed;
+      _inputNotice = resumed ? '已允许新的远程输入' : '请先结束听写或等待在途动作结束，再试一次';
     });
   }
 
@@ -140,6 +169,14 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     return Scaffold(
         appBar: AppBar(title: const Text('设置与设备维护')),
         body: ListView(padding: const EdgeInsets.all(20), children: [
+          if (_manualInput)
+            ListTile(
+                leading: const Icon(Icons.keyboard_outlined),
+                title: const Text('恢复远程输入'),
+                subtitle: const Text('当前由本人操作，仅放行新的远程动作'),
+                enabled: !_resumingInput,
+                onTap: _resumingInput ? null : _resumeInput),
+          if (_inputNotice != null) Text(_inputNotice!),
           if (Theme.of(context).platform == TargetPlatform.android) const AccessibilityAssistCard(),
           if (Theme.of(context).platform == TargetPlatform.android) const CaptureSamplingCard(),
           Text('外观', style: Theme.of(context).textTheme.titleLarge),

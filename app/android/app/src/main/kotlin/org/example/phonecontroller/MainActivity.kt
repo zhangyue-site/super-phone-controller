@@ -15,6 +15,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
  private val billTextLoop by lazy { BillTextLoop(applicationContext) }
+ private var imeRemoteToken: Long? = null
  private var usbProof: UsbProofBridge? = null
  private var pending: MethodChannel.Result? = null
  private var ticket: String? = null
@@ -26,6 +27,10 @@ class MainActivity: FlutterActivity() {
   val code=prefs.getInt("__consent-code",1000).coerceIn(1000,65000)
   if(!prefs.edit().putInt("__consent-code",if(code>=65000)1000 else code+1).commit())throw IllegalStateException("无法保存授权会话")
   return code
+ }
+ private fun guardedAccessibilityInput(action: () -> Boolean): Boolean {
+  val token = RelayInputOwner.tryBeginRemote(applicationContext) ?: return false
+  return try { action() } finally { RelayInputOwner.endRemote(token) }
  }
  override fun onCreate(savedInstanceState: Bundle?) {
   super.onCreate(savedInstanceState)
@@ -137,14 +142,33 @@ class MainActivity: FlutterActivity() {
      try {startActivity(AccessibilityAssistService.settingsIntent());result.success(null)}
      catch(_: Exception) {result.error("settings_unavailable","无法打开无障碍设置，请从系统设置进入",null)}
     }
-    "setText" -> result.success(AccessibilityAssistService.setText(this,call.argument<String>("text")?:""))
-    "clickLabel" -> result.success(AccessibilityAssistService.clickLabel(this,call.argument<String>("label")?:""))
+    "setText" -> result.success(guardedAccessibilityInput { AccessibilityAssistService.setText(this,call.argument<String>("text")?:"") })
+    "clickLabel" -> result.success(guardedAccessibilityInput { AccessibilityAssistService.clickLabel(this,call.argument<String>("label")?:"") })
     else -> result.notImplemented()
    }
   }
   MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/ime").setMethodCallHandler { call,result ->
    when(call.method) {
     "status" -> result.success(RelayIme.status(applicationContext))
+    "beginRemote" -> {
+     val token = RelayInputOwner.tryBeginRemote(applicationContext)
+     if (token != null) imeRemoteToken = token
+     result.success(token)
+    }
+    "permitsRemote" -> {
+     val token = call.argument<Number>("token")?.toLong()
+     result.success(token != null && token == imeRemoteToken && RelayInputOwner.permits(applicationContext, token))
+    }
+    "endRemote" -> {
+     val token = call.argument<Number>("token")?.toLong()
+     if (token != null && token == imeRemoteToken) {
+      RelayInputOwner.endRemote(token)
+      imeRemoteToken = null
+     }
+     result.success(null)
+    }
+    "cancelVoiceForStop" -> { RelayImeService.instance?.cancelVoiceForStop(); result.success(null) }
+    "resumeRemote" -> result.success(RelayInputOwner.resumeRemote(applicationContext))
     "activate" -> result.success(RelayIme.activate(applicationContext) ?: "")
     "restore" -> { RelayIme.restore(applicationContext, call.argument<String>("id") ?: ""); result.success(true) }
     "pasteText" -> {
@@ -152,7 +176,12 @@ class MainActivity: FlutterActivity() {
      if(text.isEmpty()){result.error("bad_args","text required",null);return@setMethodCallHandler}
      val enter=call.argument<Boolean>("enter") ?: false
      val timeoutMs=(call.argument<Number>("timeoutMs") ?: 8000).toLong()
-     RelayIme.paste(applicationContext,text,enter,timeoutMs){ ok,reason ->
+     val token = call.argument<Number>("token")?.toLong()
+     if (token == null || token != imeRemoteToken || !RelayInputOwner.permits(applicationContext,token)) {
+      result.success(mapOf("ok" to false,"reason" to "manual_or_busy"))
+      return@setMethodCallHandler
+     }
+     RelayIme.paste(applicationContext,text,enter,timeoutMs,remoteToken=token){ ok,reason ->
       result.success(mapOf("ok" to ok,"reason" to (reason ?: "")))
      }
     }
@@ -239,6 +268,8 @@ class MainActivity: FlutterActivity() {
       pending?.error("cancelled","已取消屏幕共享",null);pending=null
      }
      if(requestedUsb==null || requestedUsb==ScreenShareService.usbOwnerSession) {
+      RelayImeService.instance?.cancelVoiceForStop()
+      imeRemoteToken?.let { RelayInputOwner.endRemote(it) }; imeRemoteToken = null
       ScreenShareService.status="已停止共享";ScreenShareService.taskStatus=""
       ScreenShareService.stopRecovery()
       stopService(Intent(this,ScreenShareService::class.java))
@@ -340,6 +371,7 @@ class MainActivity: FlutterActivity() {
   }
  }
  override fun onDestroy() {
+  imeRemoteToken?.let { RelayInputOwner.endRemote(it) }; imeRemoteToken = null
   billTextLoop.close()
   usbProof?.close();usbProof=null
   UsbLaunchBridge.detachOwner(this)

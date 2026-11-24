@@ -117,6 +117,9 @@ jobs:
         id: android_regressions
         run: flutter test --dart-define=CONTROLLER_BASE_URL=https://controller.test
 
+      - name: Keyboard dictation and manual takeover regressions
+        run: bash ../tools/test_ime_voice_host.sh
+
       - name: Native capture and USB session regressions
         run: |
           mkdir -p "$RUNNER_TEMP/capture-jvm"

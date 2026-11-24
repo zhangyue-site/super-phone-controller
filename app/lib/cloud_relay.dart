@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'gateway_recovery.dart';
 import 'diagnostics.dart';
 import "dart:async";
@@ -9,6 +10,11 @@ import 'ime_relay.dart';
 class TaskRelayStopped implements Exception {
   @override
   String toString() => '旧任务已停止，等待恢复被动新任务监听';
+}
+
+class _InputHeld implements Exception {
+  @override
+  String toString() => '本人正在操作或输入结果待核对，原动作已停止';
 }
 
 /// Opaque signed packets only. No device key, action planning or ADB fallback.
@@ -23,8 +29,9 @@ class CloudRelay {
 
   /// vc90 反馈闭环：动作分发/回执时回调目标坐标（共享帧空间），
   /// App 用悬浮窗在共享帧上画红/绿光标，供引擎 OCR 核验真实落点。
-  final void Function(String phase, double x, double y, double? frameW,
-      double? frameH)? onCursor;
+  final void Function(
+          String phase, double x, double y, double? frameW, double? frameH)?
+      onCursor;
   bool recoverableNetworkFailure = false;
   bool taskStopAcknowledged = false;
   bool closeFinished = false;
@@ -35,8 +42,10 @@ class CloudRelay {
   int? _activeOp, _activeSeq, _lastOp, _lastSeq;
   Timer? _timer;
   Timer? _watchdog;
-  Timer? _imeRestoreTimer;
-  String? _taskImeOriginal;
+  final bool _guardAndroidInput;
+  int? _remoteToken;
+  (String, int, String)? _acknowledgedStop;
+  final _attemptedTexts = <String>{};
   String? _nonce;
   DateTime? _heartbeat;
   DateTime? _lastControl;
@@ -66,7 +75,9 @@ class CloudRelay {
       this.retiredNonce,
       void Function(Map<String, Object>)? onTrace,
       bool tracePhases = false,
-      Duration Function()? monotonic}) {
+      Duration Function()? monotonic,
+      bool? guardAndroidInput})
+      : _guardAndroidInput = guardAndroidInput ?? Platform.isAndroid {
     final clock = Stopwatch()..start();
     _elapsed = monotonic ?? (() => clock.elapsed);
     _trace = RelayPhaseTrace(
@@ -135,16 +146,22 @@ class CloudRelay {
         Timer.periodic(const Duration(seconds: 5), (_) => _watchdogTick());
   }
 
-  void _restoreTaskIme() {
-    final orig = _taskImeOriginal;
-    _taskImeOriginal = null;
-    _imeRestoreTimer?.cancel();
-    if (orig != null && orig.isNotEmpty) ImeRelay.restore(orig);
+  Future<int?> _acquireInput() async {
+    final token = await ImeRelay.beginRemote();
+    if (token == null) return null;
+    if (_closed) {
+      await ImeRelay.endRemote(token);
+      return null;
+    }
+    _remoteToken = token;
+    return token;
   }
 
-  void _armImeRestoreTimer() {
-    _imeRestoreTimer?.cancel();
-    _imeRestoreTimer = Timer(const Duration(seconds: 90), _restoreTaskIme);
+  Future<void> _releaseInput() async {
+    final token = _remoteToken;
+    if (token == null) return;
+    _remoteToken = null;
+    await ImeRelay.endRemote(token);
   }
 
   Future<void> _tick() async {
@@ -190,20 +207,14 @@ class CloudRelay {
       _pollRetryAttempt = 0;
       _pollRetryAt = null;
       if (_closed) return;
-      if (command["state"] == "done") { _restoreTaskIme(); return; }
-      if (command["state"] != "action" && command["state"] != "action_text") return;
-      // A new signed action means the relay is active again; a previous STOP
-      // no longer describes this session.
-      taskStopAcknowledged = false;
-      // 任务期把默认输入法切到无界面中转输入法（避免第三方键盘触发误分类/污染帧流），任务结束恢复。
-      _imeRestoreTimer?.cancel();
-      _taskImeOriginal ??= await ImeRelay.activate();
-      _armImeRestoreTimer();
-
-      // paste_text (op 15): 整句经 App 本地输入法提交。不写 BLE、不动 packet；
-      // dispatched 保持 false，任何失败都仍是可安全恢复的路径。
+      if (command["state"] != "action" && command["state"] != "action_text") {
+        return;
+      }
       if (command["state"] == "action_text") {
-        final id = command["id"], text = command["text"], op = command["op"], seq = command["seq"];
+        final id = command["id"],
+            text = command["text"],
+            op = command["op"],
+            seq = command["seq"];
         if (id is! String ||
             op != 15 ||
             seq is! int ||
@@ -218,28 +229,52 @@ class CloudRelay {
         _activeSeq = seq;
         _trace.setAction(op, seq);
         SafeDiagnostics.record('relay_paste', phase: _phase, op: op, seq: seq);
-        Map<String, dynamic> outcome;
-        try {
-          outcome = await ImeRelay.pasteText(text)
-              .timeout(const Duration(seconds: 12));
-        } catch (_) {
-          outcome = {'ok': false, 'reason': 'paste_timeout'};
+        taskStopAcknowledged = false;
+        if (!_attemptedTexts.add(id)) throw _InputHeld();
+        final token = _guardAndroidInput ? await _acquireInput() : null;
+        if (_closed) return;
+        var ok = false;
+        var reason = 'paste_failed';
+        if (token != null) {
+          // The callback follows the editor commit. Losing it is an unknown result.
+          dispatched = true;
+          final outcome = await ImeRelay.pasteText(text, token);
+          if (_closed) return;
+          ok = outcome['ok'] == true;
+          if (!ok && outcome['reason'] == 'paste_unknown') throw _InputHeld();
+          // The existing cloud endpoint accepts only these failure codes.
+          if (ok) {
+            reason = '';
+          } else if (const {
+            'ime_not_authorized',
+            'paste_timeout',
+            'ime_switch_failed'
+          }.contains(outcome['reason'])) {
+            reason = outcome['reason'] as String;
+          }
         }
-        _phase = 'ack';
+        // Even a negative receipt must settle this already-consumed command.
+        dispatched = true;
+        _phase = 'ack-text';
         _trace.phase('ack');
         final ack = await post("ack-text", {
           "nonce": _nonce,
           "id": id,
-          "ok": outcome["ok"] == true,
-          "reason": (outcome["reason"] as String?) ?? "",
+          "ok": ok,
+          "reason": reason,
         }).timeout(const Duration(seconds: 20));
-        if (ack["state"] != "acknowledged") {
-          SafeDiagnostics.record('relay_paste_rejected', phase: 'ack', op: op);
+        if (_closed) return;
+        if (ack['state'] != (ok ? 'acknowledged' : 'failed')) {
+          throw _InputHeld();
         }
-        _lastControl = DateTime.now();
-        _lastControlAt = _elapsed();
-        _lastOp = op;
-        SafeDiagnostics.record('relay_ack', phase: 'ack', op: op, seq: seq);
+        if (ok) {
+          _lastControl = DateTime.now();
+          _lastControlAt = _elapsed();
+          _lastOp = op;
+          _lastSeq = seq;
+        }
+        SafeDiagnostics.record(ok ? 'relay_ack' : 'relay_paste_rejected',
+            phase: 'ack', op: op, seq: seq);
         return;
       }
       final packet = command["packet"],
@@ -254,6 +289,25 @@ class CloudRelay {
           (op > 7 && op < 11)) {
         throw const FormatException("云端动作格式无效");
       }
+      final stopId = command['id'];
+      final stopKey = op == 5 && stopId is String && stopId.isNotEmpty
+          ? (_nonce!, seq, stopId)
+          : null;
+      if (stopKey != null && stopKey == _acknowledgedStop) return;
+      final inputAction = const {1, 2, 3, 4, 6, 13, 14}.contains(op);
+      if (inputAction) {
+        taskStopAcknowledged = false;
+        if (_guardAndroidInput && await _acquireInput() == null) {
+          throw _InputHeld();
+        }
+      }
+      if (_closed) return;
+      if (op == 5 && _guardAndroidInput) {
+        // STOP must reach the board even if the optional keyboard view is gone.
+        try {
+          await ImeRelay.cancelVoiceForStop();
+        } catch (_) {}
+      }
       _activeOp = op;
       _activeSeq = seq;
       _trace.setAction(op, seq);
@@ -267,10 +321,14 @@ class CloudRelay {
       void emitCursor(String phase) {
         final sink = onCursor;
         if (sink == null || cursorX is! num || cursorY is! num) return;
-        sink(phase, cursorX.toDouble(), cursorY.toDouble(),
+        sink(
+            phase,
+            cursorX.toDouble(),
+            cursorY.toDouble(),
             cursorW is num ? cursorW.toDouble() : null,
             cursorH is num ? cursorH.toDouble() : null);
       }
+
       final maintenanceAction = op == 11 || op == 12;
       final ttl = command['expiresIn'];
       if (maintenanceAction && (ttl is! int || ttl < 1 || ttl > 15)) {
@@ -300,6 +358,13 @@ class CloudRelay {
         _trace.phase('mode');
         await beforeModeChange?.call(op == 6);
         if (_closed) return;
+      }
+      if (inputAction && _guardAndroidInput) {
+        final token = _remoteToken;
+        if (token == null || !await ImeRelay.permitsRemote(token)) {
+          throw _InputHeld();
+        }
+        checkActive();
       }
       // Exactly one ATT write. No retry after a timeout or uncertain receipt.
       emitCursor('intent');
@@ -358,24 +423,13 @@ class CloudRelay {
         _heartbeatAt = _elapsed();
       }
       if (op == 11) _upgradeRequested = false;
-      // Idempotent STOP: a repeated identical STOP (same op+seq) was already
-      // written and acked once. Re-affirm the stopped state without touching
-      // the board again; the relay just keeps polling.
-      if (op == 5 && op == _lastOp && seq == _lastSeq) {
-        taskStopAcknowledged = true;
-        _phase = 'poll';
-        _trace.phase('poll', clearAction: true);
-        _activeOp = null;
-        _activeSeq = null;
-        return;
-      }
       if (op == 5) {
         // A STOp revokes the old input session, not the relay itself. Closing
         // here cancelled the poll timer, so no later wake/new task could ever
         // be delivered. Keep the same authenticated session polling; the next
         // poll re-adopts the board turn after the server-side STOP.
         taskStopAcknowledged = true;
-        _restoreTaskIme();
+        _acknowledgedStop = stopKey;
         _phase = 'poll';
         _trace.phase('poll', clearAction: true);
         _activeOp = null;
@@ -414,15 +468,21 @@ class CloudRelay {
       final denial = error is ControlHttpFailure &&
           error.relayDenial &&
           !error.relayLeaseExpired;
-      recoverableNetworkFailure = !dispatched ||
-          denial ||
-          _phase ==
-              'ack'; // ackrecov: 板端回执已确认(receipt!=null 后才置 _phase='ack')，仅服务端记账不确定——恢复握手会 STOP->detach->fresh-nonce，服务端把 issued 动作置 uncertain 不再重发，故无重放风险
+      recoverableNetworkFailure = error is! _InputHeld &&
+          _activeOp != 15 &&
+          (!dispatched ||
+              denial ||
+              _phase ==
+                  'ack'); // ackrecov: 板端回执已确认(receipt!=null 后才置 _phase='ack')，仅服务端记账不确定——恢复握手会 STOP->detach->fresh-nonce，服务端把 issued 动作置 uncertain 不再重发，故无重放风险
       await close(reason: 'error', error: error);
       onError(error);
     } finally {
-      _trace.finish();
-      _busy = false;
+      try {
+        await _releaseInput();
+      } finally {
+        _trace.finish();
+        _busy = false;
+      }
     }
   }
 
@@ -481,6 +541,7 @@ class CloudRelay {
     _timer?.cancel();
     _watchdog?.cancel();
     _watchdog = null;
+    await _releaseInput();
     // Prepare the same-board normal-mode window before releasing our BLE owner.
     // This is best effort only; native USB/projection revocation still wins.
     if (reason == 'error' &&
