@@ -15,7 +15,6 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.PopupMenu
 import android.widget.TextView
 import java.io.File
 
@@ -34,6 +33,12 @@ class RelayImeService : InputMethodService() {
     private var action: Button? = null
     private var label: TextView? = null
     private var cancelButton: Button? = null
+    private var optionsExpanded = false
+    private var optionsButton: Button? = null
+    private var optionsRow: LinearLayout? = null
+    private var chooseButton: Button? = null
+    private var resumeButton: Button? = null
+
     fun hasVoiceDraft() = draft.phase != ImeVoiceDraft.Phase.IDLE
     /** MainActivity dispatches STOP on the main looper. A STOP never releases the manual takeover. */
     fun cancelVoiceForStop() {
@@ -42,14 +47,12 @@ class RelayImeService : InputMethodService() {
 
     override fun onCreate() { super.onCreate(); instance = this }
     override fun onDestroy() {
-        editorGeneration++
-        draft.invalidate()
+        finishEditorView()
         if (instance === this) instance = null
         super.onDestroy()
     }
     override fun onStartInput(info: EditorInfo?, restarting: Boolean) {
-        editorGeneration++
-        draft.invalidate()
+        finishEditorView()
         super.onStartInput(info, restarting)
     }
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
@@ -57,24 +60,26 @@ class RelayImeService : InputMethodService() {
         render()
     }
     override fun onFinishInputView(finishingInput: Boolean) {
-        editorGeneration++
-        draft.invalidate()
+        finishEditorView()
         super.onFinishInputView(finishingInput)
     }
     override fun onFinishInput() {
-        editorGeneration++
-        draft.invalidate()
+        finishEditorView()
         super.onFinishInput()
     }
     override fun onWindowHidden() {
-        editorGeneration++
-        draft.invalidate()
+        finishEditorView()
         super.onWindowHidden()
     }
     override fun onUnbindInput() {
-        editorGeneration++
-        draft.invalidate()
+        finishEditorView()
         super.onUnbindInput()
+    }
+
+    private fun finishEditorView() {
+        editorGeneration++
+        optionsExpanded = false
+        draft.invalidate()
     }
 
     private fun hardwareToolbarAllowed() = RelayInputOwner.allowHardwareToolbar(
@@ -87,6 +92,7 @@ class RelayImeService : InputMethodService() {
         super.onShowInputRequested(flags, configChange) || hardwareToolbarAllowed()
 
     override fun onCreateInputView(): View {
+        optionsExpanded = false
         val outer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), dp(3), dp(10), dp(4))
@@ -99,10 +105,11 @@ class RelayImeService : InputMethodService() {
             text = "取消"; minHeight = dp(48); setOnClickListener { draft.cancel() }
         }
         header.addView(cancelButton)
-        header.addView(Button(this, null, android.R.attr.borderlessButtonStyle).apply {
-            text = "更多"; minHeight = dp(48); contentDescription = "更多键盘选项"
-            setOnClickListener { menu(it) }
-        })
+        optionsButton = Button(this, null, android.R.attr.borderlessButtonStyle).apply {
+            minHeight = dp(48)
+            setOnClickListener { optionsExpanded = !optionsExpanded; render() }
+        }
+        header.addView(optionsButton)
         outer.addView(header)
         val row = LinearLayout(this).apply { gravity = Gravity.CENTER; orientation = LinearLayout.HORIZONTAL }
         action = Button(this).apply { isAllCaps = false; minHeight = dp(48); setOnClickListener { draft.action() } }
@@ -110,13 +117,41 @@ class RelayImeService : InputMethodService() {
             text = "回原键盘"; isAllCaps = false; minHeight = dp(48)
             setOnClickListener {
                 RelayInputOwner.takeManual(this@RelayImeService)
+                optionsExpanded = false
                 draft.invalidate()
+                render()
                 returnToPreviousKeyboard()
             }
         }
         row.addView(action, LinearLayout.LayoutParams(0, -2, 1f))
         row.addView(previousKeyboard, LinearLayout.LayoutParams(0, -2, 1f))
         outer.addView(row)
+        // Keep secondary actions inside the measured IME surface, including on API 28.
+        val secondary = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        optionsRow = secondary
+        chooseButton = Button(this, null, android.R.attr.borderlessButtonStyle).apply {
+            text = "选择输入法"; minHeight = dp(48)
+            setOnClickListener {
+                RelayInputOwner.takeManual(this@RelayImeService)
+                optionsExpanded = false
+                draft.invalidate()
+                render()
+                showKeyboardPicker()
+            }
+        }
+        resumeButton = Button(this, null, android.R.attr.borderlessButtonStyle).apply {
+            text = "恢复远程输入"; minHeight = dp(48)
+            setOnClickListener {
+                optionsExpanded = false
+                draft.cancel("已结束本人听写")
+                val resumed = RelayInputOwner.resumeRemote(this@RelayImeService)
+                render()
+                label?.text = if (resumed) "已恢复远程输入" else "远程动作正在收尾，请稍后再点恢复"
+            }
+        }
+        secondary.addView(chooseButton, LinearLayout.LayoutParams(0, -2, 1f))
+        secondary.addView(resumeButton, LinearLayout.LayoutParams(0, -2, 1f))
+        outer.addView(secondary)
         render()
         return outer
     }
@@ -132,27 +167,14 @@ class RelayImeService : InputMethodService() {
         }
         action?.isEnabled = phase !in setOf(ImeVoiceDraft.Phase.CHECKING, ImeVoiceDraft.Phase.FINISHING)
         cancelButton?.visibility = if (phase == ImeVoiceDraft.Phase.IDLE) View.GONE else View.VISIBLE
-        label?.text = if (phase == ImeVoiceDraft.Phase.IDLE && RelayInputOwner.isManual(this))
-            draft.message + " · 远程已暂停，可在更多中恢复"
-        else draft.message
+        val manual = RelayInputOwner.isManual(this)
+        optionsButton?.text = if (optionsExpanded) "收起选项" else "更多选项"
+        optionsRow?.visibility = if (manual || optionsExpanded) View.VISIBLE else View.GONE
+        chooseButton?.visibility = if (optionsExpanded) View.VISIBLE else View.GONE
+        resumeButton?.visibility = if (manual) View.VISIBLE else View.GONE
+        label?.text = if (phase == ImeVoiceDraft.Phase.IDLE && manual) draft.message + " · 远程已暂停" else draft.message
     }
-    private fun menu(anchor: View) {
-        PopupMenu(this, anchor).apply {
-            menu.add(0, 2, 1, "切换输入法")
-            if (RelayInputOwner.isManual(this@RelayImeService)) menu.add(0, 3, 2, "恢复远程输入")
-            setOnMenuItemClickListener {
-                when (it.itemId) {
-                    2 -> { RelayInputOwner.takeManual(this@RelayImeService); draft.invalidate(); showKeyboardPicker() }
-                    3 -> {
-                        draft.cancel("已结束本人听写")
-                        if (RelayInputOwner.resumeRemote(this@RelayImeService)) label?.text = "已恢复远程输入"
-                        else label?.text = "远程状态尚未就绪，稍后可重试"
-                    }
-                }
-                true
-            }
-        }.show()
-    }
+
     @Suppress("DEPRECATION")
     private fun returnToPreviousKeyboard() {
         val restored = runCatching {
