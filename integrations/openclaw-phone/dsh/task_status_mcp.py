@@ -8,7 +8,7 @@ from pathlib import Path
 BRIDGE = Path("/opt/phone-agent/phone_mcp.py")
 
 
-def main(task_id):
+def main(task_id, *, receipts_only=False):
     if not re.fullmatch(r"[a-f0-9]{32}", task_id):
         raise ValueError("invalid task binding")
     spec = importlib.util.spec_from_file_location("phone_bridge", BRIDGE)
@@ -50,8 +50,15 @@ def main(task_id):
         dict(name="task_progress", description="核对同一任务的动作数、设备回执与诊断。", inputSchema=schema),
     ]
     bridge.HANDLERS = {"task_status": status, "task_progress": progress}
-    bridge.main()
+    if receipts_only:
+        # Reuse both task-bound handlers, including their separate ownership checks.
+        print(json.dumps({"task": task_id, "status": json.loads(status({})),
+                          "progress": json.loads(progress({})), "modelCalls": 0}))
+    else:
+        bridge.main()
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    if len(sys.argv) not in (2, 3) or len(sys.argv) == 3 and sys.argv[2] != "--receipts":
+        raise SystemExit("Expected a task ID and optionally --receipts")
+    main(sys.argv[1], receipts_only=len(sys.argv) == 3)

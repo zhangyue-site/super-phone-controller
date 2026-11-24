@@ -1,6 +1,12 @@
 import json
+import contextlib
+import io
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 from summarize_events import summarize
+import task_status_mcp
 
 
 class ReceiptTest(unittest.TestCase):
@@ -29,6 +35,28 @@ class ReceiptTest(unittest.TestCase):
     def test_unbound_parameters_rejected(self):
         self.events[0]["input"] = {"task_id":"foreign"}
         with self.assertRaises(ValueError): self.review()
+
+
+class DirectReceiptTest(unittest.TestCase):
+    def test_bound_identity_is_checked_before_each_read(self):
+        task = "a" * 32
+        with TemporaryDirectory() as directory:
+            bridge = Path(directory) / "bridge.py"
+            header = ("from pathlib import Path\nSTATE = Path(__file__).parent\n"
+                      "def _authorized_status(ident):\n"
+                      "    return {'task_id': next(ids), 'state': 'expired', 'terminal': True, 'verified': False}\n")
+            with patch.object(task_status_mcp, "BRIDGE", bridge):
+                bridge.write_text(header + f"ids = iter([{task!r}, {task!r}])\n")
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    task_status_mcp.main(task, receipts_only=True)
+                data = json.loads(output.getvalue())
+                self.assertEqual(data["task"], task)
+                self.assertEqual(data["progress"], {"resultAvailable": False})
+                self.assertEqual(data["modelCalls"], 0)
+                bridge.write_text(header + f"ids = iter([{task!r}, 'other-device-task'])\n")
+                with self.assertRaisesRegex(ValueError, "binding changed"):
+                    task_status_mcp.main(task, receipts_only=True)
 
 
 if __name__ == "__main__":
