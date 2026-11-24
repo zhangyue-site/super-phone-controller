@@ -11,6 +11,8 @@ class RelayImeService : Context() {
     var isInputViewShown = true
     var permission = 0
     var launched = 0
+    var keyboardReturns = 0
+    fun returnToPreviousKeyboard() { keyboardReturns++ }
     fun checkSelfPermission(key: String) = permission
     fun startActivity(intent: Intent) { launched++ }
     fun hasVoiceDraft() = false

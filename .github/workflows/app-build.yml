@@ -56,6 +56,14 @@ jobs:
           python -m unittest discover -s tests -p test_remote_control.py
       - name: Generic Agent offline regressions (no device IO)
         run: python3 tools/run_agent_offline_tests.py
+      - name: Package tested app maintenance gateway
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-maintenance-gateway
+          path: |
+            display_service/app_control.py
+            display_service/app_maintenance.py
+          if-no-files-found: error
   android:
     needs: backend
     # Android 在 ubuntu 上构建，公开仓库免费，私有仓库按实际分钟计费。
@@ -137,6 +145,9 @@ jobs:
 
       - name: Keyboard dictation and manual takeover regressions
         run: bash ../tools/test_ime_voice_host.sh
+
+      - name: Official app update verification regressions
+        run: bash ../tools/test_android_update_host.sh
 
       - name: Native capture and USB session regressions
         run: |

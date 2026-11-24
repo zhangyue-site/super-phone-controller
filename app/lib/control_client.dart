@@ -354,7 +354,7 @@ class ControlClient implements LocalVisionSource {
   DateTime? get lastReceiptAt => _relay?.lastReceiptAt;
 
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
-      {bool auth = false}) async {
+      {bool auth = false, bool passive = false}) async {
     final response = await _http!
         .post(
             Uri.parse(path.startsWith('relay:')
@@ -386,7 +386,7 @@ class ControlClient implements LocalVisionSource {
         throw ControlHttpFailure(409, '中转连接过期，停止旧任务后重新连接',
             relayLeaseExpired: true);
       }
-      if (response.statusCode == 403 && path != 'relay:detach') {
+      if (!passive && response.statusCode == 403 && path != 'relay:detach') {
         _ticket = null;
         _expires = null;
       }
@@ -411,6 +411,32 @@ class ControlClient implements LocalVisionSource {
           relayDenial: denial);
     }
     return decoded;
+  }
+
+  bool get canReportAppMaintenance => authorized && !_paired && _ticket != null &&
+      _http != null && _expires?.isAfter(DateTime.now()) == true;
+
+  Future<void> reportAppMaintenance(Map<String, Object?> report) async {
+    if (!canReportAppMaintenance) return;
+    await _post('maintenance-report', {
+      'installedCode':report['installedCode'],
+      'installedName':report['installedName'],
+      'state':report['state'],
+      if(report['targetCode'] != null) 'targetCode':report['targetCode'],
+    }, auth:true, passive:true);
+  }
+
+  Future<Map<String,dynamic>?> readAppMaintenance() async {
+    if (_closed || _http == null || _ticket == null) return null;
+    final data = await _post('maintenance-read', {}, auth:true, passive:true);
+    final row = data['appMaintenance'];
+    if (row == null) return null;
+    if (row is! Map<String,dynamic> || row['installedName'] is! String ||
+        row['installedCode'] is! int || row['state'] is! String ||
+        row['receivedAt'] is! String || row['ageSeconds'] is! int) {
+      throw const FormatException('设备维护状态格式无效');
+    }
+    return row;
   }
 
   Future<void> authorize(BleOtaService service) async {

@@ -1,3 +1,4 @@
+import 'app_maintenance.dart';
 import 'dart:io';
 import 'ios_target_screen.dart';
 import 'dart:async';
@@ -28,7 +29,7 @@ class PcFlashApp extends StatefulWidget {
   State<PcFlashApp> createState() => _PcFlashAppState();
 }
 
-class _PcFlashAppState extends State<PcFlashApp> {
+class _PcFlashAppState extends State<PcFlashApp> with WidgetsBindingObserver {
   static const _appChannel = MethodChannel('pcflash/app');
   ThemeMode _themeMode = ThemeMode.system;
   int _appearanceRevision = 0;
@@ -37,14 +38,31 @@ class _PcFlashAppState extends State<PcFlashApp> {
   void initState() {
     super.initState();
     TargetSession.startPolling();
+    if (Platform.isAndroid) {
+      WidgetsBinding.instance.addObserver(this);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final state = WidgetsBinding.instance.lifecycleState;
+        AppMaintenance.shared.setForeground(state == null || state == AppLifecycleState.resumed);
+      });
+    }
     overlayPill.start();
     unawaited(_restoreAppearance());
   }
 
   @override
   void dispose() {
+    if (Platform.isAndroid) {
+      WidgetsBinding.instance.removeObserver(this);
+      AppMaintenance.shared.setForeground(false);
+    }
     TargetSession.stopPolling();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    AppMaintenance.shared.setForeground(state == AppLifecycleState.resumed);
   }
 
   Future<void> _restoreAppearance() async {

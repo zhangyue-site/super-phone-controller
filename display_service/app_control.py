@@ -2,6 +2,7 @@
 import hashlib,json,os,re,threading
 from .app_ota import Authority
 from . import remote_http
+from . import app_maintenance
 from .paired_control import Pairings
 AUTHORITY=Authority(firmware_scope=False)
 SESSION_LOCK=threading.RLock()
@@ -67,6 +68,7 @@ def binding_allowed(identity):
  return found or PAIRINGS.allowed(identity)
 def handle(handler,config):
  path=handler.path
+ if app_maintenance.handle(handler):return True
  if path not in ('/app-control/challenge','/app-control/authorize','/app-control/command','/app-control/renew','/app-control/pair-issue','/app-control/pair-redeem','/app-control/pair-restore','/app-control/pair-renew','/app-control/pair-revoke','/app-control/pair-rotate','/app-control/screen-renew'):return False
  try:
   if handler.command!='POST':handler.reply(405,b'{}');return True

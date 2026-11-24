@@ -116,7 +116,10 @@ class RelayImeService : InputMethodService() {
         val previousKeyboard = Button(this).apply {
             text = "回原键盘"; isAllCaps = false; minHeight = dp(48)
             setOnClickListener {
-                RelayInputOwner.takeManual(this@RelayImeService)
+                if (!RelayInputOwner.takeManual(this@RelayImeService)) {
+                    draft.cancel("远程动作正在收尾，请稍后再点回原键盘")
+                    return@setOnClickListener
+                }
                 optionsExpanded = false
                 draft.invalidate()
                 render()
@@ -158,8 +161,9 @@ class RelayImeService : InputMethodService() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density + .5f).toInt()
     private fun render() {
         val phase = draft.phase
+        val usePrevious = draft.offersPreviousKeyboard()
         action?.text = when (phase) {
-            ImeVoiceDraft.Phase.IDLE -> "语音输入"
+            ImeVoiceDraft.Phase.IDLE -> if (usePrevious) "用原键盘听写" else "语音输入"
             ImeVoiceDraft.Phase.CHECKING -> "检查中"
             ImeVoiceDraft.Phase.LISTENING -> "说完"
             ImeVoiceDraft.Phase.FINISHING -> "识别中"
@@ -172,11 +176,14 @@ class RelayImeService : InputMethodService() {
         optionsRow?.visibility = if (manual || optionsExpanded) View.VISIBLE else View.GONE
         chooseButton?.visibility = if (optionsExpanded) View.VISIBLE else View.GONE
         resumeButton?.visibility = if (manual) View.VISIBLE else View.GONE
-        label?.text = if (phase == ImeVoiceDraft.Phase.IDLE && manual) draft.message + " · 远程已暂停" else draft.message
+        val status = draft.message.ifEmpty {
+            if (usePrevious) "切回后，请在原键盘点语音键" else "识别结果可预览，确认后插入"
+        }
+        label?.text = if (phase == ImeVoiceDraft.Phase.IDLE && manual) "$status · 远程已暂停" else status
     }
 
     @Suppress("DEPRECATION")
-    private fun returnToPreviousKeyboard() {
+    internal fun returnToPreviousKeyboard() {
         val restored = runCatching {
             if (Build.VERSION.SDK_INT >= 28) switchToPreviousInputMethod()
             else {

@@ -1,3 +1,4 @@
+import 'app_maintenance_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'product_settings.dart';
@@ -184,6 +185,8 @@ class RoleHome extends StatelessWidget {
             if (Theme.of(context).platform == TargetPlatform.android) ...[
               const SizedBox(height: 12),
               const WirelessDebugCard(),
+              const SizedBox(height:12),
+              const Card(child: MaintenanceTile()),
             ],
           ])),
     );

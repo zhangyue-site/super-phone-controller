@@ -1,3 +1,4 @@
+import 'app_maintenance_widgets.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'ble_ota_service.dart';
@@ -684,6 +685,7 @@ class _ControlScreenState extends State<ControlScreen>
               ControllerModelStatus(vision: _vision!, onRetry: _prepareVision),
             const SizedBox(height: 12),
             const Text('执行时可随时请求停止，结果以真实画面核验为准。'),
+            RemoteMaintenanceCard(client: _client),
           ]),
       bottomNavigationBar: SafeArea(
           child: Padding(

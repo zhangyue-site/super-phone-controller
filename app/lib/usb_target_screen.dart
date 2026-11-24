@@ -1,3 +1,4 @@
+import 'app_maintenance_widgets.dart';
 import 'accessibility_assist.dart';
 import 'target_check_errors.dart';
 import 'diagnostics.dart';
@@ -726,6 +727,7 @@ class _UsbTargetScreenState extends State<UsbTargetScreen> {
                               ]),
                       ]))),
         const SizedBox(height: 16),
+        Card(child: MaintenanceTile(target:true, cloudBound: TargetSession.hasGateway)),
         const Text(
             '画面用于理解任务和核验结果。返回或进入设置不会停止共享；仅主动停止、系统停止或真实断开连接后，才需要重新开始共享。旧操作不会重放。'),
       ]),

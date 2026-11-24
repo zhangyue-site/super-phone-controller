@@ -71,10 +71,44 @@ fun main() {
     f.begin()
     f.draft.cancel()
 
+    // No system on-device provider: one tap hands over, without mic permission or a new recognizer.
     SpeechRecognizer.available = false
+    f.service.permission = -1
+    val previousEngine = SpeechRecognizer.last
+    val previousLaunches = f.service.launched
+    check(f.draft.offersPreviousKeyboard())
     f.draft.action()
-    check(f.draft.phase == ImeVoiceDraft.Phase.IDLE)
+    check(f.service.keyboardReturns == 1 && f.service.launched == previousLaunches)
+    check(SpeechRecognizer.last === previousEngine && f.commits.isEmpty() && RelayInputOwner.isManual(f.service))
+    f.service.currentInputEditorInfo.inputType = 129
+    check(!f.draft.offersPreviousKeyboard())
+    f.draft.action()
+    check(f.service.keyboardReturns == 1 && f.draft.message == "密码输入框无法听写")
+    f.service.currentInputEditorInfo.inputType = 0
+    check(!f.draft.offersPreviousKeyboard())
+    f.draft.action()
+    check(f.service.keyboardReturns == 1)
+    f.service.currentInputEditorInfo.inputType = 1
+    f.service.isInputViewShown = false
+    f.draft.action()
+    check(f.service.keyboardReturns == 1)
+    f.service.isInputViewShown = true
+    check(RelayInputOwner.resumeRemote(f.service))
+    val pending = checkNotNull(RelayInputOwner.tryBeginRemote(f.service))
+    f.draft.action()
+    check(f.service.keyboardReturns == 1 && !RelayInputOwner.permits(f.service, pending))
+    RelayInputOwner.endRemote(pending)
+    f.draft.action()
+    check(f.service.keyboardReturns == 2)
     SpeechRecognizer.available = true
+    android.os.Build.VERSION.SDK_INT = 28
+    check(f.draft.offersPreviousKeyboard())
+    f.draft.action()
+    check(f.service.keyboardReturns == 3 && f.service.launched == previousLaunches && SpeechRecognizer.last === previousEngine)
+    android.os.Build.VERSION.SDK_INT = 33
+    check(!f.draft.offersPreviousKeyboard())
+    f.service.permission = 0
+    println("PASS previous keyboard voice handoff, password, hidden field, remote in flight and API 28")
     SpeechRecognizer.langs = listOf("en-US")
     f.draft.action()
     check(f.draft.phase == ImeVoiceDraft.Phase.IDLE)

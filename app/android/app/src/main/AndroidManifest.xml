@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-feature android:name="android.hardware.microphone" android:required="false"/>
     <!-- 悬浮状态条（pill）：App 退后台时在屏幕上角显示链路状态。特殊权限，
@@ -36,6 +37,10 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher">
+        <provider android:name=".VerifiedUpdateProvider" android:authorities="${applicationId}.verifiedupdates"
+            android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/verified_update_paths"/>
+        </provider>
         <receiver android:name=".LegacyDebugCacheCleanup" android:exported="false">
             <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED"/></intent-filter>
         </receiver>
@@ -97,6 +102,10 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <queries>
+        <intent><action android:name="android.intent.action.INSTALL_PACKAGE"/>
+            <data android:scheme="content" android:mimeType="application/vnd.android.package-archive"/></intent>
+        <intent><action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="content" android:mimeType="application/vnd.android.package-archive"/></intent>
         <intent><action android:name="android.speech.RecognitionService"/></intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>

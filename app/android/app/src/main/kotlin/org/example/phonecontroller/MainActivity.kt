@@ -15,6 +15,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
  private val billTextLoop by lazy { BillTextLoop(applicationContext) }
+ private val appUpdates by lazy { OfficialAppUpdater(this) }
  private var imeRemoteToken: Long? = null
  private var usbProof: UsbProofBridge? = null
  private var pending: MethodChannel.Result? = null
@@ -50,6 +51,7 @@ class MainActivity: FlutterActivity() {
  override fun configureFlutterEngine(engine: FlutterEngine) {
   RelayIme.recoverIfStuck(applicationContext)
   super.configureFlutterEngine(engine)
+  MethodChannel(engine.dartExecutor.binaryMessenger,"pcflash/update").setMethodCallHandler(appUpdates::handle)
   SafeDiagnostics.initialize(this)
   WorkbenchDiagnostics.record("plugins",0,
    if(engine.plugins.has(com.jmx.flutter_blue_plus.FlutterBluePlusPlugin::class.java))1 else 0)
@@ -387,7 +389,16 @@ class MainActivity: FlutterActivity() {
    }
   }
  }
+ override fun onResume() {
+  appUpdates.resumed()
+  super.onResume()
+ }
+ override fun onPause() {
+  appUpdates.paused()
+  super.onPause()
+ }
  override fun onDestroy() {
+  appUpdates.close()
   imeRemoteToken?.let { RelayInputOwner.endRemote(it) }; imeRemoteToken = null
   billTextLoop.close()
   usbProof?.close();usbProof=null

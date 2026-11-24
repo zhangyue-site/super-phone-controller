@@ -1,3 +1,4 @@
+import 'app_maintenance.dart';
 import 'gateway_recovery.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'diagnostics.dart';
@@ -51,9 +52,65 @@ class TargetSession {
 
   static void addView(Object view) => _views.add(view);
   static void removeView(Object view) => _views.remove(view);
-  static void startPolling() =>
-      _timer ??= Timer.periodic(const Duration(seconds: 2), (_) => maintain());
+  static bool _reportBusy = false;
+  static String? _lastReport;
+  static DateTime? _lastAttempt;
+
+  static void startPolling() {
+    if (_timer != null) return;
+    AppMaintenance.shared.addListener(_maybeReport);
+    _timer = Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(maintain());
+      _maybeReport();
+    });
+  }
+
+  static Future<void> _maybeReport() async {
+    final client = _client, usb = _usb, data = AppMaintenance.shared.report;
+    if (_reportBusy ||
+        client == null ||
+        usb == null ||
+        data == null ||
+        !client.canReportAppMaintenance) {
+      return;
+    }
+    final key = jsonEncode(data);
+    final now = DateTime.now();
+    if (key == _lastReport &&
+        _lastAttempt != null &&
+        now.difference(_lastAttempt!) < const Duration(seconds: 45)) {
+      return;
+    }
+    _reportBusy = true;
+    try {
+      final current = await UsbLaunch.snapshot();
+      if (!identical(_client, client) ||
+          current?.session != usb.session ||
+          current?.serial != usb.serial ||
+          current?.deviceId == null ||
+          current?.deviceId != client.deviceId ||
+          !client.canReportAppMaintenance) {
+        return;
+      }
+      _lastReport = key;
+      _lastAttempt = now;
+      await client.reportAppMaintenance(data);
+    } catch (_) {
+      // This observation has no lease, control, pairing, or task side effects.
+    } finally {
+      _reportBusy = false;
+      final newest = AppMaintenance.shared.report;
+      if (_lastReport == key &&
+          identical(_client, client) &&
+          newest != null &&
+          jsonEncode(newest) != key) {
+        unawaited(_maybeReport());
+      }
+    }
+  }
+
   static void stopPolling() {
+    AppMaintenance.shared.removeListener(_maybeReport);
     _timer?.cancel();
     _timer = null;
   }
@@ -73,6 +130,9 @@ class TargetSession {
     _usb = usb;
     _client = client;
     _service = service;
+    _lastReport = null;
+    _lastAttempt = null;
+    unawaited(_maybeReport());
   }
 
   static Future<void> release({String diagnosticReason = 'explicit'}) async {

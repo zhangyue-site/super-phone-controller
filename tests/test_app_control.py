@@ -191,3 +191,94 @@ class AppControlTests(http_tests.RemoteHttpTests):
   code,restored=self.request('/app-control/pair-restore',{'bindingToken':grant['bindingToken']})
   self.assertEqual(code,200);self.assertEqual(restored['bindingToken'],grant['bindingToken'])
   self.assertEqual(self.command(restored['ticket'],'status')[0],200)
+
+ def maintenance_store(self):
+  # Each scenario uses an isolated, real SQLite pairing DB and the HTTP harness.
+  pairings=app_control.Pairings(lambda ticket:app_control.owner(ticket)[3],path=self.root/'pairings.sqlite3')
+  self.addCleanup(pairings.db.close)
+  context=patch.object(app_control,'PAIRINGS',pairings);context.start();self.addCleanup(context.stop)
+  return pairings
+
+ def maintenance(self,ticket,path,body=None):
+  return self.request('/app-control/maintenance-'+path,body,extra={'Authorization':'Bearer '+ticket})
+
+ def test_maintenance_target_reports_latest_only_controller_reads_no_actions(self):
+  from display_service import app_maintenance
+  pairings=self.maintenance_store();parent=self.grant();controller=self.paired(parent)
+  self.assertEqual(self.maintenance(controller,'read'),(200,{'appMaintenance':None}))
+  self.assertIsNone(pairings.db.execute("SELECT 1 FROM sqlite_master WHERE name='app_maintenance'").fetchone())
+  report={'installedCode':97,'installedName':'1.4.17','state':'downloading','targetCode':98}
+  with patch.object(app_maintenance,'now_seconds',return_value=1700000000):
+   self.assertEqual(self.maintenance(parent,'report',report),(200,{'accepted':True}))
+  with patch.object(app_maintenance,'now_seconds',return_value=1700000042):
+   wanted=dict(report,receivedAt='2023-11-14T22:13:20Z',ageSeconds=42)
+   self.assertEqual(self.maintenance(controller,'read',{}),(200,{'appMaintenance':wanted}))
+   self.assertEqual(self.maintenance(parent,'read'),(200,{'appMaintenance':wanted}))
+  newer={'installedCode':98,'installedName':'1.4.18','state':'current'}
+  self.assertEqual(self.maintenance(parent,'report',newer)[0],200)
+  latest=self.maintenance(controller,'read')[1]['appMaintenance']
+  self.assertEqual({k:latest[k] for k in newer},newer);self.assertNotIn('targetCode',latest)
+  self.assertEqual(pairings.db.execute('SELECT count(*) FROM app_maintenance').fetchone()[0],1)
+  self.assertFalse(self.mailbox.jobs);self.assertFalse(self.remote.records)
+  self.assertEqual(self.command(controller,'status')[1]['state'],'idle')
+
+ def test_maintenance_identity_and_expiration(self):
+  pairings=self.maintenance_store();parent=self.grant();controller=self.paired(parent)
+  second='m'*43;self.control_auth.tickets[second]=(self.control_auth.clock()+300,'other-target','f'*64)
+  second_controller=self.paired(second)
+  report={'installedCode':97,'installedName':'1.4.17','state':'ready'}
+  self.assertEqual(self.maintenance(controller,'report',report)[0],403)
+  self.assertEqual(self.maintenance(parent,'report',report)[0],200)
+  self.assertEqual(self.maintenance(second_controller,'read'),(200,{'appMaintenance':None}))
+  self.assertEqual(self.maintenance(second,'report',dict(report,installedCode=98,installedName='1.4.18'))[0],200)
+  self.assertEqual(self.maintenance(controller,'read')[1]['appMaintenance']['installedCode'],97)
+  self.assertEqual(self.maintenance(second_controller,'read')[1]['appMaintenance']['installedCode'],98)
+  self.assertEqual(self.maintenance(self.ticket,'read')[0],403)  # screen credential
+  self.assertEqual(self.request('/app-control/maintenance-read')[0],403)  # board bearer
+  self.assertEqual(self.maintenance('invalid','read')[0],403)
+  pairings.tickets[controller]=(0,*pairings.tickets[controller][1:])
+  self.assertEqual(self.maintenance(controller,'read')[0],403)
+  fresh_controller=self.paired(parent);new_parent=self.grant()
+  self.assertEqual(self.maintenance(parent,'report',report)[0],403)
+  self.assertEqual(self.maintenance(fresh_controller,'read')[0],403)
+  self.control_auth.tickets[new_parent]=(0,'epaper-01','f'*64)
+  self.assertEqual(self.maintenance(new_parent,'report',report)[0],403)
+  self.assertEqual(self.maintenance(second_controller,'read')[0],200)
+
+ def test_maintenance_schema_and_privacy(self):
+  from display_service import app_maintenance
+  pairings=self.maintenance_store();parent=self.grant()
+  base={'installedCode':97,'installedName':'1.4.17','state':'idle'}
+  for state in ('idle','checking','current','available','downloading','verifying','ready','permission_required','installer_opened','error'):
+   with self.subTest(state=state):
+    self.assertEqual(self.maintenance(parent,'report',dict(base,state=state))[0],200)
+  changes=[{'installedCode':True},{'installedCode':0},{'installedCode':3.0},{'targetCode':None},
+           {'targetCode':False},{'targetCode':2147483648},{'installedName':'1.4.17\n'},
+           {'installedName':'10.0.0.1'},{'installedName':'001234'},{'installedName':'私有消息'},
+           {'state':'unspecified'},{'state':['idle']},{'device':'other-target'},
+           {'ip':'10.0.0.1'},{'port':10000},{'pairingCode':'001234'},
+           {'message':'unsent note'},{'receivedAt':'2000-01-01T00:00:00Z'},{'ageSeconds':0}]
+  for change in changes:
+   with self.subTest(change=change):self.assertEqual(self.maintenance(parent,'report',dict(base,**change))[0],400)
+  for key in base:
+   with self.subTest(missing=key):
+    self.assertEqual(self.maintenance(parent,'report',{k:v for k,v in base.items() if k!=key})[0],400)
+  duplicate=b'{"installedCode":97,"installedName":"1.4.17","state":"private text","state":"idle"}'
+  self.assertEqual(self.maintenance(parent,'report',duplicate)[0],400)
+  import http.client
+  conn=http.client.HTTPConnection('127.0.0.1',self.server.server_address[1],timeout=5)
+  try:
+   conn.request('GET','/app-control/maintenance-read',headers={'Authorization':'Bearer '+parent})
+   response=conn.getresponse();self.assertEqual(response.status,405)
+   self.assertEqual(response.getheader('Cache-Control'),'no-store');self.assertEqual(json.loads(response.read()),{})
+  finally:conn.close()
+  for route in ('read','report'):
+   self.assertEqual(self.maintenance(parent,route,{'noise':'x'*700})[0],400)
+  self.assertEqual(self.maintenance(parent,'read',{'device':'other-target'})[0],400)
+  with patch.dict('os.environ',{'EPAPER_REMOTE_CONTROL':'0'}):
+   self.assertEqual(self.maintenance(parent,'read')[0],503)
+  self.assertEqual(pairings.db.execute('SELECT state FROM app_maintenance').fetchall(),[('error',)])
+  # Reopen the old pairing database independently, without converting or revoking its existing data.
+  other=app_control.Pairings(lambda _:None,path=self.root/'pairings.sqlite3')
+  try:self.assertEqual(app_maintenance.read(other.db,'epaper-01',0)['ageSeconds'],0)
+  finally:other.db.close()

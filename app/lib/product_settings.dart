@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+import 'app_maintenance_widgets.dart';
 import 'accessibility_assist.dart';
 import 'capture_sampling.dart';
 import 'ime_relay.dart';
@@ -202,7 +204,7 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
               onTap: () => _message('联网方式',
                   '控制板直连请在板端网络页设置 Wi-Fi。手机中转在连接页建立，同一时间只能有一台中转手机。切换前先停止操作并释放原连接。未取得实际状态时，App不会把蓝牙连接当作云端在线。')),
           Text('升级与恢复', style: Theme.of(context).textTheme.titleLarge),
-          ListTile(
+          if (Platform.isAndroid) const MaintenanceTile() else ListTile(
               leading: const Icon(Icons.system_update_alt),
               title: const Text('App 版本与更新'),
               subtitle: const Text('保留原应用，从官方下载页获取同签名新版'),

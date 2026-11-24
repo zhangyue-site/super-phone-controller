@@ -1,9 +1,16 @@
+import 'dart:io';
+import 'app_maintenance.dart';
+import 'app_maintenance_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 class AppRelease {
   static const channel = MethodChannel('pcflash/app');
   static Future<void> show(BuildContext context) async {
+    if (Platform.isAndroid) {
+      await showMaintenance(context, AppMaintenance.shared);
+      return;
+    }
     String version;
     try {
       final value = await channel.invokeMapMethod<String, dynamic>('info');

@@ -22,7 +22,7 @@ class ImeVoiceDraft(private val ime: RelayImeService, private val render: () -> 
     enum class Phase { IDLE, CHECKING, LISTENING, FINISHING, PREVIEW }
     @Volatile var phase = Phase.IDLE
         private set
-    var message = "点听写，识别结果可预览"
+    var message = ""
         private set
 
     private val handler = Handler(Looper.getMainLooper())
@@ -34,6 +34,14 @@ class ImeVoiceDraft(private val ime: RelayImeService, private val render: () -> 
     private var type = 0
     private var text = ""
     private var timeout: Runnable? = null
+
+    private fun onDeviceAvailable() = Build.VERSION.SDK_INT >= 31 &&
+        runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(ime) }.getOrDefault(false)
+
+    fun offersPreviousKeyboard(): Boolean {
+        val inputType = ime.currentInputEditorInfo?.inputType ?: return false
+        return phase == Phase.IDLE && inputType != InputType.TYPE_NULL && !password(inputType) && !onDeviceAvailable()
+    }
 
     fun action() {
         when (phase) {
@@ -68,7 +76,7 @@ class ImeVoiceDraft(private val ime: RelayImeService, private val render: () -> 
     }
 
     fun invalidate() {
-        if (phase != Phase.IDLE) cancel("输入会话已结束，草稿已清除")
+        if (phase != Phase.IDLE) cancel("输入会话已结束，草稿已清除") else message = ""
     }
 
     private fun start() {
@@ -79,8 +87,10 @@ class ImeVoiceDraft(private val ime: RelayImeService, private val render: () -> 
         }
         if (password(info.inputType)) { cancel("密码输入框无法听写"); return }
         if (!RelayInputOwner.takeManual(ime)) { cancel("远程动作正在收尾，请稍后再点听写"); return }
-        if (Build.VERSION.SDK_INT < 31 || !runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(ime) }.getOrDefault(false)) {
-            cancel("本机无离线识别服务，可切换键盘"); return
+        if (!onDeviceAvailable()) {
+            cancel("请在原键盘中点语音键开始听写")
+            ime.returnToPreviousKeyboard()
+            return
         }
         if (ime.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             cancel("请授权麦克风，返回原输入框后再点听写")
