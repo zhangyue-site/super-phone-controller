@@ -15,25 +15,42 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONPATH: .
+      PUBLIC_BASE: 0110c415cd28faeec2414aa8cba2701604a553dd
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 1
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.11"
+      - name: Prepare isolated runtime state and fetch the fixed public baseline
+        run: |
+          state="$(mktemp -d "$RUNNER_TEMP/scoped-frame.XXXXXXXX")"
+          {
+            echo "EPAPER_STATE=$state"
+            echo "EPAPER_PAIRING_STATE=$state/pairings.sqlite3"
+            echo "EPAPER_REMOTE_STATE=$state/remote.json"
+            echo "EPAPER_FIRMWARE=$state/firmware"
+            echo "EPAPER_NAV_EVIDENCE_DIR=$state/navigation"
+            echo "EPAPER_SKILLS=$state/skills"
+            echo "EPAPER_QUOTAS=$state/quotas"
+            echo "EPAPER_CONFIG=$state/devices.json"
+            echo "EPAPER_OPENCLAW_CONFIG=$state/bridge.json"
+          } >> "$GITHUB_ENV"
+          git fetch --no-tags --depth=1 origin "$PUBLIC_BASE"
       - name: Compare baseline and candidate method identities
         run: |
           python - <<'PY'
           import ast
           import hashlib
+          import os
           from pathlib import Path
           import subprocess
           import textwrap
 
           path = "display_service/agent_runtime.py"
-          baseline = subprocess.check_output(["git", "show", "HEAD^:" + path], text=True)
+          baseline = subprocess.check_output(["git", "show", os.environ["PUBLIC_BASE"] + ":" + path], text=True)
           candidate = Path(path).read_text()
           for name, source, expected in (
               ("baseline", baseline, "48424b0ac6944f00a4a98f3895fa3780d59af191d4dc9a80d49cc0efe49aefd0"),
@@ -53,7 +70,7 @@ jobs:
           PY
       - name: Reproduce the previous incompatible fourth positional argument
         run: |
-          git show HEAD^:display_service/agent_runtime.py > "$RUNNER_TEMP/baseline_runtime.py"
+          git show "$PUBLIC_BASE:display_service/agent_runtime.py" > "$RUNNER_TEMP/baseline_runtime.py"
           log="$RUNNER_TEMP/baseline-result.txt"
           if SCOPED_FRAME_RUNTIME="$RUNNER_TEMP/baseline_runtime.py" python tests/test_scoped_frame_contract.py FrameCallProtocol.test_current_call_passes_same_job_positional_or_keyword > "$log" 2>&1; then
             echo "The baseline unexpectedly accepted the fourth positional argument."
