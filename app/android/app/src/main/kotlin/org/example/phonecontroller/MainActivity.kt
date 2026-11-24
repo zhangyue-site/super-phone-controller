@@ -34,7 +34,7 @@ class MainActivity: FlutterActivity() {
  }
  override fun onCreate(savedInstanceState: Bundle?) {
   super.onCreate(savedInstanceState)
-        ensureAdbAutoEnable()
+  LegacyDebugCacheCleanup.clear(this)
   UsbLaunchBridge.accept(intent)
  }
  override fun onNewIntent(intent: Intent) {
@@ -190,12 +190,29 @@ class MainActivity: FlutterActivity() {
   }
   MethodChannel(engine.dartExecutor.binaryMessenger, "pcflash/app").setMethodCallHandler { call, result ->
    when(call.method) {
-    "adbGuideStatus" -> {
-     val s = AccessibilityAssistService.guideStatus(this).toMutableMap()
-     s["debugPort"] = wirelessDebugPort()
-     result.success(s)
+    "wirelessDebugStatus" -> {
+     Thread {
+      val port = readWirelessDebugPort()
+      val enabled = if (port != null) null else try {
+       when (Settings.Global.getInt(contentResolver, "adb_wifi_enabled", -1)) {
+        1 -> true
+        0 -> false
+        else -> null
+       }
+      } catch (_: Exception) { null }
+      runOnUiThread { result.success(mapOf("port" to port, "enabled" to enabled)) }
+     }.start()
     }
-    "adbGuideArm" -> { AccessibilityAssistService.guideArm(this, auto = false); result.success(null) }
+    "openDeveloperSettings" -> {
+     if (ScreenShareService.active) {
+      result.error("sharing_active", "请先结束屏幕共享，再打开开发者选项", null)
+     } else try {
+      startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+      result.success(null)
+     } catch (_: Exception) {
+      result.error("unavailable", "请从手机系统设置打开开发者选项", null)
+     }
+    }
     "diagnosticEvent" -> { SafeDiagnostics.record(call.arguments as? Map<*,*> ?: emptyMap<Any,Any>());result.success(null) }
     "diagnostics" -> { ScreenShareService.recordDiagnosticSnapshot();result.success(SafeDiagnostics.read()) }
     "readControllerPairing", "saveControllerPairing", "clearControllerPairing" -> {
@@ -399,75 +416,15 @@ class MainActivity: FlutterActivity() {
    reply?.success(null)
   } catch(e: Exception) { ScreenShareService.revoke(capability);reply?.error("start_failed","无法启动屏幕共享",null) }
  }
-    // vc91: auto-enable network/wired adb on app start (WRITE_SECURE_SETTINGS is granted).
-    // HyperOS kills wireless debugging on wifi changes; this brings it back whenever the
-    // controller app is opened so the ops-side adb channel recovers by itself.
-    // vc93: HyperOS ignores the settings write alone (listener never starts), so we also
-    // self-enable our accessibility guide service and, when wireless debugging is truly
-    // off and no screen-share is running, auto-open the dev settings page where the a11y
-    // state machine flips the toggle and captures the pairing code for the user.
-    private fun ensureAdbAutoEnable() {
-        try {
-            val cr = applicationContext.contentResolver
-            Settings.Global.putInt(cr, "adb_wifi_enabled", 1)
-            Settings.Global.putInt(cr, "adb_enabled", 1)
-        } catch (t: Throwable) {
-            android.util.Log.w("vc91-adb", "adb auto-enable failed: ${t.message}")
-        }
-        try {
-            val cr = applicationContext.contentResolver
-            val own = "$packageName/org.example.phonecontroller.AccessibilityAssistService"
-            val existing = Settings.Secure.getString(cr, "enabled_accessibility_services") ?: ""
-            val parts = existing.split(":").map { it.trim() }.filter { it.isNotEmpty() }
-            if (own !in parts) {
-                Settings.Secure.putString(
-                    cr,
-                    "enabled_accessibility_services",
-                    (parts + own).joinToString(":")
-                )
-            }
-            Settings.Secure.putInt(cr, "accessibility_enabled", 1)
-        } catch (t: Throwable) {
-            android.util.Log.w("vc93-a11y", "a11y auto-enable failed: ${t.message}")
-        }
-        // Delayed auto-guide: only when wireless debugging is truly off AND no screen
-        // share (grinding) is active. 8s delay lets an automated relaunch (watchdog
-        // tap on the role card) reach controlled mode first and cancel the guide.
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            try {
-                if (ScreenShareService.active) return@postDelayed
-                val cachedPort = guidePrefs().getString("main_port", "") ?: ""
-                if (wirelessDebugPort().isNotEmpty() || probePort(cachedPort)) return@postDelayed
-                if (System.currentTimeMillis() - guidePrefs().getLong("last_auto_guide", 0L) < 10 * 60 * 1000L) return@postDelayed
-                guidePrefs().edit().putLong("last_auto_guide", System.currentTimeMillis()).apply()
-                AccessibilityAssistService.guideArm(applicationContext, auto = true)
-            } catch (t: Throwable) {
-                android.util.Log.w("vc93-guide", "auto guide failed: ${t.message}")
-            }
-        }, 8000L)
-    }
-
-    private fun guidePrefs() = getSharedPreferences("adb-guide", MODE_PRIVATE)
-
-    // HyperOS never fills service.adb.tls.port even with the listener up, so the
-    // reliable liveness check is a direct TCP probe of the cached connect port.
-    private fun probePort(port: String): Boolean {
-        val p = port.substringAfterLast(':').toIntOrNull() ?: return false
-        return try {
-            java.net.Socket().use { s ->
-                s.connect(java.net.InetSocketAddress("127.0.0.1", p), 400)
-                true
-            }
-        } catch (t: Throwable) { false }
-    }
-
-    // The wireless debugging listener exposes its tls port via system property; the
-    // property is readable through getprop without any hidden API.
-    private fun wirelessDebugPort(): String = try {
-        val p = Runtime.getRuntime().exec(arrayOf("getprop", "service.adb.tls.port"))
-        val out = p.inputStream.bufferedReader().readLine()?.trim() ?: ""
-        p.waitFor()
-        out
-    } catch (t: Throwable) { "" }
-
+ /** Android may withhold this read-only property. Only a valid reported port is exposed. */
+ private fun readWirelessDebugPort(): Int? = try {
+  val process = ProcessBuilder("getprop", "service.adb.tls.port").start()
+  try {
+   if (process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS) && process.exitValue() == 0)
+    process.inputStream.bufferedReader().use { it.readLine()?.trim()?.toIntOrNull()?.takeIf { port -> port in 1..65535 } }
+   else null
+  } finally {
+   process.destroy()
+  }
+ } catch (_: Exception) { null }
 }

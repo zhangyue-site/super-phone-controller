@@ -44,5 +44,35 @@ class CaptureLifecycleContract(unittest.TestCase):
         for revoke in ("stopSelf(", "endCapture(", "projection?.stop(", "stopService("):
             self.assertNotIn(revoke, callback)
 
+class WirelessDebugPrivacyContract(unittest.TestCase):
+    def test_manual_settings_entry_and_legacy_cache_cleanup(self):
+        manifest = ElementTree.parse(ROOT / "app/android/app/src/main/AndroidManifest.xml")
+        receiver = next(r for r in manifest.findall("./application/receiver")
+                        if r.get(ANDROID + "name") == ".LegacyDebugCacheCleanup")
+        self.assertEqual(receiver.get(ANDROID + "exported"), "false")
+        action = receiver.find("./intent-filter/action")
+        self.assertEqual(action.get(ANDROID + "name"), "android.intent.action.MY_PACKAGE_REPLACED")
+        cleanup = (NATIVE / "LegacyDebugCacheCleanup.kt").read_text()
+        self.assertIn('context.deleteSharedPreferences("adb-guide")', cleanup)
+        self.assertNotIn("getSharedPreferences", cleanup)
+        activity = (NATIVE / "MainActivity.kt").read_text()
+        self.assertIn("LegacyDebugCacheCleanup.clear(this)", activity)
+        entry = activity.split('"openDeveloperSettings" -> {', 1)[1].split('"diagnosticEvent"', 1)[0]
+        self.assertIn("ScreenShareService.active", entry)
+        self.assertIn("Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS", entry)
+
+    def test_retired_debug_automation_is_absent_from_app_and_backup_sources(self):
+        paths = [*NATIVE.glob("*.kt*"), *(ROOT / "app/lib").glob("*.dart*")]
+        forbidden = ('"adb_enabled"', '"pair_code"', '"pair_port"',
+                     '"adbGuideArm"', '"enabled_accessibility_services"', '"accessibility_enabled"')
+        for path in paths:
+            source = path.read_text()
+            for line in source.splitlines():
+                if '"adb_wifi_enabled"' in line:
+                    self.assertIn("Settings.Global.getInt(", line, path.name)
+            for marker in forbidden:
+                self.assertNotIn(marker, source, f"{path.name}: retired debug automation")
+
+
 if __name__ == "__main__":
     unittest.main()

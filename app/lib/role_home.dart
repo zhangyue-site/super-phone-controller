@@ -2,111 +2,95 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'product_settings.dart';
 
-/// vc93: shows wireless-debugging / ADB status and the pairing code captured by the
-/// accessibility auto-guide. Polls `adbGuideStatus` so it self-heals on every visit.
-class AdbGuideCard extends StatefulWidget {
-  const AdbGuideCard({super.key});
+class WirelessDebugCard extends StatefulWidget {
+  const WirelessDebugCard({super.key});
   @override
-  State<AdbGuideCard> createState() => _AdbGuideCardState();
+  State<WirelessDebugCard> createState() => _WirelessDebugCardState();
 }
 
-class _AdbGuideCardState extends State<AdbGuideCard> {
-  static const _ch = MethodChannel('pcflash/app');
-  Map<String, dynamic> _status = const {};
-  bool _busy = false;
+class _WirelessDebugCardState extends State<WirelessDebugCard>
+    with WidgetsBindingObserver {
+  static const _channel = MethodChannel('pcflash/app');
+  String _summary = '请在系统设置中确认';
+  int _request = 0;
 
   @override
   void initState() {
     super.initState();
-    _refresh();
-  }
-
-  Future<void> _refresh() async {
-    try {
-      final r = await _ch.invokeMethod<dynamic>('adbGuideStatus');
-      if (r is Map && mounted) {
-        setState(() => _status = r.map((k, v) => MapEntry(k.toString(), v)));
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _arm() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      await _ch.invokeMethod<dynamic>('adbGuideArm');
-      // The guide runs in the Settings UI; poll until it reports a result.
-      for (var i = 0; i < 30; i++) {
-        await Future.delayed(const Duration(seconds: 2));
-        await _refresh();
-        final code = _status['pairCode']?.toString() ?? '';
-        final err = _status['err']?.toString() ?? '';
-        if (code.isNotEmpty || (err.isNotEmpty && err != '')) break;
-        if (!mounted) return;
-      }
-    } catch (_) {}
-    if (mounted) setState(() => _busy = false);
+    WidgetsBinding.instance.addObserver(this);
     _refresh();
   }
 
   @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final port = _status['debugPort']?.toString() ?? '';
-    final code = _status['pairCode']?.toString() ?? '';
-    final pairPort = _status['pairPort']?.toString() ?? '';
-    final err = _status['err']?.toString() ?? '';
-    final wired = port.isNotEmpty;
-    return Card(
-        child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    Icon(wired ? Icons.usb_outlined : Icons.usb_off_outlined,
-                        color: wired ? colors.primary : colors.error),
-                    const SizedBox(width: 12),
-                    Expanded(
-                        child: Text('网络调试通道',
-                            style: Theme.of(context).textTheme.titleMedium)),
-                  ]),
-                  const SizedBox(height: 8),
-                  Text(wired ? '无线调试已开启，端口 $port' : '无线调试未开启',
-                      style: TextStyle(
-                          color: wired ? colors.primary : colors.error)),
-                  if (code.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text('配对码：$code'),
-                    Text('配对地址：$pairPort'),
-                    const SizedBox(height: 4),
-                    Row(children: [
-                      OutlinedButton(
-                          onPressed: () async {
-                            await Clipboard.setData(ClipboardData(
-                                text: 'adb pair $pairPort $code'));
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('已复制配对命令')));
-                            }
-                          },
-                          child: const Text('复制配对命令')),
-                    ]),
-                  ],
-                  if (!wired && code.isEmpty) ...[
-                    const SizedBox(height: 12),
-                    Row(children: [
-                      FilledButton(
-                          onPressed: _busy ? null : _arm,
-                          child: Text(_busy ? '引导中…（请看手机设置页）'
-                              : '一键开启无线调试')),
-                    ]),
-                    if (err.isNotEmpty && err != 'timeout')
-                      Text('引导信息：$err',
-                          style: TextStyle(color: colors.error, fontSize: 12)),
-                  ],
-                ])));
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final request = ++_request;
+    var summary = '请在系统设置中确认';
+    try {
+      final status = await _channel
+          .invokeMapMethod<String, Object?>('wirelessDebugStatus');
+      final port = status?['port'];
+      if (port is int && port >= 1 && port <= 65535) {
+        summary = '系统报告的无线调试连接端口：$port';
+      } else if (status?['enabled'] == true) {
+        summary = '系统已开启，连接端口请在系统页查看';
+      } else if (status?['enabled'] == false) {
+        summary = '无线调试已关闭';
+      }
+    } on PlatformException {
+      // Some systems withhold both signals.
+    } on MissingPluginException {
+      // This method is Android-only.
+    }
+    if (mounted && request == _request) setState(() => _summary = summary);
+  }
+
+  Future<void> _openSettings() async {
+    try {
+      await _channel.invokeMethod<void>('openDeveloperSettings');
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      final message = error.code == 'sharing_active'
+          ? '请先结束屏幕共享，再打开开发者选项'
+          : '请从手机系统设置打开开发者选项';
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    } on MissingPluginException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请从手机系统设置打开开发者选项')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('网络调试通道', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Text(_summary),
+              const SizedBox(height: 8),
+              const Text('如需使用无线调试，请在系统设置中启用，并与自己的电脑配对。'),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                  onPressed: _openSettings, child: const Text('打开开发者选项')),
+            ],
+          ),
+        ),
+      );
 }
 
 /// Entry point for role selection; lifecycle and routing remain owned by caller.
@@ -197,8 +181,10 @@ class RoleHome extends StatelessWidget {
                 onTap: onMaintenance,
               )),
             ],
-            const SizedBox(height: 12),
-            const AdbGuideCard(),
+            if (Theme.of(context).platform == TargetPlatform.android) ...[
+              const SizedBox(height: 12),
+              const WirelessDebugCard(),
+            ],
           ])),
     );
   }
