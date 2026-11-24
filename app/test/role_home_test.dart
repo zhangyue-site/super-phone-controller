@@ -15,8 +15,9 @@ void main() {
     bool? enabled;
     messenger.setMockMethodCallHandler(channel, (call) async {
       methods.add(call.method);
-      if (call.method == 'wirelessDebugStatus')
+      if (call.method == 'wirelessDebugStatus') {
         return {'port': port, 'enabled': enabled};
+      }
       if (call.method == 'openDeveloperSettings') return null;
       throw UnsupportedError(call.method);
     });
@@ -55,8 +56,9 @@ void main() {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'openDeveloperSettings')
+      if (call.method == 'openDeveloperSettings') {
         throw PlatformException(code: 'sharing_active');
+      }
       return null;
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
