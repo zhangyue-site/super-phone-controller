@@ -1,0 +1,28 @@
+name: Weixin phone intake
+on:
+  push:
+    branches: ['feature/weixin-phone-intake-*']
+    paths:
+      - 'integrations/openclaw-phone/weixin-intake*'
+      - '.github/workflows/weixin-phone-intake.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --test integrations/openclaw-phone/weixin-intake.test.mjs
+      - name: Build checked intake module
+        working-directory: integrations/openclaw-phone
+        run: |
+          mkdir -p "${RUNNER_TEMP}/weixin-phone"
+          cp weixin-intake.mjs "${RUNNER_TEMP}/weixin-phone/"
+          cd "${RUNNER_TEMP}/weixin-phone"
+          sha256sum weixin-intake.mjs > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weixin-phone-intake
+          path: ${{ runner.temp }}/weixin-phone/
+          if-no-files-found: error
