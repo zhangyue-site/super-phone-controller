@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+root=$(cd -- "$(dirname -- "$0")" && pwd)
+exec systemd-run --quiet --wait --pipe --collect --property=User=relay-dsh --property=Group=relay-dsh --property=PrivateTmp=yes --property=ProtectSystem=strict --property=ProtectHome=yes --property=NoNewPrivileges=yes --property=RuntimeMaxSec=55 --property=EnvironmentFile=/etc/oc-gateway-client.env --setenv=HOME=/tmp --setenv=DSH_HOME=/tmp/dsh --working-directory=/tmp /usr/bin/python3 -IB "$root/worker.py"

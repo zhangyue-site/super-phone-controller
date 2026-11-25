@@ -1,0 +1,25 @@
+name: Dsh phone task review
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'integrations/openclaw-phone/dsh/*'
+      - '.github/workflows/dsh-phone-review.yml'
+  push:
+    branches: ['fix/dsh-phone-review-*']
+permissions:
+  contents: read
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/openclaw-phone/dsh
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n review-task && node --check stdio_socket.cjs && python3 -B -m unittest discover -v
+      - run: tar czf phone-review.tgz review-task task_status_mcp.py summarize_events.py stdio_socket.cjs phone-profile.patch.yml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-phone-review
+          path: integrations/openclaw-phone/dsh/phone-review.tgz

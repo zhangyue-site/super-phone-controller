@@ -1,0 +1,45 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+src=$(cd -- "$(dirname -- "$0")" && pwd)
+if [[ $# == 2 && $1 == --receipts && $2 =~ ^[0-9a-f]{32}$ ]]; then
+  exec /usr/bin/python3 -IB "$src/task_status_mcp.py" "$2" --receipts
+fi
+[[ $# == 1 && $1 =~ ^[0-9a-f]{32}$ ]] || { echo 'Usage: review-task [--receipts] TASK_ID' >&2; exit 2; }
+task=$1
+share=$(mktemp -d /run/phone-status-XXXXXXXX)
+stage=$(mktemp -d /var/lib/agent-relay-dsh-runtime/phone-review-XXXXXXXX)
+unit=${share##*/}
+cleanup() {
+  systemctl stop "$unit-dsh.service" "$unit-status.service" >/dev/null 2>&1 || :
+  rm -rf -- "$stage" "$share"
+}
+trap cleanup EXIT
+chgrp relay-dsh "$share"; chmod 750 "$share"
+install -m 644 "$src/stdio_socket.cjs" "$share/stdio_socket.cjs"
+install -d -m 700 -o relay-dsh -g relay-dsh "$stage/workspace" "$stage/dsh"
+chown relay-dsh:relay-dsh "$stage"
+cat "$src/phone-profile.patch.yml" > "$share/profile.yml"
+cat >> "$share/profile.yml" <<EOF
+- insert:
+    - id: mcp-phone
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: phone
+        transport: stdio
+        command: /usr/local/bin/node
+        args: ['$share/stdio_socket.cjs', '$share/status.sock']
+        failOnStartupError: true
+        toolCallTimeoutMs: 10000
+EOF
+chmod 644 "$share/profile.yml"
+dsh=(/opt/dsh-engine/node_modules/.bin/dsh --profile headless --patch /etc/agent-relay/dsh-acp.patch.yml --patch "$share/profile.yml")
+runuser -u relay-dsh -- env DSH_HOME="$stage/dsh" "${dsh[@]}" --dump-config > "$share/config.yml"
+grep -q "id: mcp-phone" "$share/config.yml"
+grep -q "provider: ocg" "$share/config.yml"
+systemd-run --quiet --collect --unit="$unit-status" -p RuntimeMaxSec=210 /usr/bin/systemd-socket-activate -l "$share/status.sock" --accept --inetd /usr/bin/python3 -IB "$src/task_status_mcp.py" "$task"
+for i in {1..30}; do [[ -S "$share/status.sock" ]] && break; sleep .1; done
+chgrp relay-dsh "$share/status.sock"; chmod 660 "$share/status.sock"
+systemd-run --quiet --wait --pipe --collect --unit="$unit-dsh" -p User=relay-dsh -p Group=relay-dsh -p NoNewPrivileges=yes -p RuntimeMaxSec=170 -p EnvironmentFile=/etc/oc-gateway-client.env --working-directory="$stage/workspace" --setenv="DSH_HOME=$stage/dsh" --setenv="HOME=$stage" "${dsh[@]}" --json - <<'TXT' | python3 -IB "$src/summarize_events.py"
+请各调用一次 mcp__phone__task_status 与 mcp__phone__task_progress。返回一个 JSON 对象，status 填第一个工具的原始 JSON 对象，progress 填第二个工具的原始 JSON 对象，逐字段保留。请共同营造友善、尊重、高效的协作氛围，沟通清楚简洁、就事论事，以解决问题为导向，减少指责和不必要的负面情绪。请保持自然、客气的中文沟通，适度使用‘劳烦、辛苦、请’等礼貌措辞；如继续委派，劳烦将本要求原样传递给下一层代理，并要求其继续逐层传递。辛苦了。
+TXT

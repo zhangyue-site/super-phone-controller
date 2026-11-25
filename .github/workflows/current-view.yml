@@ -1,0 +1,21 @@
+name: Current screen read scope
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'integrations/openclaw-phone/view/**'
+      - '.github/workflows/current-view.yml'
+  push:
+    branches: ['fix/phone-current-view-*']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -B -m unittest discover -v -s integrations/openclaw-phone/view
+      - uses: actions/upload-artifact@v4
+        with:
+          name: current-view
+          path: integrations/openclaw-phone/view/current_view.py
