@@ -101,6 +101,7 @@ class ControlClient implements LocalVisionSource {
   // Self-heal (vc60). Bounded in-place re-authorization after a relay
   // capability denial. See RelaySelfHeal for the retry contract.
   bool _healing = false, _healExhausted = false;
+  Timer? _healRearmTimer;
   int _healAttempts = 0;
   String? _healReason;
   Timer? _healTimer, _healWatch;
@@ -662,6 +663,16 @@ class ControlClient implements LocalVisionSource {
     _relayError ??= _healReason;
     SafeDiagnostics.record('relay_selfheal',
         phase: 'idle', reason: 'exhausted', attempt: _healAttempts);
+    // vc102: 预算耗尽不再永久躺平——90 秒后自动再武装，下一次真实错误可
+    // 重新进入自愈（每次事件预算依旧封顶，安全握手不变）。
+    _healRearmTimer?.cancel();
+    _healRearmTimer = Timer(const Duration(seconds: 90), () {
+      if (_closed || _healing) return;
+      _healExhausted = false;
+      _healReason = null;
+      SafeDiagnostics.record('relay_selfheal',
+          phase: 'idle', reason: 'rearmed');
+    });
   }
 
   /// The control ticket can also lapse while the relay is still polling (an
