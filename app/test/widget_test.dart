@@ -61,6 +61,7 @@ void main() {
     FlutterBluePlusPlatform.instance = BluetoothOffPlatform();
     await tester.pumpWidget(const PcFlashApp());
     await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('高级工具'));
     await tester.tap(find.text('高级工具'));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('蓝牙固件维护'));
