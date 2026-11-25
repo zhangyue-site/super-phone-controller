@@ -1,5 +1,10 @@
 name: Dsh phone planner
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'integrations/openclaw-phone/dsh/planner/**'
+      - '.github/workflows/dsh-phone-planner.yml'
   push:
     branches: ['fix/dsh-phone-planner-*']
 permissions:

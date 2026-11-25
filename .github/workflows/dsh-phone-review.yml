@@ -1,5 +1,10 @@
 name: Dsh phone task review
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'integrations/openclaw-phone/dsh/*'
+      - '.github/workflows/dsh-phone-review.yml'
   push:
     branches: ['fix/dsh-phone-review-*']
 permissions:

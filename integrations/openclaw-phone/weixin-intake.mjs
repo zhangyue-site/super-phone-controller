@@ -6,10 +6,11 @@ import {dirname} from 'node:path';
 // the inbound from_user_id, even in versions which don't populate SenderId.
 const CHANNEL = 'openclaw-weixin';
 const TTL = 120_000;
-const NAVIGATION = new Map([
-  ['微信', '微信'], ['支付宝', '支付宝'], ['阿柴', '阿柴记账'],
-  ['阿柴记账', '阿柴记账'], ['设置', '系统设置'], ['系统设置', '系统设置'],
-]);
+const ALIASES = new Map([['阿柴', '阿柴记账'], ['系统设置', '设置']]);
+const PREFIX = /^(?:麻烦|请)?(?:你)?(?:帮我)?(?:(?:用|在)?(?:我的|我这台|这台)?手机(?:上)?)?\s*/u;
+const TITLE = /^[\p{L}\p{N}][\p{L}\p{M}\p{N} .+&·_-]{0,47}$/u;
+const SEQUENCE = /\s*(?:[，,；;、]\s*(?:(?:然后|接着|随后|再)\s*)?|(?:然后|接着|随后|并且|并|再)(?=打开|进入|查看|读取|汇总|总结|看看|返回|回到|发送|付款|保存|点击|确认))\s*/u;
+const INSTRUCTION = /帮我|给我|并且|然后|接着|随后|再帮|并(?:给|发|转|付|点|保|删|登|确)|(?:后|再)(?:给|发|转|付|点|保|删|登|确)|(?:帮|替)我|发送消息|确认付款|给.+发|转账给/u;
 
 function resolveBinding(event, ctx, bindings, targetDevice) {
   const peer = ctx.conversationId;
@@ -25,24 +26,44 @@ function resolveBinding(event, ctx, bindings, targetDevice) {
   if (matches.length === 1) return {...matches[0], accountId: ctx.accountId, to: peer};
 }
 
-export function phonePlan(input) {
-  if (typeof input !== 'string' || input.length > 500) return;
-  const text = input.trim().replace(/[。！？!?]+$/, '');
-  const phrase = text.replace(/^(?:麻烦|请)?(?:你)?(?:帮我)?(?:用|在)?(?:我的|我这台)?(?:手机上?)?/, '');
-  const app = /^(?:打开|进入)(微信|支付宝|阿柴记账|阿柴|系统设置|设置)$/.exec(phrase);
+function phoneStep(text) {
+  const phrase = text.replace(PREFIX, '').replace(/^先(?=打开|进入|查看|看看|汇总|返回|回到)/u, '');
+  const app = /^(?:打开|进入)\s*(.+)$/u.exec(phrase);
   if (app) {
-    const name = NAVIGATION.get(app[1]);
-    const task = name === '系统设置'
-      ? '先按 HOME 回到系统桌面，等新画面，点击唯一的设置图标；验证系统设置首页后停止。'
-      : '打开' + name + '，验证应用首页后停止。';
-    return {summary: '打开' + name + '，核对首页后停下。', task};
+    const quoted = /^(?:应用\s*)?(?:「([^「」]+)」|《([^《》]+)》|“([^“”]+)”)$/u.exec(app[1]);
+    const label = (quoted ? quoted[1] ?? quoted[2] ?? quoted[3] : app[1]).trim();
+    if (!TITLE.test(label) || (!quoted && (SEQUENCE.test(label) || INSTRUCTION.test(label)))) return;
+    const name = ALIASES.get(label) ?? label;
+    return {kind: 'open', summary: '打开「' + name + '」并核对首页',
+      task: '先按 HOME 回到系统桌面，等新画面，再打开名称为「' + name + '」的应用，用打开后的新画面核对该应用首页'};
   }
   if (/^(?:返回|回到)(?:手机|系统)?桌面$/.test(phrase))
-    return {summary: '返回桌面并核对新画面。', task: '按一次 HOME 返回手机桌面，用新画面核验。'};
+    return {kind: 'home', summary: '返回桌面并核对新画面', task: '按一次 HOME 返回手机桌面，用新画面核验'};
   if (phrase === '查看当前手机画面' || /^(?:看看|看一下|查看|读一下)(?:我的|我)?手机(?:现在|当前)?(?:停)?在(?:哪个|什么)(?:页面|界面|画面)(?:上)?$/.test(phrase) ||
       /^(?:看看|查看|读取|总结|汇总)(?:一下)?(?:我的|我)?(?:手机)?(?:当前|现在)(?:的)?(?:页面|屏幕|画面)(?:内容)?$/.test(phrase) ||
       /^(?:手机|当前)?(?:屏幕|画面|界面)上有(?:什么|啥)$/.test(text))
-    return {summary: '读取手机当前画面并汇总可见内容，全程只读。', task: '查看当前手机画面，汇总可见内容。只读，不点击。'};
+    return {kind: 'read', summary: '读取并汇总当前可见内容', task: '读取并汇总此时画面上可见的内容'};
+}
+
+export function phonePlan(input) {
+  if (typeof input !== 'string' || input.length > 500) return;
+  const text = input.trim().replace(/[。！？!?]+$/, '');
+  const single = phoneStep(text);
+  if (single?.kind === 'read')
+    return {summary: single.summary + '，全程只读。', task: '查看当前手机画面，汇总可见内容。只读，不点击。'};
+  if (single) return {summary: single.summary + '后停下。', task: single.task + '后停止。'};
+  // Treat quoted app labels as one token, even when their name contains 再打开.
+  const clauses = [''];
+  for (const piece of text.split(/(「[^「」]+」|《[^《》]+》|“[^“”]+”)/u)) {
+    const [first, ...rest] = /^[「《“]/u.test(piece) ? [piece] : piece.split(SEQUENCE);
+    clauses[clauses.length - 1] += first;
+    clauses.push(...rest);
+  }
+  if (clauses.length < 2 || clauses.length > 8) return;
+  const steps = clauses.map(phoneStep);
+  if (steps.some(step => !step)) return;
+  return {summary: '按这条指令执行「' + input.trim() + '」。', task:
+    '按顺序完成以下手机任务。' + steps.map((step, i) => (i + 1) + '）' + step.task).join('。') + '。全部完成后停止。'};
 }
 
 function loadRecent(path) {
@@ -89,7 +110,8 @@ export function createWeixinIntake({bindings, targetDevice, deviceLabel, submit,
     const msgKey = createHash('sha256').update(JSON.stringify([key, id])).digest('hex');
     for (const [k, expires] of seen) if (expires <= time) seen.delete(k);
     const previous = pending.get(key);
-    if (!plan && !decision) return;
+    const replacement = previous && /^(?:先)?(?:打开|进入)/u.test(input.replace(PREFIX, ''));
+    if (!plan && !decision && !replacement) return;
     if (seen.has(msgKey)) return {handled: true, text: '这条手机指令已处理。'};
     if (!plan && !previous) return;
     if ((generated || decision) && !Number.isSafeInteger(stamp))
@@ -105,6 +127,12 @@ export function createWeixinIntake({bindings, targetDevice, deviceLabel, submit,
       pending.delete(key);
       return {handled: true, text: '当前无法记录消息的处理状态，手机任务未派发。'};
     }
+    if (previous && stamp != null && stamp < previous.stamp)
+      return {handled: true, text: '这条消息早于当前手机计划，请核对最新计划。'};
+    if (!plan && !decision && replacement) {
+      pending.delete(key);
+      return {handled: true, text: '已撤回上一条手机计划。这条指令还不能完整解析，请重新描述要执行的步骤。'};
+    }
     if (plan) {
       pending.set(key, {plan, device: binding.device, deadline: time + TTL, stamp: stamp ?? time});
       audit('phone weixin preview');
@@ -114,8 +142,6 @@ export function createWeixinIntake({bindings, targetDevice, deviceLabel, submit,
       pending.delete(key);
       return {handled: true, text: '刚才的手机计划已失效，请重新说一次。'};
     }
-    if (stamp != null && stamp < previous.stamp)
-      return {handled: true, text: '这条回复早于当前手机计划，请核对最新计划。'};
     pending.delete(key); // Consume synchronously before the first await.
     if (decision === '取消') return {handled: true, text: '已取消这次手机任务。'};
     try {

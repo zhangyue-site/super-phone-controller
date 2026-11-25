@@ -1,5 +1,11 @@
 name: Android launcher observation
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'integrations/openclaw-phone/launcher/**'
+      - 'integrations/openclaw-phone/weixin-intake*'
+      - '.github/workflows/launcher-observation.yml'
   push:
     branches: ['fix/launcher-observation-*']
 permissions:

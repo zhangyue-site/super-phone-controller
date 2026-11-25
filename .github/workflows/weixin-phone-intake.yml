@@ -1,5 +1,10 @@
 name: Weixin phone intake
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'integrations/openclaw-phone/weixin-intake*'
+      - '.github/workflows/weixin-phone-intake.yml'
   push:
     branches: ['feature/weixin-phone-intake-*']
     paths:

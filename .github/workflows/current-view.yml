@@ -1,5 +1,10 @@
 name: Current screen read scope
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'integrations/openclaw-phone/view/**'
+      - '.github/workflows/current-view.yml'
   push:
     branches: ['fix/phone-current-view-*']
 permissions:

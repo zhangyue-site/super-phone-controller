@@ -102,3 +102,43 @@ test('confirmed or canceled provider messages remain consumed after a restart', 
   assert.equal(fresh.calls.length,0);
   assert.ok(!readFileSync(options.journalPath,'utf8').includes(peer));
 });
+
+test('launcher labels accept Chinese and Latin names and require a fresh destination screen', () => {
+  for (const name of ['计算器', '日历', 'Google Maps']) {
+    const {summary, task} = phonePlan('请在手机上打开' + name);
+    assert.ok(summary.includes(name));
+    assert.ok(task.includes('「' + name + '」'));
+    assert.match(task, /HOME.*新画面.*打开后的新画面.*首页/);
+  }
+  assert.equal(phonePlan('打开「日历》'), undefined);
+});
+
+test('multi-step preview repeats the request and submits the complete sequence only once', async () => {
+  const {message, calls} = setup();
+  const original = '先打开「再打开」，然后汇总当前页面，再回到桌面。';
+  assert.ok((await message(original, 'p')).text.includes(original));
+  assert.equal(calls.length, 0);
+  await message('确认', 'c');
+  await message('确认', 'c');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].cmd.text, /1）.*「再打开」.*2）读取.*3）按一次 HOME/);
+});
+
+test('a newer unsupported navigation request withdraws the preceding preview', async () => {
+  const {message, calls, advance} = setup();
+  await message('打开计算器', 'p1');
+  advance(1000);
+  assert.match((await message('打开微信并发送消息', 'p2')).text, /撤回/);
+  assert.equal(await message('确认', 'c'), undefined);
+  assert.equal(calls.length, 0);
+});
+
+test('out-of-order preview and ordinary chat leave the newest plan available', async () => {
+  const {message, calls, advance} = setup();
+  advance(1500);
+  await message('打开日历', 'p1');
+  assert.match((await message('打开计算器', 'p2', {timestamp:1_900_000_000_000})).text, /早于/);
+  assert.equal(await message('今天怎么样', 'chat'), undefined);
+  await message('确认', 'c');
+  assert.match(calls[0].cmd.text, /「日历」/);
+});
