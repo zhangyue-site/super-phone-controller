@@ -41,3 +41,10 @@ firmware-epaper/main/device_adb_keys.h
 # 板载 ADB 私钥，绝不入库（由 CI secret / 本地文件注入）
 firmware-epaper/main/device_adb_keys.h
 firmware-epaper/main/device_config.h
+
+# User-supplied inference weights and isolated firmware builds
+*.onnx
+*.pt
+*.safetensors
+*.gguf
+/firmware-epaper/build-public/

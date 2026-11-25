@@ -37,11 +37,15 @@ jobs:
           df -h /
 
       - name: Generate device config
+        id: device_config
         env:
           DISPLAY_ENDPOINT: ${{ secrets.DISPLAY_ENDPOINT }}
           DISPLAY_TOKEN: ${{ secrets.DISPLAY_TOKEN }}
           ADB_KEYS_H: ${{ secrets.ADB_KEYS_H }}
         run: |
+          if [ -z "$DISPLAY_ENDPOINT$DISPLAY_TOKEN$ADB_KEYS_H" ]; then
+            echo "public_artifact=true" >> "$GITHUB_OUTPUT"
+          fi
           cat > "$FIRMWARE_DIR/main/device_config.h" <<EOF
           #pragma once
           #define DISPLAY_ENDPOINT "${DISPLAY_ENDPOINT:-https://example.invalid/phone-controller}"
@@ -53,8 +57,8 @@ jobs:
             printf '%s' "$ADB_KEYS_H" > "$FIRMWARE_DIR/main/device_adb_keys.h"
             echo "device_adb_keys.h written from secret"
           else
-            echo "::warning::ADB_KEYS_H secret not set; adb_local will fail to build"
-            printf '#pragma once\nstatic const char board_adb_private[]="";\n' > "$FIRMWARE_DIR/main/device_adb_keys.h"
+            echo "::warning::ADB_KEYS_H secret not set; using build-only placeholder keys"
+            cp "$FIRMWARE_DIR/main/device_adb_keys.example.h" "$FIRMWARE_DIR/main/device_adb_keys.h"
           fi
 
       - name: Compute firmware version
@@ -82,7 +86,7 @@ jobs:
             bash -c '
               set -e
               . $IDF_PATH/export.sh
-              # 与 124 产线一致：USB_LOCAL 打开，OTA/语音走板子在手机上开的
+              # USB_LOCAL 打开，OTA/语音走板子在手机上开的
               # 18843 本地 ADB 隧道，不依赖 WiFi。只加 defaults 不加 usb-local
               # 会让 endpoint 回落到 DISPLAY_ENDPOINT，没 WiFi 的板子必然失败。
               idf.py -DIDF_TARGET=esp32s3 -DPROJECT_VER="$VERSION" \
@@ -142,6 +146,7 @@ jobs:
           test "$SZ" -lt 3407872 || { echo "::error::firmware exceeds OTA slot size"; exit 1; }
 
       - uses: actions/upload-artifact@v4
+        if: steps.device_config.outputs.public_artifact == 'true'
         with:
           name: esp-firmware-${{ github.run_number }}
           path: out/

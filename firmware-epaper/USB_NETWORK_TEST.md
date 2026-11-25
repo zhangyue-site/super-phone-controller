@@ -37,7 +37,7 @@ idf.py -C firmware-epaper -B build-usb-network -D SDKCONFIG=sdkconfig.usb-networ
 
 本地页面新增日期时间（北京时间，SNTP未校时显示时间未同步），新增按键与语音帮助页。NCM共5页，CDC共4页；确认页授权行为不变。现有固件未实现录音上传，帮助页明确显示语音尚未接通，避免误导。小太阳短按翻页，普通页长按停止；控制页重新长按两秒并松开确认，电源键长按1.5秒释放电池电源锁存。
 
-NCM修订版已刷入目标70:04:1D:DB:D4:18，写入hash校验成功，日志screen_error=0；软件重启后hid=0、wifi_enabled=0、bluetooth=0。CDC和NCM均构建通过，22项Python测试与两项C++测试通过。时间实际校准及手机独立联网仍需手机直连验收。
+NCM修订版已刷入目标联调板，写入hash校验成功，日志screen_error=0；软件重启后hid=0、wifi_enabled=0、bluetooth=0。CDC和NCM均构建通过，22项Python测试与两项C++测试通过。时间实际校准及手机独立联网仍需手机直连验收。
 
 ## 语音版本
 
