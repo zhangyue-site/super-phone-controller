@@ -29,6 +29,8 @@ object OverlayPill {
     private const val YELLOW = 1
     private const val RED = 2
     private const val GRAY = 3
+    private const val BLUE = 4
+    private const val ORANGE = 5
 
     private var view: LinearLayout? = null
     private var container: FloatingOverlayContainer? = null
@@ -42,6 +44,7 @@ object OverlayPill {
     private var visualBar: LinearLayout? = null
     private var dots: List<View> = emptyList()
     private var expanded = false
+    private var lastData: Map<*, *>? = null
     private var payload: Map<*, *>? = null
     private var notifier: MethodChannel? = null
 
@@ -75,6 +78,7 @@ object OverlayPill {
     }
 
     fun show(context: Context, data: Map<*, *>): Boolean {
+        lastData = data
         if (!canShow(context)) return false
         remove()
         expanded = false
@@ -162,6 +166,7 @@ object OverlayPill {
     }
 
     fun update(context: Context, data: Map<*, *>): Boolean {
+        lastData = data
         payload = data
         val root = view ?: return show(context, data)
         render(root.context, root)
@@ -182,6 +187,30 @@ object OverlayPill {
     }
 
     private fun toggle() {
+
+
+        val humanText = (lastData?.get("humanText") as? String) ?: ""
+
+
+        if (humanText.isNotEmpty()) {
+
+
+            try {
+
+
+                notifier?.invokeMethod("pillHumanTap", null)
+
+
+            } catch (_: Exception) {
+
+
+            }
+
+
+            return
+
+
+        }
         expanded = !expanded
         view?.let { render(it.context, it) }
         if (!expanded) headerView?.requestFocus()
@@ -236,6 +265,10 @@ object OverlayPill {
         GREEN -> Color.rgb(76, 175, 80)
         YELLOW -> Color.rgb(255, 193, 7)
         RED -> Color.rgb(244, 67, 54)
+        BLUE -> Color.rgb(33, 150, 243)
+
+        ORANGE -> Color.rgb(255, 152, 0)
+
         else -> Color.rgb(158, 158, 158)
     }
 

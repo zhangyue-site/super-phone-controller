@@ -5,6 +5,7 @@ import "dart:async";
 import 'package:http/http.dart' as http;
 import 'relay_phase_trace.dart';
 import 'ime_relay.dart';
+import 'human_pill_state.dart';
 
 /// A confirmed cloud STOP revokes only the old input session. No input retry.
 class TaskRelayStopped implements Exception {
@@ -126,6 +127,11 @@ class CloudRelay {
     _attaching = true;
     try {
       await post("attach", {"receipt": initial});
+      HumanTapBridge.onHumanTap = () async {
+        try {
+          await post("human-tap", {"nonce": _nonce});
+        } catch (_) {}
+      };
     } finally {
       _attaching = false;
       if (_closed) {
@@ -197,12 +203,14 @@ class CloudRelay {
           ? await post("poll", {"nonce": _nonce})
           : await post('maintenance', {'nonce': _nonce, 'op': maintenance})
               .timeout(const Duration(seconds: 15));
+              HumanPillState.updateFromReceipt(command);
       if (command["state"] == "busy") {
         _phase = 'poll';
         _trace.phase('poll', clearAction: true);
         _activeOp = null;
         requestClock = Stopwatch()..start();
         command = await post("poll", {"nonce": _nonce});
+        HumanPillState.updateFromReceipt(command);
       }
       _pollRetryAttempt = 0;
       _pollRetryAt = null;

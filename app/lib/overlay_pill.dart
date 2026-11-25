@@ -11,9 +11,12 @@ import 'diagnostics.dart';
 import 'screen_share.dart';
 import 'overlay_status.dart';
 import 'target_session.dart';
+import 'human_pill_state.dart';
 
 /// 状态灯编码，与 android .../OverlayPill.kt 的常量一一对应。
 const int pillGreen = 0, pillYellow = 1, pillRed = 2, pillGray = 3;
+const int pillBlue = 4;
+const int pillOrange = 5;
 
 /// 悬浮状态条（pill）控制器。
 ///
@@ -43,6 +46,7 @@ class OverlayPill with WidgetsBindingObserver {
     _started = true;
     WidgetsBinding.instance.addObserver(this);
     _channel.setMethodCallHandler((call) async {
+      if (call.method == 'pillHumanTap') { await HumanTapBridge.fire(); return null; }
       if (call.method == 'onClosed') _onClosed();
       return null;
     });
@@ -100,6 +104,15 @@ class OverlayPill with WidgetsBindingObserver {
         return;
       }
       final payload = await _collect();
+      final humanPause = HumanPillState.pauseLeft;
+      final humanAsk = HumanPillState.askLeft;
+      if (humanPause > 0) {
+        payload['task'] = pillOrange;
+        payload['humanText'] = '任务已暂停 ${humanPause}s';
+      } else if (humanAsk > 0) {
+        payload['task'] = pillBlue;
+        payload['humanText'] = '要在用吗?点我暂停';
+      }
       final key = jsonEncode(payload);
       if (_shown) {
         if (key != _lastPayloadKey) {
