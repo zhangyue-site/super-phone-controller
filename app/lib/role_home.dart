@@ -2,6 +2,13 @@ import 'app_maintenance_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'product_settings.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'screen_share.dart';
+import 'target_session.dart';
+import 'overlay_status.dart';
+import 'human_pill_state.dart';
+import 'task_history.dart';
 
 class WirelessDebugCard extends StatefulWidget {
   const WirelessDebugCard({super.key});
@@ -141,6 +148,7 @@ class RoleHome extends StatelessWidget {
                 style: Theme.of(context).textTheme.headlineMedium),
             const SizedBox(height: 12),
             const Text('控制手机发送任务，被控手机提供画面，控制板负责操作。连接建立后，每次执行仍会检查画面与许可。'),
+            const StatusCard(),
             const SizedBox(height: 24),
             Text('选择这台手机的用途', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
@@ -169,26 +177,153 @@ class RoleHome extends StatelessWidget {
                     subtitle: const Text('连接控制板，并按系统提示共享屏幕'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: onTarget)),
-            if (onMaintenance != null) ...[
-              const SizedBox(height: 12),
-              Card(
-                  child: ListTile(
-                contentPadding: const EdgeInsets.all(20),
-                leading:
-                    Icon(Icons.system_update_outlined, color: colors.primary),
-                title: const Text('蓝牙固件维护'),
-                subtitle: const Text('先停止控制并释放原手机中转，再维护；无需 USB 或共享本机屏幕'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: onMaintenance,
-              )),
-            ],
-            if (Theme.of(context).platform == TargetPlatform.android) ...[
-              const SizedBox(height: 12),
-              const WirelessDebugCard(),
-              const SizedBox(height:12),
-              const Card(child: MaintenanceTile()),
-            ],
+            const SizedBox(height: 12),
+            Card(
+                child: ListTile(
+                    contentPadding: const EdgeInsets.all(20),
+                    leading:
+                        Icon(Icons.receipt_long, color: colors.primary),
+                    title: const Text('任务记录'),
+                    subtitle: const Text('最近任务的执行结果与回执'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                            builder: (_) => const TaskHistoryPage())))),
+            const SizedBox(height: 12),
+            Card(
+                child: Theme(
+                    data: Theme.of(context)
+                        .copyWith(dividerColor: Colors.transparent),
+                    child: ExpansionTile(
+                        leading: Icon(Icons.tune, color: colors.primary),
+                        title: const Text('高级工具'),
+                        subtitle: const Text('固件维护 · 网络调试 · 诊断'),
+                        childrenPadding:
+                            const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                        children: [
+              if (onMaintenance != null)
+                ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.system_update_outlined),
+                    title: const Text('蓝牙固件维护'),
+                    subtitle: const Text('控制板固件升级与回滚'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: onMaintenance),
+              if (Theme.of(context).platform == TargetPlatform.android) ...[
+                const WirelessDebugCard(),
+                const MaintenanceTile(),
+              ],
+            ]))),
           ])),
     );
+  }
+}
+
+/// 首页状态仪表卡：四路信号灯 + 当前任务（HCI：状态可见 / 就近反馈）
+class StatusCard extends StatefulWidget {
+  const StatusCard({super.key});
+  @override
+  State<StatusCard> createState() => _StatusCardState();
+}
+
+class _StatusCardState extends State<StatusCard> {
+  static const _channel = MethodChannel('pcflash/pill');
+  Timer? _t;
+  String _battery = '…';
+  (String, Color) _share = ('共享检查中', Colors.orange);
+  (String, Color) _hid = ('HID 未知', Colors.grey);
+  String _task = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    _t = Timer.periodic(const Duration(seconds: 5), (_) => _refresh());
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    String battery = '电量?';
+    var share = ('共享检查中', Colors.orange);
+    var hid = ('HID 离线', Colors.orange);
+    String task = '';
+    try {
+      final v = await _channel.invokeMethod<int>('battery');
+      battery = (v is int && v >= 0 && v <= 100) ? '电量$v%' : '电量?';
+    } catch (_) {}
+    try {
+      final raw = await ScreenShare.channel.invokeMethod<String>('status');
+      final m = raw == null ? null : jsonDecode(raw);
+      if (m is Map && m['active'] == true) {
+        share = ('共享中', Colors.green);
+      } else if (m is Map) {
+        share = ('未共享', Colors.grey);
+      }
+    } catch (_) {}
+    try {
+      final client = TargetSession.retainedClient;
+      final (_, text) = gatewayIndicator(
+          hasClient: client != null,
+          sessionReady: client?.authorized == true);
+      hid = (
+        text,
+        client == null
+            ? Colors.grey
+            : (client.authorized == true ? Colors.green : Colors.orange)
+      );
+    } catch (_) {}
+    try {
+      task = HumanPillState.taskText;
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _battery = battery;
+      _share = share;
+      _hid = hid;
+      _task = task;
+    });
+  }
+
+  Widget _chip(Widget dot, String label) => Row(mainAxisSize: MainAxisSize.min, children: [
+        dot,
+        const SizedBox(width: 4),
+        Text(label, style: const TextStyle(fontSize: 12)),
+      ]);
+
+  @override
+  Widget build(BuildContext context) {
+    Widget dot(Color c) => Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(color: c, shape: BoxShape.circle));
+    return Card(
+        child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                      spacing: 14,
+                      runSpacing: 6,
+                      children: [
+                        _chip(dot(Colors.blue), _battery),
+                        _chip(dot(_share.$2), _share.$1),
+                        _chip(dot(_hid.$2), _hid.$1),
+                      ]),
+                  if (_task.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text('当前任务：$_task',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: Theme.of(context).colorScheme.primary)),
+                  ],
+                ])));
   }
 }
