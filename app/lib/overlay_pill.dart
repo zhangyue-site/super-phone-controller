@@ -229,6 +229,8 @@ class OverlayPill with WidgetsBindingObserver {
   }
 
   (int, String) _readTask() {
+    final live = HumanPillState.taskText;
+    if (live.isNotEmpty) return (pillBlue, live);
     final receipt = TargetSession.retainedClient?.lastReceiptAt;
     if (receipt == null) return (pillGray, '云端任务暂无回执');
     final minutes = DateTime.now().difference(receipt).inMinutes;

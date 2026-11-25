@@ -2,11 +2,13 @@
 class HumanPillState {
   static int pauseLeft = 0;
   static int askLeft = 0;
+  static String taskText = '';
   static void updateFromReceipt(Map<String, dynamic>? r) {
     if (r == null) return;
     int asInt(dynamic v) => v is int ? v : (v is num ? v.toInt() : 0);
     pauseLeft = asInt(r['humanPauseLeft']);
     askLeft = asInt(r['humanAskLeft']);
+    taskText = (r['task_head'] ?? '') as String;
   }
 
   static bool get active => pauseLeft > 0 || askLeft > 0;
