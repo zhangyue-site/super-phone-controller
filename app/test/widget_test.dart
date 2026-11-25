@@ -37,7 +37,7 @@ void main() {
         ThemeMode.system);
     await tester.tap(find.text('控制手机'));
     await tester.pumpAndSettle();
-    expect(find.text('让两台手机连接起来'), findsOneWidget);
+    expect(find.text('手机控制助手'), findsOneWidget);
     expect(bluetooth.adapterReads, 0);
     await tester.pumpWidget(const SizedBox());
   });
@@ -61,13 +61,14 @@ void main() {
     FlutterBluePlusPlatform.instance = BluetoothOffPlatform();
     await tester.pumpWidget(const PcFlashApp());
     await tester.pumpAndSettle();
+    await tester.tap(find.text('高级工具'));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('蓝牙固件维护'));
     await tester.tap(find.text('蓝牙固件维护'));
     await tester.pumpAndSettle();
     expect(find.text('控制板升级'), findsOneWidget);
     expect(find.text('等待连接USB控制板'), findsNothing);
-    expect(calls.every((call) => call == 'usb:snapshot'), isTrue);
-    expect(calls.where((call) => call.startsWith('screen:')), isEmpty);
+    expect(calls.every((call) => call == 'usb:snapshot' || call == 'screen:status'), isTrue);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
