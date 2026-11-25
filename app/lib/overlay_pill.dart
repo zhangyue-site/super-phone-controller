@@ -111,7 +111,7 @@ class OverlayPill with WidgetsBindingObserver {
         payload['humanText'] = '任务已暂停 ${humanPause}s';
       } else if (humanAsk > 0) {
         payload['task'] = pillBlue;
-        payload['humanText'] = '要在用吗?点我暂停';
+        payload['humanText'] = '在用手机？点我停止磨账';
       }
       final key = jsonEncode(payload);
       if (_shown) {
@@ -180,7 +180,9 @@ class OverlayPill with WidgetsBindingObserver {
             ? pillRed
             : pillGreen;
     final batteryText = battery == null ? '电量未知' : '电量 $battery%';
-    final shortText = share == pillRed
+    final shortText = task == pillBlue && taskText.isNotEmpty
+        ? (taskText.length > 14 ? '${taskText.substring(0, 14)}…' : taskText)
+        : share == pillRed
         ? '共享已断开'
         : hid != pillGreen
             ? (hid == pillGray ? '未连接' : '待恢复')
